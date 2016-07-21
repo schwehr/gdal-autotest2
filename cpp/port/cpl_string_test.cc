@@ -236,9 +236,149 @@ TEST(CslStringTest, SaveAndLoad) {
 //   CSLInsertStrings
 //   CSLInsertString
 //   CSLRemoveStrings
-//   CSLFindString
-//   CSLFindStringCaseSensitive
-//   CSLPartialFindString
+
+TEST(CslStringTest, TestCSLFindString) {
+  EXPECT_EQ(-1, CSLFindString(nullptr, ""));
+  EXPECT_EQ(-1, CSLFindString(nullptr, "abc"));
+
+  {
+    unique_ptr<char *, std::function<void(char **)>> string_list(
+        CSLAddString(nullptr, ""), CSLDestroy);
+
+    EXPECT_EQ(0, CSLFindString(string_list.get(), ""));
+    EXPECT_EQ(-1, CSLFindString(string_list.get(), "a"));
+  }
+
+  {
+    unique_ptr<char *, std::function<void(char **)>> string_list(
+        CSLAddString(nullptr, "a"), CSLDestroy);
+
+    EXPECT_EQ(-1, CSLFindString(string_list.get(), ""));
+    EXPECT_EQ(0, CSLFindString(string_list.get(), "a"));
+    EXPECT_EQ(0, CSLFindString(string_list.get(), "A"));
+    EXPECT_EQ(-1, CSLFindString(string_list.get(), "b"));
+  }
+
+  {
+    unique_ptr<char *, std::function<void(char **)>> string_list(
+        CSLAddString(nullptr, "a"), CSLDestroy);
+    string_list.reset(CSLAddString(string_list.release(), "foo"));
+    string_list.reset(CSLAddString(string_list.release(), "Foo"));
+
+    EXPECT_EQ(-1, CSLFindString(string_list.get(), ""));
+    EXPECT_EQ(1, CSLFindString(string_list.get(), "foo"));
+    EXPECT_EQ(1, CSLFindString(string_list.get(), "Foo"));
+  }
+
+  {
+    unique_ptr<char *, std::function<void(char **)>> string_list(
+        CSLAddString(nullptr, "a"), CSLDestroy);
+    string_list.reset(CSLAddString(string_list.release(), "Bar"));
+    string_list.reset(CSLAddString(string_list.release(), "bar"));
+
+    EXPECT_EQ(-1, CSLFindString(string_list.get(), ""));
+    EXPECT_EQ(1, CSLFindString(string_list.get(), "bar"));
+    EXPECT_EQ(1, CSLFindString(string_list.get(), "Bar"));
+  }
+}
+
+TEST(CslStringTest, TestCSLFindStringCaseSensitive) {
+  EXPECT_EQ(-1, CSLFindStringCaseSensitive(nullptr, ""));
+  EXPECT_EQ(-1, CSLFindStringCaseSensitive(nullptr, "abc"));
+
+  {
+    unique_ptr<char *, std::function<void(char **)>> string_list(
+        CSLAddString(nullptr, ""), CSLDestroy);
+
+    EXPECT_EQ(0, CSLFindStringCaseSensitive(string_list.get(), ""));
+    EXPECT_EQ(-1, CSLFindStringCaseSensitive(string_list.get(), "a"));
+  }
+
+  {
+    unique_ptr<char *, std::function<void(char **)>> string_list(
+        CSLAddString(nullptr, "a"), CSLDestroy);
+
+    EXPECT_EQ(-1, CSLFindStringCaseSensitive(string_list.get(), ""));
+    EXPECT_EQ(0, CSLFindStringCaseSensitive(string_list.get(), "a"));
+    EXPECT_EQ(-1, CSLFindStringCaseSensitive(string_list.get(), "A"));
+    EXPECT_EQ(-1, CSLFindStringCaseSensitive(string_list.get(), "b"));
+  }
+
+  {
+    unique_ptr<char *, std::function<void(char **)>> string_list(
+        CSLAddString(nullptr, "a"), CSLDestroy);
+    string_list.reset(CSLAddString(string_list.release(), "foo"));
+    string_list.reset(CSLAddString(string_list.release(), "Foo"));
+
+    EXPECT_EQ(-1, CSLFindStringCaseSensitive(string_list.get(), "b"));
+    EXPECT_EQ(1, CSLFindStringCaseSensitive(string_list.get(), "foo"));
+    EXPECT_EQ(2, CSLFindStringCaseSensitive(string_list.get(), "Foo"));
+  }
+
+  {
+    unique_ptr<char *, std::function<void(char **)>> string_list(
+        CSLAddString(nullptr, "a"), CSLDestroy);
+    string_list.reset(CSLAddString(string_list.release(), "Bar"));
+    string_list.reset(CSLAddString(string_list.release(), "bar"));
+
+    EXPECT_EQ(2, CSLFindStringCaseSensitive(string_list.get(), "bar"));
+    EXPECT_EQ(1, CSLFindStringCaseSensitive(string_list.get(), "Bar"));
+  }
+}
+
+TEST(CslStringTest, TestCSLPartialFindString) {
+  EXPECT_EQ(-1, CSLPartialFindString(nullptr, ""));
+  EXPECT_EQ(-1, CSLPartialFindString(nullptr, "abc"));
+
+  {
+    unique_ptr<char *, std::function<void(char **)>> string_list(
+        CSLAddString(nullptr, ""), CSLDestroy);
+
+    EXPECT_EQ(0, CSLPartialFindString(string_list.get(), ""));
+    EXPECT_EQ(-1, CSLPartialFindString(string_list.get(), "a"));
+  }
+
+  {
+    unique_ptr<char *, std::function<void(char **)>> string_list(
+        CSLAddString(nullptr, "a"), CSLDestroy);
+
+    EXPECT_EQ(0, CSLPartialFindString(string_list.get(), ""));
+    EXPECT_EQ(0, CSLPartialFindString(string_list.get(), "a"));
+    EXPECT_EQ(-1, CSLPartialFindString(string_list.get(), "A"));
+    EXPECT_EQ(-1, CSLPartialFindString(string_list.get(), "b"));
+  }
+
+  {
+    unique_ptr<char *, std::function<void(char **)>> string_list(
+        CSLAddString(nullptr, "a"), CSLDestroy);
+    string_list.reset(CSLAddString(string_list.release(), "foo"));
+    string_list.reset(CSLAddString(string_list.release(), "Foo"));
+
+    EXPECT_EQ(0, CSLPartialFindString(string_list.get(), ""));
+    EXPECT_EQ(1, CSLPartialFindString(string_list.get(), "foo"));
+    EXPECT_EQ(2, CSLPartialFindString(string_list.get(), "Foo"));
+  }
+
+  {
+    unique_ptr<char *, std::function<void(char **)>> string_list(
+        CSLAddString(nullptr, "a"), CSLDestroy);
+    string_list.reset(CSLAddString(string_list.release(), "Bar"));
+    string_list.reset(CSLAddString(string_list.release(), "bar"));
+
+    EXPECT_EQ(2, CSLPartialFindString(string_list.get(), "bar"));
+    EXPECT_EQ(1, CSLPartialFindString(string_list.get(), "Bar"));
+  }
+
+  {
+    unique_ptr<char *, std::function<void(char **)>> string_list(
+        CSLAddString(nullptr, "a"), CSLDestroy);
+    string_list.reset(CSLAddString(string_list.release(), "foobar"));
+    string_list.reset(CSLAddString(string_list.release(), "FooBar"));
+
+    EXPECT_EQ(1, CSLPartialFindString(string_list.get(), "oba"));
+    EXPECT_EQ(2, CSLPartialFindString(string_list.get(), "oBa"));
+  }
+}
 
 TEST(CslStringTest, TestCSLTokenizeString) {
   unique_ptr<char *, std::function<void(char **)>> result(
