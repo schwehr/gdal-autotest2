@@ -35,6 +35,8 @@ using std::unique_ptr;
 namespace autotest2 {
 namespace {
 
+typedef unique_ptr<char *, std::function<void(char **)>> StringListPtr;
+
 TEST(CslStringTest, CslNullptr) {
   // Tests CSLCount and CSLAddString.
   ASSERT_EQ(0, CSLCount(nullptr));
@@ -241,17 +243,17 @@ TEST(CslStringTest, TestCSLFindString) {
   EXPECT_EQ(-1, CSLFindString(nullptr, ""));
   EXPECT_EQ(-1, CSLFindString(nullptr, "abc"));
 
+  // Test list with one empty string.
   {
-    unique_ptr<char *, std::function<void(char **)>> string_list(
-        CSLAddString(nullptr, ""), CSLDestroy);
+    StringListPtr string_list(CSLAddString(nullptr, ""), CSLDestroy);
 
     EXPECT_EQ(0, CSLFindString(string_list.get(), ""));
     EXPECT_EQ(-1, CSLFindString(string_list.get(), "a"));
   }
 
-  {
-    unique_ptr<char *, std::function<void(char **)>> string_list(
-        CSLAddString(nullptr, "a"), CSLDestroy);
+ // Test list with one "a" string.
+ {
+    StringListPtr string_list(CSLAddString(nullptr, "a"), CSLDestroy);
 
     EXPECT_EQ(-1, CSLFindString(string_list.get(), ""));
     EXPECT_EQ(0, CSLFindString(string_list.get(), "a"));
@@ -259,9 +261,9 @@ TEST(CslStringTest, TestCSLFindString) {
     EXPECT_EQ(-1, CSLFindString(string_list.get(), "b"));
   }
 
+  // Test finding first instance of a string that is lower case.
   {
-    unique_ptr<char *, std::function<void(char **)>> string_list(
-        CSLAddString(nullptr, "a"), CSLDestroy);
+    StringListPtr string_list(CSLAddString(nullptr, "a"), CSLDestroy);
     string_list.reset(CSLAddString(string_list.release(), "foo"));
     string_list.reset(CSLAddString(string_list.release(), "Foo"));
 
@@ -270,15 +272,21 @@ TEST(CslStringTest, TestCSLFindString) {
     EXPECT_EQ(1, CSLFindString(string_list.get(), "Foo"));
   }
 
+  // Test finding first instance of a string that is upper case.
   {
-    unique_ptr<char *, std::function<void(char **)>> string_list(
-        CSLAddString(nullptr, "a"), CSLDestroy);
+    StringListPtr string_list(CSLAddString(nullptr, "a"), CSLDestroy);
     string_list.reset(CSLAddString(string_list.release(), "Bar"));
     string_list.reset(CSLAddString(string_list.release(), "bar"));
 
     EXPECT_EQ(-1, CSLFindString(string_list.get(), ""));
     EXPECT_EQ(1, CSLFindString(string_list.get(), "bar"));
     EXPECT_EQ(1, CSLFindString(string_list.get(), "Bar"));
+  }
+
+  // Test that partials do not match.
+  {
+    StringListPtr string_list(CSLAddString(nullptr, "FooBarBaz"), CSLDestroy);
+    EXPECT_EQ(-1, CSLFindString(string_list.get(), "Bar"));
   }
 }
 
@@ -287,16 +295,14 @@ TEST(CslStringTest, TestCSLFindStringCaseSensitive) {
   EXPECT_EQ(-1, CSLFindStringCaseSensitive(nullptr, "abc"));
 
   {
-    unique_ptr<char *, std::function<void(char **)>> string_list(
-        CSLAddString(nullptr, ""), CSLDestroy);
+    StringListPtr string_list(CSLAddString(nullptr, ""), CSLDestroy);
 
     EXPECT_EQ(0, CSLFindStringCaseSensitive(string_list.get(), ""));
     EXPECT_EQ(-1, CSLFindStringCaseSensitive(string_list.get(), "a"));
   }
 
   {
-    unique_ptr<char *, std::function<void(char **)>> string_list(
-        CSLAddString(nullptr, "a"), CSLDestroy);
+    StringListPtr string_list(CSLAddString(nullptr, "a"), CSLDestroy);
 
     EXPECT_EQ(-1, CSLFindStringCaseSensitive(string_list.get(), ""));
     EXPECT_EQ(0, CSLFindStringCaseSensitive(string_list.get(), "a"));
@@ -305,8 +311,7 @@ TEST(CslStringTest, TestCSLFindStringCaseSensitive) {
   }
 
   {
-    unique_ptr<char *, std::function<void(char **)>> string_list(
-        CSLAddString(nullptr, "a"), CSLDestroy);
+    StringListPtr string_list(CSLAddString(nullptr, "a"), CSLDestroy);
     string_list.reset(CSLAddString(string_list.release(), "foo"));
     string_list.reset(CSLAddString(string_list.release(), "Foo"));
 
@@ -316,14 +321,19 @@ TEST(CslStringTest, TestCSLFindStringCaseSensitive) {
   }
 
   {
-    unique_ptr<char *, std::function<void(char **)>> string_list(
-        CSLAddString(nullptr, "a"), CSLDestroy);
+    StringListPtr  string_list(CSLAddString(nullptr, "a"), CSLDestroy);
     string_list.reset(CSLAddString(string_list.release(), "Bar"));
     string_list.reset(CSLAddString(string_list.release(), "bar"));
 
     EXPECT_EQ(2, CSLFindStringCaseSensitive(string_list.get(), "bar"));
     EXPECT_EQ(1, CSLFindStringCaseSensitive(string_list.get(), "Bar"));
   }
+
+  {
+    StringListPtr string_list(CSLAddString(nullptr, "FooBarBaz"), CSLDestroy);
+    EXPECT_EQ(-1, CSLFindStringCaseSensitive(string_list.get(), "Bar"));
+  }
+
 }
 
 TEST(CslStringTest, TestCSLPartialFindString) {
@@ -331,16 +341,14 @@ TEST(CslStringTest, TestCSLPartialFindString) {
   EXPECT_EQ(-1, CSLPartialFindString(nullptr, "abc"));
 
   {
-    unique_ptr<char *, std::function<void(char **)>> string_list(
-        CSLAddString(nullptr, ""), CSLDestroy);
+    StringListPtr string_list(CSLAddString(nullptr, ""), CSLDestroy);
 
     EXPECT_EQ(0, CSLPartialFindString(string_list.get(), ""));
     EXPECT_EQ(-1, CSLPartialFindString(string_list.get(), "a"));
   }
 
   {
-    unique_ptr<char *, std::function<void(char **)>> string_list(
-        CSLAddString(nullptr, "a"), CSLDestroy);
+    StringListPtr string_list(CSLAddString(nullptr, "a"), CSLDestroy);
 
     EXPECT_EQ(0, CSLPartialFindString(string_list.get(), ""));
     EXPECT_EQ(0, CSLPartialFindString(string_list.get(), "a"));
@@ -349,8 +357,7 @@ TEST(CslStringTest, TestCSLPartialFindString) {
   }
 
   {
-    unique_ptr<char *, std::function<void(char **)>> string_list(
-        CSLAddString(nullptr, "a"), CSLDestroy);
+    StringListPtr string_list(CSLAddString(nullptr, "a"), CSLDestroy);
     string_list.reset(CSLAddString(string_list.release(), "foo"));
     string_list.reset(CSLAddString(string_list.release(), "Foo"));
 
@@ -360,8 +367,7 @@ TEST(CslStringTest, TestCSLPartialFindString) {
   }
 
   {
-    unique_ptr<char *, std::function<void(char **)>> string_list(
-        CSLAddString(nullptr, "a"), CSLDestroy);
+    StringListPtr string_list(CSLAddString(nullptr, "a"), CSLDestroy);
     string_list.reset(CSLAddString(string_list.release(), "Bar"));
     string_list.reset(CSLAddString(string_list.release(), "bar"));
 
@@ -370,8 +376,7 @@ TEST(CslStringTest, TestCSLPartialFindString) {
   }
 
   {
-    unique_ptr<char *, std::function<void(char **)>> string_list(
-        CSLAddString(nullptr, "a"), CSLDestroy);
+    StringListPtr string_list(CSLAddString(nullptr, "a"), CSLDestroy);
     string_list.reset(CSLAddString(string_list.release(), "foobar"));
     string_list.reset(CSLAddString(string_list.release(), "FooBar"));
 
