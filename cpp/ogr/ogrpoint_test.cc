@@ -209,3 +209,5 @@ TEST(OgrPointTest, WktExport) {
 }
 
 // TODO(schwehr): Write more tests.
+
+}  // namespace

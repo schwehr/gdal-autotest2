@@ -36,7 +36,6 @@
 #include "port/cpl_error.h"
 
 using std::unique_ptr;
-using testing::Eq;
 
 namespace autotest2 {
 namespace {
@@ -47,7 +46,7 @@ class LibkmlTest : public ::testing::Test {
     // Needs to register libkml driver explicitly.
     RegisterOGRLIBKML();
   }
-  ~LibkmlTest() { OGRCleanupAll(); }
+  ~LibkmlTest() override { OGRCleanupAll(); }
 };
 
 TEST_F(LibkmlTest, EmptyTest) {

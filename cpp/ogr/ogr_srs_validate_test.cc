@@ -44,7 +44,7 @@ TEST(OgrSrsValidateTest, ValidateEpsgFailure) {
 
 TEST(OgrSrsValidateTest, ValidatePcsWkt) {
   // Tests that EPSG codes in pcs.csv codes validate or are known bad.
-  set<int> known_bad_import_epsgs = {
+  std::set<int> known_bad_import_epsgs = {
     // None from gcs.csv.
     // From pcs.csv:
     2218, 2221, 2296, 2297, 2298, 2299, 2300, 2301, 2302, 2303, 2304, 2305,
@@ -131,12 +131,12 @@ TEST(OgrSrsValidateTest, ValidatePcsWkt) {
     // None esri_extra.wkt.
   };
 
-  set<int> crash_on_validate = {
+  std::set<int> crash_on_validate = {
     // From esri_extra.wkt:
     104305,
   };
 
-  set<int> known_invalid_epsgs = {
+  std::set<int> known_invalid_epsgs = {
     // None from gcs.csv.
     // From pcs.csv:
     22300, 29701,
@@ -154,7 +154,7 @@ TEST(OgrSrsValidateTest, ValidatePcsWkt) {
     102582, 102583, 102584, 102591, 102592,
   };
 
-  vector<string> filenames = {
+  std::vector<string> filenames = {
     "gcs.csv",
     "pcs.csv",
     "cubewerx_extra.wkt",
