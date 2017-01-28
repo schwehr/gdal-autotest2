@@ -21,7 +21,8 @@
 void CPLGoogleLogErrorHandler(CPLErr error_class,
                               int error_num,
                               const char *error_msg) {
-  int log_level = base_logging::FATAL;
+  CHECK_NOTNULL(error_msg);
+  int log_level;
   switch (error_class) {
     case CE_None:  // Fall through and treat as INFO.
     case CE_Debug:
