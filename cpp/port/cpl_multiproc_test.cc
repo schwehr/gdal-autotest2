@@ -22,7 +22,7 @@
 //
 // TODO(schwehr): Create multiple thread tests.
 
-#include "third_party/gdal/port/cpl_multiproc.h"
+#include "port/cpl_multiproc.h"
 
 #include "gunit.h"
 

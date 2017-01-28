@@ -29,6 +29,7 @@
 #include <string>
 
 #include "gunit.h"
+#include "autotest2/cpp/util/error_handler.h"
 
 using std::unique_ptr;
 

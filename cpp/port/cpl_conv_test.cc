@@ -21,8 +21,10 @@
 #include <cstdio>
 
 #include "gunit.h"
+#include "autotest2/cpp/util/cpl_memory.h"
 #include "gcore/gdal_priv.h"
 
+namespace autotest2 {
 namespace {
 
 TEST(CplConvTest, VerifyConfiguration) {
@@ -361,6 +363,62 @@ TEST(CplConvTest, CPLScanUIntBig) {
 // TODO(schwehr): CPLLocaleC
 // TODO(schwehr): CPLThreadLocaleC
 // TODO(schwehr): CPLsetlocale
-// TODO(schwehr): CPLCheckForFile
+
+// Tests looking for files with a list.
+TEST(CplConvTest, CPLCheckForFileWithFileList) {
+  const char kFilename[] = "Aa";
+  const char * files[2] = {kFilename, nullptr};
+
+  const char kDoesNotExist[] = "does-not-exist";
+  std::unique_ptr<char, CplFreeDeleter> filename(strdup(kDoesNotExist));
+  EXPECT_FALSE(CPLCheckForFile(filename.get(), files));
+  EXPECT_STREQ(kDoesNotExist, filename.get());
+
+  filename.reset(strdup(kFilename));
+  EXPECT_TRUE(CPLCheckForFile(filename.get(), files));
+  EXPECT_STREQ(kFilename, filename.get());
+
+  const char kLower[] = "aa";
+  filename.reset(strdup(kLower));
+  EXPECT_TRUE(CPLCheckForFile(filename.get(), files));
+  EXPECT_STREQ(kFilename, filename.get());
+
+  const char kUpper[] = "AA";
+  filename.reset(strdup(kUpper));
+  EXPECT_TRUE(CPLCheckForFile(filename.get(), files));
+  EXPECT_STREQ(kFilename, filename.get());
+}
+
+// Tests looking for files without a filelist.
+// Probes for the actual file.
+TEST(CplConvTest, CPLCheckForFileVsimemFiles) {
+  const char kFilename[] = "/vsimem/CheckForFile";
+  const char kLower[] = "/vsimem/checkforfile";
+  const char kUpper[] = "/vsimem/CHECKFORFILE";
+
+  std::unique_ptr<char, CplFreeDeleter> filename(strdup(kFilename));
+  EXPECT_FALSE(CPLCheckForFile(filename.get(), nullptr));
+  EXPECT_STREQ(kFilename, filename.get());
+
+  {
+    // Create an empty file.
+    VSILFILE *file = VSIFOpenL(filename.get(), "wb");
+    VSIFCloseL(file);
+  }
+  EXPECT_TRUE(CPLCheckForFile(filename.get(), nullptr));
+  EXPECT_STREQ(kFilename, filename.get());
+
+  // The /vsimem filesystem is case sensitive.
+  // Mismatches return false and do not alter the filename.
+  filename.reset(strdup(kLower));
+  EXPECT_FALSE(CPLCheckForFile(filename.get(), nullptr));
+  EXPECT_STREQ(kLower, filename.get());
+
+  filename.reset(strdup(kUpper));
+  EXPECT_FALSE(CPLCheckForFile(filename.get(), nullptr));
+  EXPECT_STREQ(kUpper, filename.get());
+}
+
 
 }  // namespace
+}  // namespace autotest2

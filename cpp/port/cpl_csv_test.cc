@@ -21,14 +21,57 @@
 #include "port/cpl_csv.h"
 #include "port/gdal_csv.h"
 
+#include <memory>
+#include <string>
+#include <vector>
+
 #include "gmock.h"
 #include "gunit.h"
+#include "port/cpl_string.h"
+#include "port/cpl_vsi.h"
 
-using testing::StartsWith;
+using std::unique_ptr;
 using testing::EndsWith;
+using testing::IsNull;
+using testing::NotNull;
+using testing::StartsWith;
 
 namespace autotest2 {
 namespace {
+
+// Writes a buffer to an in-memory filesystem and deletes the file when the
+// instance goes out of scope.
+//
+// For testing only.  Terminates the process if there are any errors.
+//
+// TODO(schwehr): Move to util.
+class VsiMemTempWrapper {
+ public:
+  VsiMemTempWrapper(const string &filename, const string &data)
+      : filename_(filename) {
+    VSILFILE *file = VSIFOpenL(filename.c_str(), "wb");
+    CHECK_NE(nullptr, file);
+    CHECK_EQ(1, VSIFWriteL(data.c_str(), data.length(), 1, file));
+    CHECK_EQ(0, VSIFCloseL(file));
+  }
+  ~VsiMemTempWrapper() { CHECK_EQ(0, VSIUnlink(filename_.c_str())); }
+
+ private:
+  string filename_;
+};
+
+// TODO(schwehr): Move to util.  Also in shape_test.cc.
+typedef unique_ptr<char *, std::function<void(char **)>> StringListPtr;
+
+// TODO(schwehr): Move to util.  Also in shape_test.cc.
+std::vector<string> CslToVector(const char *const *string_list) {
+  if (string_list == nullptr) return {};
+  std::vector<string> result;
+  for (; *string_list != NULL; ++string_list) {
+    result.push_back(*string_list);
+  }
+  return result;
+}
 
 // TODO(schwehr): Test CSVDeaccess.
 // TODO(schwehr): Test CSVDetectSeperator.
@@ -49,57 +92,162 @@ TEST(CplCsvTest, CSVDetectSeperator) {
   EXPECT_EQ(',', CSVDetectSeperator("a;b,c\td e"));
 }
 
-// TODO(schwehr): Test CSVReadParseLine.
-// TODO(schwehr): Test CSVReadParseLine2.
 // TODO(schwehr): Test CSVReadParseLineL.
-// TODO(schwehr): Test CSVReadParseLine2L.
-// TODO(schwehr): Test CSVScanLines.
+
+TEST(CplCsvTest, CSVReadParseLine2LEmpty) {
+  const char filename[] = "/vsimem/CSVReadParseLine2L.csv";
+
+  // Create an empty file.
+  {
+    VSILFILE *file = VSIFOpenL(filename, "wb");
+    VSIFCloseL(file);
+  }
+
+  VSILFILE *file = VSIFOpenL(filename, "rb");
+
+  StringListPtr fields(CSVReadParseLine2L(file, ','), CSLDestroy);
+  EXPECT_THAT(fields, IsNull());
+
+  VSIFCloseL(file);
+  VSIUnlink(filename);
+}
+
+TEST(CplCsvTest, CSVReadParseLine2LOneLine) {
+  const char filename[] = "/vsimem/CSVReadParseLine2L.csv";
+
+  VsiMemTempWrapper tmp_file(filename, "a,b,\n");
+
+  VSILFILE *file = VSIFOpenL(filename, "rb");
+  {
+    StringListPtr fields(CSVReadParseLine2L(file, ','), CSLDestroy);
+    ASSERT_THAT(fields, NotNull());
+    const auto values = CslToVector(fields.get());
+    EXPECT_THAT(values, testing::ElementsAre("a", "b", ""));
+  }
+
+  // Try a delimiter that is not present.
+  VSIRewindL(file);
+  StringListPtr fields(CSVReadParseLine2L(file, ' '), CSLDestroy);
+  ASSERT_THAT(fields, NotNull());
+  const auto values = CslToVector(fields.get());
+  EXPECT_THAT(values, testing::ElementsAre("a,b,"));
+
+  VSIFCloseL(file);
+}
+
+// TODO(schwehr): Test CSVReadParseLine2L quote parsing.
 // TODO(schwehr): Test CSVScanLinesL.
 // TODO(schwehr): Test CSVScanLinesIndexed.
 // TODO(schwehr): Test CSVScanLinesIngested.
 // TODO(schwehr): Test CSVGetNextLine.
 // TODO(schwehr): Test CSVScanFile.
-// TODO(schwehr): Test CSVGetFieldId.
-// TODO(schwehr): Test CSVGetFieldIdL.
-// TODO(schwehr): Test CSVGetFileFieldId.
+
+// Do not test deprecated CSVGetFieldId (no VSI support).
+
+TEST(CplCsvTest, CSVGetFieldIdLBasic) {
+  const char filename[] = "/vsimem/CSVGetFieldIdLBasic.csv";
+
+  const char data[] = "a,b,c\n";
+  VsiMemTempWrapper tmp_file(filename, data);
+
+  VSILFILE *file = VSIFOpenL(filename, "rb");
+  EXPECT_EQ(0, CSVGetFieldIdL(file, "a"));
+  EXPECT_EQ(1, CSVGetFieldIdL(file, "b"));
+  EXPECT_EQ(2, CSVGetFieldIdL(file, "c"));
+  EXPECT_EQ(-1, CSVGetFieldIdL(file, "DoesNotExist"));
+  EXPECT_EQ(-1, CSVGetFieldIdL(file, "a "));
+  EXPECT_EQ(-1, CSVGetFieldIdL(file, ""));
+  VSIFCloseL(file);
+}
+
+TEST(CplCsvTest, CSVGetFieldIdLEmptyOrSmale) {
+  const char filename[] = "/vsimem/CSVGetFieldIdLEmptyOrSpace.csv";
+
+  const char data[] = " ,,abc \n";
+  VsiMemTempWrapper tmp_file(filename, data);
+
+  VSILFILE *file = VSIFOpenL(filename, "rb");
+  EXPECT_EQ(0, CSVGetFieldIdL(file, " "));
+  EXPECT_EQ(1, CSVGetFieldIdL(file, ""));
+  EXPECT_EQ(2, CSVGetFieldIdL(file, "abc "));
+  EXPECT_EQ(-1, CSVGetFieldIdL(file, "abc"));
+  EXPECT_EQ(-1, CSVGetFieldIdL(file, "a"));
+  EXPECT_EQ(-1, CSVGetFieldIdL(file, "c "));
+  VSIFCloseL(file);
+}
+
+// TODO(schwehr): Test CSVGetFieldIdL with invalid CSV.
+
+TEST(CplCsvTest,  CSVGetFileFieldIdBasic) {
+  const char filename[] = "/vsimem/CSVGetFieldIdBasic.csv";
+
+  const char data[] = "a,b,c\n";
+  VsiMemTempWrapper tmp_file(filename, data);
+
+  EXPECT_EQ(0, CSVGetFileFieldId(filename, "a"));
+  EXPECT_EQ(1, CSVGetFileFieldId(filename, "b"));
+  EXPECT_EQ(2, CSVGetFileFieldId(filename, "c"));
+  EXPECT_EQ(-1, CSVGetFileFieldId(filename, "DoesNotExist"));
+  EXPECT_EQ(-1, CSVGetFileFieldId(filename, "a "));
+  EXPECT_EQ(-1, CSVGetFileFieldId(filename, ""));
+}
+
+TEST(CplCsvTest,  CSVGetFileFieldIdMore) {
+  const char filename[] = "/vsimem/CSVGetFieldIdMore.csv";
+
+  const char data[] = "1,\"2\",\"c\",with space,-,#,\n";
+  VsiMemTempWrapper tmp_file(filename, data);
+
+  EXPECT_EQ(0, CSVGetFileFieldId(filename, "1"));
+  EXPECT_EQ(1, CSVGetFileFieldId(filename, "2"));
+  EXPECT_EQ(2, CSVGetFileFieldId(filename, "c"));
+  EXPECT_EQ(3, CSVGetFileFieldId(filename, "with space"));
+  EXPECT_EQ(4, CSVGetFileFieldId(filename, "-"));
+  EXPECT_EQ(5, CSVGetFileFieldId(filename, "#"));
+  EXPECT_EQ(6, CSVGetFileFieldId(filename, ""));
+}
+
+TEST(CplCsvTest,  CSVGetFileFieldIdEmptyAndSpace) {
+  const char filename[] = "/vsimem/CSVGetFieldIdEmptyAndSpace.csv";
+
+  const char data[] = ", \n";
+  VsiMemTempWrapper tmp_file(filename, data);
+
+  EXPECT_EQ(0, CSVGetFileFieldId(filename, ""));
+  EXPECT_EQ(1, CSVGetFileFieldId(filename, " "));
+}
+
+// TODO(schwehr): Test CSVGetFileFieldId with invalid CSV.
 // TODO(schwehr): Test CSVScanFileByName.
 // TODO(schwehr): Test CSVGetField.
 
 TEST(CplCsvTest, GDALDefaultCSVFilename) {
   // Files that do not exist.
   // nullptr not allowed as an arg.
-  EXPECT_THAT(GDALDefaultCSVFilename(""), StartsWith("/"));
-  EXPECT_THAT(GDALDefaultCSVFilename(""), EndsWith("/"));
+  EXPECT_STREQ("", GDALDefaultCSVFilename(""));
   EXPECT_STREQ("does_not_exist", GDALDefaultCSVFilename("does_not_exist"));
   EXPECT_STREQ("/foo/bar.csv", GDALDefaultCSVFilename("/foo/bar.csv"));
   EXPECT_STREQ("../baz.csv", GDALDefaultCSVFilename("../baz.csv"));
 
   // Try a file that GDAL does have.
-  EXPECT_THAT(GDALDefaultCSVFilename("gcs.csv"), StartsWith("/"));
-  EXPECT_THAT(GDALDefaultCSVFilename("gcs.csv"), EndsWith("/gcs.csv"));
+  EXPECT_STREQ("/vsimem/gdal_data/gcs.csv", GDALDefaultCSVFilename("gcs.csv"));
 
   // GDAL specifically searches for these two files that can cause trouble.
   EXPECT_STREQ("datum.csv", GDALDefaultCSVFilename("datum.csv"));
-  EXPECT_THAT(GDALDefaultCSVFilename("gdal_datum.csv"), StartsWith("/"));
-  EXPECT_THAT(GDALDefaultCSVFilename("gdal_datum.csv"),
-              EndsWith("/gdal_datum.csv"));
+  EXPECT_STREQ("/vsimem/gdal_data/gdal_datum.csv",
+               GDALDefaultCSVFilename("gdal_datum.csv"));
 
-  // Test in memory filesystem.
-  const string filename("/vsimem/gdaldefaultcsvfilename.txt");
+  // Use full path in the memory filesystem.
+  const char filename[] = "/vsimem/somefilename.txt";
 
   // Does not exist.
-  EXPECT_STREQ(filename.c_str(), GDALDefaultCSVFilename(filename.c_str()));
+  EXPECT_STREQ(filename, GDALDefaultCSVFilename(filename));
 
-  VSILFILE *file = VSIFOpenL(filename.c_str(), "wb");
-  const string data("foo");
-  VSIFWriteL(data.c_str(), data.length(), 1, file);
-  VSIFCloseL(file);
+  VsiMemTempWrapper tmp_file(filename, "foo");
 
-  EXPECT_THAT(GDALDefaultCSVFilename(filename.c_str()), StartsWith("/"));
-  EXPECT_THAT(GDALDefaultCSVFilename(filename.c_str()),
-              EndsWith(filename.c_str()));
-
-  VSIUnlink(filename.c_str());
+  EXPECT_THAT(GDALDefaultCSVFilename(filename), StartsWith("/"));
+  EXPECT_THAT(GDALDefaultCSVFilename(filename),
+              EndsWith(filename));
 }
 
 // TODO(schwehr): Test CSVFilename.

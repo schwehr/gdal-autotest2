@@ -17,7 +17,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "third_party/gdal/port/cpl_minixml.h"
+#include "port/cpl_minixml.h"
 
 #include <limits>
 #include <cstdio>
@@ -73,7 +73,7 @@ TEST(CplMiniXmlTest, CleanXMLElementName) {
   ASSERT_STREQ("a", single_char_str);
 
   // These ASCII character numbers should be transformed into an underscore.
-  set<int> invalid_set = {
+  std::set<int> invalid_set = {
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
     11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
     21, 22, 23, 24, 25, 26, 27, 28, 29, 30,

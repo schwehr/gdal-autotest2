@@ -26,9 +26,9 @@
 
 // Tests parsing the data from gdrivers/data/testtil.til.
 TEST(CPLKeywordParser, BasicData) {
-  string filename("/vsimem/cplkeywordparser_test.txt");
+  const char filename[] = "/vsimem/cplkeywordparser_test.txt";
 
-  VSILFILE *file = VSIFOpenL(filename.c_str(), "wb");
+  VSILFILE *file = VSIFOpenL(filename, "wb");
   string data(
       "numTiles = 1\n"
       "TILE_1.filename = \"byte.tif\"\n"
@@ -39,14 +39,14 @@ TEST(CPLKeywordParser, BasicData) {
       "END;\n");
   VSIFWriteL(data.c_str(), data.length(), 1, file);
   VSIFCloseL(file);
-  file = VSIFOpenL(filename.c_str(), "rb");
+  file = VSIFOpenL(filename, "rb");
 
   CPLKeywordParser parser;
   int result = parser.Ingest(file);
   ASSERT_EQ(1, result);
 
   VSIFCloseL(file);
-  VSIUnlink(filename.c_str());
+  VSIUnlink(filename);
 
   char **all = parser.GetAllKeywords();
   ASSERT_STREQ("numTiles=1", all[0]);
@@ -71,9 +71,9 @@ TEST(CPLKeywordParser, BasicData) {
 
 // Tests parsing with a group defined.
 TEST(CPLKeywordParser, DataWithGroups) {
-  string filename("/vsimem/cplkeywordparser_test2.txt");
+  const char filename[] = "/vsimem/cplkeywordparser_test2.txt";
 
-  VSILFILE *file = VSIFOpenL(filename.c_str(), "wb");
+  VSILFILE *file = VSIFOpenL(filename, "wb");
   string data(
       "version = \"AA\";\n"
       "generationTime = 2014-07-09T10:11:12.001Z;\n"
@@ -92,14 +92,14 @@ TEST(CPLKeywordParser, DataWithGroups) {
       "END;\n");
   VSIFWriteL(data.c_str(), data.length(), 1, file);
   VSIFCloseL(file);
-  file = VSIFOpenL(filename.c_str(), "rb");
+  file = VSIFOpenL(filename, "rb");
 
   CPLKeywordParser parser;
   int result = parser.Ingest(file);
   ASSERT_EQ(1, result);
 
   VSIFCloseL(file);
-  VSIUnlink(filename.c_str());
+  VSIUnlink(filename);
 
   char **all = parser.GetAllKeywords();
   ASSERT_STREQ("version=\"AA\"", all[0]);
@@ -117,18 +117,18 @@ TEST(CPLKeywordParser, DataWithGroups) {
 
 // Tests parsing bad file.
 TEST(CPLKeywordParser, BadData) {
-  string filename("/vsimem/cplkeywordparser_test3.txt");
+  const char filename[] = "/vsimem/cplkeywordparser_test3.txt";
 
-  VSILFILE *file = VSIFOpenL(filename.c_str(), "wb");
+  VSILFILE *file = VSIFOpenL(filename, "wb");
   string data("junk\n");
   VSIFWriteL(data.c_str(), data.length(), 1, file);
   VSIFCloseL(file);
-  file = VSIFOpenL(filename.c_str(), "rb");
+  file = VSIFOpenL(filename, "rb");
 
   CPLKeywordParser parser;
   int result = parser.Ingest(file);
   ASSERT_EQ(0, result);
 
   VSIFCloseL(file);
-  VSIUnlink(filename.c_str());
+  VSIUnlink(filename);
 }
