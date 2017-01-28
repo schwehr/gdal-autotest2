@@ -1,0 +1,449 @@
+{
+  "description":"bug3246.grb",
+  "driverShortName":"GRIB",
+  "driverLongName":"GRIdded Binary (.grb)",
+  "files":[
+    "bug3246.grb"
+  ],
+  "size":[
+    103,
+    78
+  ],
+  "coordinateSystem":{
+    "wkt":"GEOGCS[\"Coordinate System imported from GRIB file\",\n    DATUM[\"unknown\",\n        SPHEROID[\"Sphere\",6371200,0]],\n    PRIMEM[\"Greenwich\",0],\n    UNIT[\"degree\",0.0174532925199433]]"
+  },
+  "geoTransform":[
+    -21.5175,
+    0.255,
+    0.0,
+    60.5825,
+    0.0,
+    -0.255
+  ],
+  "metadata":{
+  },
+  "cornerCoordinates":{
+    "upperLeft":[
+      -21.5175,
+      60.5825
+    ],
+    "lowerLeft":[
+      -21.5175,
+      40.6925
+    ],
+    "lowerRight":[
+      4.7475,
+      40.6925
+    ],
+    "upperRight":[
+      4.7475,
+      60.5825
+    ],
+    "center":[
+      -8.385,
+      50.6375
+    ]
+  },
+  "wgs84Extent":{
+    "type":"Polygon",
+    "coordinates":[
+      [
+        [
+          -21.5175,
+          60.5825
+        ],
+        [
+          -21.5175,
+          40.6925
+        ],
+        [
+          4.7475,
+          40.6925
+        ],
+        [
+          4.7475,
+          60.5825
+        ],
+        [
+          -21.5175,
+          60.5825
+        ]
+      ]
+    ]
+  },
+  "bands":[
+    {
+      "band":1,
+      "block":[
+        103,
+        1
+      ],
+      "type":"Float64",
+      "colorInterpretation":"Undefined",
+      "description":"1[-] SFC (Ground or water surface)",
+      "computedMin":-0.24,
+      "computedMax":0.26,
+      "minimum":-0.24,
+      "maximum":0.26,
+      "mean":0.008,
+      "stdDev":0.049,
+      "checksum":27223,
+      "noDataValue":9999.0,
+      "metadata":{
+        "":{
+          "GRIB_COMMENT":"u-component of current [m\/s]",
+          "GRIB_ELEMENT":"UOGRD",
+          "GRIB_FORECAST_SECONDS":"10800 sec",
+          "GRIB_REF_TIME":"1169251200 sec UTC",
+          "GRIB_SHORT_NAME":"1-SFC",
+          "GRIB_UNIT":"[m\/s]",
+          "GRIB_VALID_TIME":"1169262000 sec UTC",
+          "STATISTICS_MAXIMUM":"0.26",
+          "STATISTICS_MEAN":"0.008441757493188",
+          "STATISTICS_MINIMUM":"-0.24",
+          "STATISTICS_STDDEV":"0.049406287867385"
+        }
+      }
+    },
+    {
+      "band":2,
+      "block":[
+        103,
+        1
+      ],
+      "type":"Float64",
+      "colorInterpretation":"Undefined",
+      "description":"1[-] SFC (Ground or water surface)",
+      "computedMin":-0.26,
+      "computedMax":0.3,
+      "minimum":-0.26,
+      "maximum":0.3,
+      "mean":-0.004,
+      "stdDev":0.045,
+      "checksum":26447,
+      "noDataValue":9999.0,
+      "metadata":{
+        "":{
+          "GRIB_COMMENT":"v-component of current [m\/s]",
+          "GRIB_ELEMENT":"VOGRD",
+          "GRIB_FORECAST_SECONDS":"10800 sec",
+          "GRIB_REF_TIME":"1169251200 sec UTC",
+          "GRIB_SHORT_NAME":"1-SFC",
+          "GRIB_UNIT":"[m\/s]",
+          "GRIB_VALID_TIME":"1169262000 sec UTC",
+          "STATISTICS_MAXIMUM":"0.29999984741211",
+          "STATISTICS_MEAN":"-0.004239815035148",
+          "STATISTICS_MINIMUM":"-0.26000015258789",
+          "STATISTICS_STDDEV":"0.045102975809699"
+        }
+      }
+    },
+    {
+      "band":3,
+      "block":[
+        103,
+        1
+      ],
+      "type":"Float64",
+      "colorInterpretation":"Undefined",
+      "description":"0[-] MSL (Mean sea level)",
+      "minimum":0.0,
+      "maximum":102846.0,
+      "mean":7371.407,
+      "stdDev":26235.145,
+      "checksum":6714,
+      "metadata":{
+        "":{
+          "GRIB_COMMENT":"Pressure reduced to MSL [Pa]",
+          "GRIB_ELEMENT":"PRMSL",
+          "GRIB_FORECAST_SECONDS":"10800 sec",
+          "GRIB_REF_TIME":"1169251200 sec UTC",
+          "GRIB_SHORT_NAME":"0-MSL",
+          "GRIB_UNIT":"[Pa]",
+          "GRIB_VALID_TIME":"1169262000 sec UTC",
+          "STATISTICS_MAXIMUM":"102846",
+          "STATISTICS_MEAN":"7371.4065222803",
+          "STATISTICS_MINIMUM":"0",
+          "STATISTICS_STDDEV":"26235.145083579"
+        }
+      }
+    },
+    {
+      "band":4,
+      "block":[
+        103,
+        1
+      ],
+      "type":"Float64",
+      "colorInterpretation":"Undefined",
+      "description":"10[m] HTGL (Specified height level above ground)",
+      "minimum":-11.3,
+      "maximum":22.3,
+      "mean":0.605,
+      "stdDev":2.802,
+      "checksum":4081,
+      "metadata":{
+        "":{
+          "GRIB_COMMENT":"u-component of wind [m\/s]",
+          "GRIB_ELEMENT":"UGRD",
+          "GRIB_FORECAST_SECONDS":"10800 sec",
+          "GRIB_REF_TIME":"1169251200 sec UTC",
+          "GRIB_SHORT_NAME":"10-HTGL",
+          "GRIB_UNIT":"[m\/s]",
+          "GRIB_VALID_TIME":"1169262000 sec UTC",
+          "STATISTICS_MAXIMUM":"22.3",
+          "STATISTICS_MEAN":"0.60512820512821",
+          "STATISTICS_MINIMUM":"-11.3",
+          "STATISTICS_STDDEV":"2.8016991518824"
+        }
+      }
+    },
+    {
+      "band":5,
+      "block":[
+        103,
+        1
+      ],
+      "type":"Float64",
+      "colorInterpretation":"Undefined",
+      "description":"10[m] HTGL (Specified height level above ground)",
+      "minimum":-13.3,
+      "maximum":14.6,
+      "mean":0.219,
+      "stdDev":1.551,
+      "checksum":1690,
+      "metadata":{
+        "":{
+          "GRIB_COMMENT":"v-component of wind [m\/s]",
+          "GRIB_ELEMENT":"VGRD",
+          "GRIB_FORECAST_SECONDS":"10800 sec",
+          "GRIB_REF_TIME":"1169251200 sec UTC",
+          "GRIB_SHORT_NAME":"10-HTGL",
+          "GRIB_UNIT":"[m\/s]",
+          "GRIB_VALID_TIME":"1169262000 sec UTC",
+          "STATISTICS_MAXIMUM":"14.6",
+          "STATISTICS_MEAN":"0.21899427433408",
+          "STATISTICS_MINIMUM":"-13.3",
+          "STATISTICS_STDDEV":"1.5508524511008"
+        }
+      }
+    },
+    {
+      "band":6,
+      "block":[
+        103,
+        1
+      ],
+      "type":"Float64",
+      "colorInterpretation":"Undefined",
+      "description":"1[-] SFC (Ground or water surface)",
+      "minimum":0.0,
+      "maximum":8.84,
+      "mean":0.202,
+      "stdDev":1.009,
+      "checksum":3159,
+      "noDataValue":9999.0,
+      "metadata":{
+        "":{
+          "GRIB_COMMENT":"Significant height of combined wind waves and swell [m]",
+          "GRIB_ELEMENT":"HTSGW",
+          "GRIB_FORECAST_SECONDS":"10800 sec",
+          "GRIB_REF_TIME":"1169251200 sec UTC",
+          "GRIB_SHORT_NAME":"1-SFC",
+          "GRIB_UNIT":"[m]",
+          "GRIB_VALID_TIME":"1169262000 sec UTC",
+          "STATISTICS_MAXIMUM":"8.84",
+          "STATISTICS_MEAN":"0.2021511627907",
+          "STATISTICS_MINIMUM":"0",
+          "STATISTICS_STDDEV":"1.0088676081427"
+        }
+      }
+    },
+    {
+      "band":7,
+      "block":[
+        103,
+        1
+      ],
+      "type":"Float64",
+      "colorInterpretation":"Undefined",
+      "description":"1[-] SFC (Ground or water surface)",
+      "minimum":0.0,
+      "maximum":12.23,
+      "mean":0.422,
+      "stdDev":2.014,
+      "checksum":4622,
+      "noDataValue":9999.0,
+      "metadata":{
+        "":{
+          "GRIB_COMMENT":"Mean period of wind waves [s]",
+          "GRIB_ELEMENT":"WVPER",
+          "GRIB_FORECAST_SECONDS":"10800 sec",
+          "GRIB_REF_TIME":"1169251200 sec UTC",
+          "GRIB_SHORT_NAME":"1-SFC",
+          "GRIB_UNIT":"[s]",
+          "GRIB_VALID_TIME":"1169262000 sec UTC",
+          "STATISTICS_MAXIMUM":"12.23",
+          "STATISTICS_MEAN":"0.42158998988878",
+          "STATISTICS_MINIMUM":"0",
+          "STATISTICS_STDDEV":"2.0139928096072"
+        }
+      }
+    },
+    {
+      "band":8,
+      "block":[
+        103,
+        1
+      ],
+      "type":"Float64",
+      "colorInterpretation":"Undefined",
+      "description":"1[-] SFC (Ground or water surface)",
+      "minimum":0.0,
+      "maximum":349.6,
+      "mean":11.127,
+      "stdDev":52.867,
+      "checksum":5604,
+      "noDataValue":9999.0,
+      "metadata":{
+        "":{
+          "GRIB_COMMENT":"Direction of wind waves (from which) [deg]",
+          "GRIB_ELEMENT":"WVDIR",
+          "GRIB_FORECAST_SECONDS":"10800 sec",
+          "GRIB_REF_TIME":"1169251200 sec UTC",
+          "GRIB_SHORT_NAME":"1-SFC",
+          "GRIB_UNIT":"[deg]",
+          "GRIB_VALID_TIME":"1169262000 sec UTC",
+          "STATISTICS_MAXIMUM":"349.6",
+          "STATISTICS_MEAN":"11.127081648129",
+          "STATISTICS_MINIMUM":"0",
+          "STATISTICS_STDDEV":"52.867435271617"
+        }
+      }
+    },
+    {
+      "band":9,
+      "block":[
+        103,
+        1
+      ],
+      "type":"Float64",
+      "colorInterpretation":"Undefined",
+      "description":"1[-] SFC (Ground or water surface)",
+      "minimum":0.0,
+      "maximum":13.25,
+      "mean":0.473,
+      "stdDev":2.274,
+      "checksum":4807,
+      "noDataValue":9999.0,
+      "metadata":{
+        "":{
+          "GRIB_COMMENT":"Primary wave mean period [s]",
+          "GRIB_ELEMENT":"PERPW",
+          "GRIB_FORECAST_SECONDS":"10800 sec",
+          "GRIB_REF_TIME":"1169251200 sec UTC",
+          "GRIB_SHORT_NAME":"1-SFC",
+          "GRIB_UNIT":"[s]",
+          "GRIB_VALID_TIME":"1169262000 sec UTC",
+          "STATISTICS_MAXIMUM":"13.25",
+          "STATISTICS_MEAN":"0.47295753286148",
+          "STATISTICS_MINIMUM":"0",
+          "STATISTICS_STDDEV":"2.274232289541"
+        }
+      }
+    },
+    {
+      "band":10,
+      "block":[
+        103,
+        1
+      ],
+      "type":"Float64",
+      "colorInterpretation":"Undefined",
+      "description":"1[-] SFC (Ground or water surface)",
+      "minimum":0.0,
+      "maximum":357.74,
+      "mean":10.873,
+      "stdDev":52.625,
+      "checksum":5482,
+      "noDataValue":9999.0,
+      "metadata":{
+        "":{
+          "GRIB_COMMENT":"Primary wave direction [deg]",
+          "GRIB_ELEMENT":"DIRPW",
+          "GRIB_FORECAST_SECONDS":"10800 sec",
+          "GRIB_REF_TIME":"1169251200 sec UTC",
+          "GRIB_SHORT_NAME":"1-SFC",
+          "GRIB_UNIT":"[deg]",
+          "GRIB_VALID_TIME":"1169262000 sec UTC",
+          "STATISTICS_MAXIMUM":"357.74",
+          "STATISTICS_MEAN":"10.873112992922",
+          "STATISTICS_MINIMUM":"0",
+          "STATISTICS_STDDEV":"52.624757130767"
+        }
+      }
+    },
+    {
+      "band":11,
+      "block":[
+        103,
+        1
+      ],
+      "type":"Float64",
+      "colorInterpretation":"Undefined",
+      "description":"1[-] SFC (Ground or water surface)",
+      "minimum":0.0,
+      "maximum":12.52,
+      "mean":0.257,
+      "stdDev":1.366,
+      "checksum":3803,
+      "noDataValue":9999.0,
+      "metadata":{
+        "":{
+          "GRIB_COMMENT":"Secondary wave mean period [s]",
+          "GRIB_ELEMENT":"PERSW",
+          "GRIB_FORECAST_SECONDS":"10800 sec",
+          "GRIB_REF_TIME":"1169251200 sec UTC",
+          "GRIB_SHORT_NAME":"1-SFC",
+          "GRIB_UNIT":"[s]",
+          "GRIB_VALID_TIME":"1169262000 sec UTC",
+          "STATISTICS_MAXIMUM":"12.52",
+          "STATISTICS_MEAN":"0.25669711965487",
+          "STATISTICS_MINIMUM":"0",
+          "STATISTICS_STDDEV":"1.3659539486479"
+        }
+      }
+    },
+    {
+      "band":12,
+      "block":[
+        103,
+        1
+      ],
+      "type":"Float64",
+      "colorInterpretation":"Undefined",
+      "description":"1[-] SFC (Ground or water surface)",
+      "minimum":0.0,
+      "maximum":305.57,
+      "mean":9.462,
+      "stdDev":47.22,
+      "checksum":5829,
+      "noDataValue":9999.0,
+      "metadata":{
+        "":{
+          "GRIB_COMMENT":"Secondary wave direction [deg]",
+          "GRIB_ELEMENT":"DIRSW",
+          "GRIB_FORECAST_SECONDS":"10800 sec",
+          "GRIB_REF_TIME":"1169251200 sec UTC",
+          "GRIB_SHORT_NAME":"1-SFC",
+          "GRIB_UNIT":"[deg]",
+          "GRIB_VALID_TIME":"1169262000 sec UTC",
+          "STATISTICS_MAXIMUM":"305.57",
+          "STATISTICS_MEAN":"9.4624007105698",
+          "STATISTICS_MINIMUM":"0",
+          "STATISTICS_STDDEV":"47.220314325636"
+        }
+      }
+    }
+  ]
+}

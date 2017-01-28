@@ -1,0 +1,142 @@
+{
+  "description":"ds.mint.bin",
+  "driverShortName":"GRIB",
+  "driverLongName":"GRIdded Binary (.grb)",
+  "files":[
+    "ds.mint.bin"
+  ],
+  "size":[
+    177,
+    129
+  ],
+  "coordinateSystem":{
+    "wkt":"PROJCS[\"unnamed\",\n    GEOGCS[\"Coordinate System imported from GRIB file\",\n        DATUM[\"unknown\",\n            SPHEROID[\"Sphere\",6371200,0]],\n        PRIMEM[\"Greenwich\",0],\n        UNIT[\"degree\",0.0174532925199433]],\n    PROJECTION[\"Mercator_1SP\"],\n    PARAMETER[\"latitude_of_origin\",20],\n    PARAMETER[\"central_meridian\",0],\n    PARAMETER[\"scale_factor\",1],\n    PARAMETER[\"false_easting\",0],\n    PARAMETER[\"false_northing\",0]]"
+  },
+  "geoTransform":[
+    -7127137.2993032988160849,
+    2500.0,
+    0.0,
+    2105561.4613949055783451,
+    0.0,
+    -2500.0
+  ],
+  "metadata":{
+  },
+  "cornerCoordinates":{
+    "upperLeft":[
+      -7127137.299,
+      2105561.461
+    ],
+    "lowerLeft":[
+      -7127137.299,
+      1783061.461
+    ],
+    "lowerRight":[
+      -6684637.299,
+      1783061.461
+    ],
+    "upperRight":[
+      -6684637.299,
+      2105561.461
+    ],
+    "center":[
+      -6905887.299,
+      1944311.461
+    ]
+  },
+  "wgs84Extent":{
+    "type":"Polygon",
+    "coordinates":[
+      [
+        [
+          -68.2072756,
+          19.7474043
+        ],
+        [
+          -68.2072756,
+          16.8172344
+        ],
+        [
+          -63.9725151,
+          16.8172344
+        ],
+        [
+          -63.9725151,
+          19.7474043
+        ],
+        [
+          -68.2072756,
+          19.7474043
+        ]
+      ]
+    ]
+  },
+  "bands":[
+    {
+      "band":1,
+      "block":[
+        177,
+        1
+      ],
+      "type":"Float64",
+      "colorInterpretation":"Undefined",
+      "description":"0[-] SFC=\"Ground or water surface\"",
+      "computedMin":13.25,
+      "computedMax":24.95,
+      "minimum":13.25,
+      "maximum":24.95,
+      "mean":23.972,
+      "stdDev":1.802,
+      "checksum":46650,
+      "noDataValue":9999.0,
+      "metadata":{
+        "":{
+          "GRIB_COMMENT":"Minimum Temperature [C]",
+          "GRIB_ELEMENT":"MinT",
+          "GRIB_FORECAST_SECONDS":"68400 sec",
+          "GRIB_REF_TIME":"1203613200 sec UTC",
+          "GRIB_SHORT_NAME":"0-SFC",
+          "GRIB_UNIT":"[C]",
+          "GRIB_VALID_TIME":"1203681600 sec UTC",
+          "STATISTICS_MAXIMUM":"24.950006103516",
+          "STATISTICS_MEAN":"23.97161454686",
+          "STATISTICS_MINIMUM":"13.249993896484",
+          "STATISTICS_STDDEV":"1.8018969565763"
+        }
+      }
+    },
+    {
+      "band":2,
+      "block":[
+        177,
+        1
+      ],
+      "type":"Float64",
+      "colorInterpretation":"Undefined",
+      "description":"0[-] SFC=\"Ground or water surface\"",
+      "computedMin":14.95,
+      "computedMax":24.95,
+      "minimum":14.95,
+      "maximum":24.95,
+      "mean":24.052,
+      "stdDev":1.537,
+      "checksum":46927,
+      "noDataValue":9999.0,
+      "metadata":{
+        "":{
+          "GRIB_COMMENT":"Minimum Temperature [C]",
+          "GRIB_ELEMENT":"MinT",
+          "GRIB_FORECAST_SECONDS":"154800 sec",
+          "GRIB_REF_TIME":"1203613200 sec UTC",
+          "GRIB_SHORT_NAME":"0-SFC",
+          "GRIB_UNIT":"[C]",
+          "GRIB_VALID_TIME":"1203768000 sec UTC",
+          "STATISTICS_MAXIMUM":"24.950006103516",
+          "STATISTICS_MEAN":"24.051522197664",
+          "STATISTICS_MINIMUM":"14.950006103516",
+          "STATISTICS_STDDEV":"1.5366207766041"
+        }
+      }
+    }
+  ]
+}

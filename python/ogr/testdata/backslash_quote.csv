@@ -1,0 +1,8 @@
+Description,Attr0,Lon,Lat
+"three things",aaa,bbb,ccc
+"three more things","ddd",e"e"e,""f""f""f""
+"backslashes outside quotes",\ggg,hhh\,i\ii
+"double backslashes outside quotes",\\jjj,kkk\\,l\\ll
+"backslashes inside quotes","\mmm","nnn\","o\oo"
+"double backslashes inside quotes","\\ppp","qqq\\","r\\rr"
+"yet another three things",sss,ttt,uuu

@@ -1,0 +1,208 @@
+{
+  "description":"Sample_QuikSCAT.grb",
+  "driverShortName":"GRIB",
+  "driverLongName":"GRIdded Binary (.grb)",
+  "files":[
+    "Sample_QuikSCAT.grb"
+  ],
+  "size":[
+    66,
+    74
+  ],
+  "coordinateSystem":{
+    "wkt":"GEOGCS[\"Coordinate System imported from GRIB file\",\n    DATUM[\"unknown\",\n        SPHEROID[\"Sphere\",6371200,0]],\n    PRIMEM[\"Greenwich\",0],\n    UNIT[\"degree\",0.0174532925199433]]"
+  },
+  "geoTransform":[
+    -20.2465,
+    0.333,
+    0.0,
+    56.0505,
+    0.0,
+    -0.333
+  ],
+  "metadata":{
+  },
+  "cornerCoordinates":{
+    "upperLeft":[
+      -20.2465,
+      56.0505
+    ],
+    "lowerLeft":[
+      -20.2465,
+      31.4085
+    ],
+    "lowerRight":[
+      1.7315,
+      31.4085
+    ],
+    "upperRight":[
+      1.7315,
+      56.0505
+    ],
+    "center":[
+      -9.2575,
+      43.7295
+    ]
+  },
+  "wgs84Extent":{
+    "type":"Polygon",
+    "coordinates":[
+      [
+        [
+          -20.2465,
+          56.0505
+        ],
+        [
+          -20.2465,
+          31.4085
+        ],
+        [
+          1.7315,
+          31.4085
+        ],
+        [
+          1.7315,
+          56.0505
+        ],
+        [
+          -20.2465,
+          56.0505
+        ]
+      ]
+    ]
+  },
+  "bands":[
+    {
+      "band":1,
+      "block":[
+        66,
+        1
+      ],
+      "type":"Float64",
+      "colorInterpretation":"Undefined",
+      "description":"0[-] SFC (Ground or water surface)",
+      "computedMin":0.0,
+      "computedMax":1.0,
+      "minimum":0.0,
+      "maximum":1.0,
+      "mean":0.021,
+      "stdDev":0.145,
+      "checksum":35740,
+      "noDataValue":9999.0,
+      "metadata":{
+        "":{
+          "GRIB_COMMENT":"Categorical rain [yes=1;no=0]",
+          "GRIB_ELEMENT":"CRAIN",
+          "GRIB_FORECAST_SECONDS":"0 sec",
+          "GRIB_REF_TIME":"1077021540 sec UTC",
+          "GRIB_SHORT_NAME":"0-SFC",
+          "GRIB_UNIT":"[yes=1;no=0]",
+          "GRIB_VALID_TIME":"1077021540 sec UTC",
+          "STATISTICS_MAXIMUM":"1",
+          "STATISTICS_MEAN":"0.021422060164084",
+          "STATISTICS_MINIMUM":"0",
+          "STATISTICS_STDDEV":"0.14478658605827"
+        }
+      }
+    },
+    {
+      "band":2,
+      "block":[
+        66,
+        1
+      ],
+      "type":"Float64",
+      "colorInterpretation":"Undefined",
+      "description":"0[-] SFC (Ground or water surface)",
+      "computedMin":-16.415,
+      "computedMax":6.299,
+      "minimum":-16.415,
+      "maximum":6.299,
+      "mean":-5.55,
+      "stdDev":4.4,
+      "checksum":24744,
+      "noDataValue":9999.0,
+      "metadata":{
+        "":{
+          "GRIB_COMMENT":"undefined [-]",
+          "GRIB_ELEMENT":"var190",
+          "GRIB_FORECAST_SECONDS":"0 sec",
+          "GRIB_REF_TIME":"1077021540 sec UTC",
+          "GRIB_SHORT_NAME":"0-SFC",
+          "GRIB_UNIT":"[-]",
+          "GRIB_VALID_TIME":"1077021540 sec UTC",
+          "STATISTICS_MAXIMUM":"6.299",
+          "STATISTICS_MEAN":"-5.5495355515041",
+          "STATISTICS_MINIMUM":"-16.415",
+          "STATISTICS_STDDEV":"4.400120978268"
+        }
+      }
+    },
+    {
+      "band":3,
+      "block":[
+        66,
+        1
+      ],
+      "type":"Float64",
+      "colorInterpretation":"Undefined",
+      "description":"0[-] SFC (Ground or water surface)",
+      "computedMin":-11.679,
+      "computedMax":13.66,
+      "minimum":-11.679,
+      "maximum":13.66,
+      "mean":2.464,
+      "stdDev":4.489,
+      "checksum":40666,
+      "noDataValue":9999.0,
+      "metadata":{
+        "":{
+          "GRIB_COMMENT":"undefined [-]",
+          "GRIB_ELEMENT":"var191",
+          "GRIB_FORECAST_SECONDS":"0 sec",
+          "GRIB_REF_TIME":"1077021540 sec UTC",
+          "GRIB_SHORT_NAME":"0-SFC",
+          "GRIB_UNIT":"[-]",
+          "GRIB_VALID_TIME":"1077021540 sec UTC",
+          "STATISTICS_MAXIMUM":"13.66",
+          "STATISTICS_MEAN":"2.4640387420237",
+          "STATISTICS_MINIMUM":"-11.679",
+          "STATISTICS_STDDEV":"4.4885155313695"
+        }
+      }
+    },
+    {
+      "band":4,
+      "block":[
+        66,
+        1
+      ],
+      "type":"Float64",
+      "colorInterpretation":"Undefined",
+      "description":"0[-] SFC (Ground or water surface)",
+      "computedMin":19598.0,
+      "computedMax":25986.0,
+      "minimum":19598.0,
+      "maximum":25986.0,
+      "mean":23271.9,
+      "stdDev":2919.959,
+      "checksum":50714,
+      "noDataValue":999900000000000000000.0,
+      "metadata":{
+        "":{
+          "GRIB_COMMENT":"Seconds prior to initial reference time (defined in bytes 18-20) [sec]",
+          "GRIB_ELEMENT":"TSEC",
+          "GRIB_FORECAST_SECONDS":"0 sec",
+          "GRIB_REF_TIME":"1077021540 sec UTC",
+          "GRIB_SHORT_NAME":"0-SFC",
+          "GRIB_UNIT":"[sec]",
+          "GRIB_VALID_TIME":"1077021540 sec UTC",
+          "STATISTICS_MAXIMUM":"25986",
+          "STATISTICS_MEAN":"23271.900182315",
+          "STATISTICS_MINIMUM":"19598",
+          "STATISTICS_STDDEV":"2919.9592165659"
+        }
+      }
+    }
+  ]
+}
