@@ -28,9 +28,12 @@
 #include "gunit.h"
 #include "third_party/absl/memory/memory.h"
 #include "frmts/grib/degrib18/degrib/filedatasource.h"
+#include "frmts/grib/gribdataset.h"
 
 namespace autotest2 {
 namespace {
+
+// using gdal::grib::InventoryWrapper;
 
 // Thin layer to manage allocation and deallocation.
 class InventoryWrapper {
@@ -51,12 +54,12 @@ class InventoryWrapper {
 
   // Modifying the contents pointed to by the return is allowed.
   inventoryType *const get(int i) const {
-    if (i >= inv_len_) return nullptr;
+    if (i < 0 || i >= inv_len_) return nullptr;
     return inv_ + i;
   }
 
   size_t length() const { return inv_len_; }
-  size_t messages() const { return num_messages_; }
+  size_t num_messages() const { return num_messages_; }
 
  private:
   inventoryType *inv_;
@@ -114,7 +117,7 @@ TEST(InventorTest, AllWithOnlyOne) {
       file::JoinPath(FLAGS_test_srcdir, kTestData, "constant_field.grib2");
   InventoryWrapper inventories(filepath);
   ASSERT_EQ(1, inventories.length());
-  ASSERT_EQ(1, inventories.messages());
+  ASSERT_EQ(1, inventories.num_messages());
 }
 
 TEST(InventorTest, AllWith2By2) {
@@ -122,7 +125,7 @@ TEST(InventorTest, AllWith2By2) {
       file::JoinPath(FLAGS_test_srcdir, kTestData, "test_uuid.grib2");
   InventoryWrapper inventories(filepath);
   ASSERT_EQ(2, inventories.length());
-  ASSERT_EQ(2, inventories.messages());
+  ASSERT_EQ(2, inventories.num_messages());
 }
 
 TEST(InventorTest, AllWith21By1) {
@@ -130,7 +133,7 @@ TEST(InventorTest, AllWith21By1) {
       file::JoinPath(FLAGS_test_srcdir, kTestData, "multi_created.grib2");
   InventoryWrapper inventories(filepath);
   ASSERT_EQ(21, inventories.length());
-  ASSERT_EQ(1, inventories.messages());
+  ASSERT_EQ(1, inventories.num_messages());
 }
 
 TEST(InventoryTest, RefTime) {
@@ -140,6 +143,15 @@ TEST(InventoryTest, RefTime) {
   double ref_time = 0.0;
   EXPECT_EQ(0, GRIB2RefTime(filepath.c_str(), &ref_time));
   EXPECT_DOUBLE_EQ(1165320000.0, ref_time);
+}
+
+TEST(GRIB2SectToBuffer, BadLargeSectionLength) {
+  const string filepath =
+      file::JoinPath(FLAGS_test_srcdir, kTestData,
+                     "oom-95dd3e1fee6828f1eb40a8b15c178b7fb7e769ca");
+  InventoryWrapper inventories(filepath);
+  // TODO(schwehr): Add symbols upstream for the error codes.
+  EXPECT_EQ(-4, inventories.result());
 }
 
 // TODO(schwehr): more.
