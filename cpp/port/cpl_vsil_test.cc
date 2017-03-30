@@ -16,11 +16,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
 #include <algorithm>
 #include <memory>
+#include <string>
+#include <vector>
 
-#include "gunit.h"
+#include "gcore/gdal.h"
 #include "gcore/gdal_priv.h"
+#include "gunit.h"
+#include "port/cpl_vsi.h"
 #include "port/cpl_vsi_virtual.h"
 
 using std::fill;
@@ -107,19 +114,22 @@ TEST(CplVSIFunctions, VSIFilesAndPathLocalDoesNotExist) {
 
 // Tests most of the file operations by creating a directory and a file.
 TEST(CplVSIFunctions, VSIFileAndDirOpsLocal) {
-  const string temp_dir("/vsimem");
+  const string temp_dir(FLAGS_test_tmpdir);
+
+  constexpr int kSuccess = 0;
+  constexpr int kFailure = -1;
 
   std::unique_ptr<VSIStatBufL> stat_buf(new VSIStatBufL);
   memset(stat_buf.get(), 0, sizeof(VSIStatBufL));
-  ASSERT_EQ(0, VSIStatL(temp_dir.c_str(), stat_buf.get()));
+  ASSERT_EQ(kSuccess, VSIStatL(temp_dir.c_str(), stat_buf.get()));
 
   const string src_dir(temp_dir + "/foo");
   const string dst_dir(temp_dir + "/bar");
-  ASSERT_EQ(0, VSIMkdir(src_dir.c_str(), 0755));
-  ASSERT_EQ(0, VSIRename(src_dir.c_str(), dst_dir.c_str()));
+  ASSERT_EQ(kSuccess, VSIMkdir(src_dir.c_str(), 0755));
+  ASSERT_EQ(kSuccess, VSIRename(src_dir.c_str(), dst_dir.c_str()));
 
   memset(stat_buf.get(), 0, sizeof(VSIStatBufL));
-  ASSERT_EQ(0, VSIStatL(dst_dir.c_str(), stat_buf.get()));
+  ASSERT_EQ(kSuccess, VSIStatL(dst_dir.c_str(), stat_buf.get()));
   ASSERT_EQ(stat_buf->st_mode, 040755);
 
   const int case_sensitive = VSIIsCaseSensitiveFS(temp_dir.c_str());
@@ -132,9 +142,11 @@ TEST(CplVSIFunctions, VSIFileAndDirOpsLocal) {
 
   ASSERT_EQ(0, VSIFTellL(file));
 
-  ASSERT_EQ(-1, VSIFSeekL(file, -1, SEEK_SET));
-  ASSERT_EQ(-1, VSIFSeekL(file, -1, SEEK_CUR));
-  ASSERT_EQ(-1, VSIFSeekL(file, -1, SEEK_END));
+  // Cannot seek to before the file or to
+  // std::numeric_limits<vsi_l_offset>::max()
+  ASSERT_EQ(kFailure, VSIFSeekL(file, -1, SEEK_SET));
+  ASSERT_EQ(kFailure, VSIFSeekL(file, -1, SEEK_CUR));
+  ASSERT_EQ(kFailure, VSIFSeekL(file, -1, SEEK_END));
 
   ASSERT_EQ(0, VSIFTellL(file));
 
@@ -145,17 +157,17 @@ TEST(CplVSIFunctions, VSIFileAndDirOpsLocal) {
   ASSERT_EQ(0, VSIFTellL(file));
 
   ASSERT_EQ(3, VSIFWriteL("012", 1, 3, file));
-  ASSERT_EQ(0, VSIFFlushL(file));
+  ASSERT_EQ(kSuccess, VSIFFlushL(file));
   ASSERT_EQ(3, VSIFTellL(file));
 
   memset(stat_buf.get(), 0, sizeof(VSIStatBufL));
-  ASSERT_EQ(0, VSIStatL(filename.c_str(), stat_buf.get()));
+  ASSERT_EQ(kSuccess, VSIStatL(filename.c_str(), stat_buf.get()));
   ASSERT_EQ(3, stat_buf->st_size);
 
   VSIRewindL(file);
   ASSERT_EQ(0, VSIFTellL(file));
 
-  ASSERT_EQ(0, VSIFCloseL(file));
+  ASSERT_EQ(kSuccess, VSIFCloseL(file));
 
   file = VSIFOpenL(filename.c_str(), "r");
   ASSERT_NE(nullptr, file);
@@ -168,43 +180,43 @@ TEST(CplVSIFunctions, VSIFileAndDirOpsLocal) {
   ASSERT_EQ(2, VSIFReadL(buf, 1, 10, file));
   ASSERT_EQ(true, bool(VSIFEofL(file)));
 
-  ASSERT_EQ(0, VSIFSeekL(file, -2, SEEK_CUR));
+  ASSERT_EQ(kSuccess, VSIFSeekL(file, -2, SEEK_CUR));
   ASSERT_EQ(false, bool(VSIFEofL(file)));
   ASSERT_EQ(1, VSIFTellL(file));
 
   // TODO(schwehr): Why does this work this way?
   // Seeking past the end.
-  ASSERT_EQ(0, VSIFSeekL(file, 5, SEEK_CUR));
+  ASSERT_EQ(kSuccess, VSIFSeekL(file, 5, SEEK_CUR));
   ASSERT_EQ(6, VSIFTellL(file));
   ASSERT_EQ(false, bool(VSIFEofL(file)));
 
-  ASSERT_EQ(0, VSIFCloseL(file));
+  ASSERT_EQ(kSuccess, VSIFCloseL(file));
 
   memset(stat_buf.get(), 0, sizeof(VSIStatBufL));
-  ASSERT_EQ(0, VSIStatL(filename.c_str(), stat_buf.get()));
+  ASSERT_EQ(kSuccess, VSIStatL(filename.c_str(), stat_buf.get()));
   ASSERT_EQ(3, stat_buf->st_size);
 
   // Cannot truncate when opened read-only.
   file = VSIFOpenL(filename.c_str(), "r");
   ASSERT_NE(nullptr, file);
   ASSERT_EQ(-1, VSIFTruncateL(file, 1));
-  ASSERT_EQ(0, VSIFCloseL(file));
+  ASSERT_EQ(kSuccess, VSIFCloseL(file));
 
   file = VSIFOpenL(filename.c_str(), "r+");
   ASSERT_NE(nullptr, file);
   ASSERT_EQ(3, VSIFReadL(buf, 1, 10, file));
   ASSERT_EQ(true, bool(VSIFEofL(file)));
-  ASSERT_EQ(0, VSIFTruncateL(file, 1));
+  ASSERT_EQ(kSuccess, VSIFTruncateL(file, 1));
   ASSERT_EQ(true, bool(VSIFEofL(file)));
-  ASSERT_EQ(0, VSIFFlushL(file));
+  ASSERT_EQ(kSuccess, VSIFFlushL(file));
   // Truncate does not modify the offset of open files.
   ASSERT_EQ(3, VSIFTellL(file));
   memset(stat_buf.get(), 0, sizeof(VSIStatBufL));
-  ASSERT_EQ(0, VSIStatL(filename.c_str(), stat_buf.get()));
+  ASSERT_EQ(kSuccess, VSIStatL(filename.c_str(), stat_buf.get()));
   ASSERT_EQ(1, stat_buf->st_size);
 
   ASSERT_EQ(1, VSIFWriteL("3", 1, 1, file));
-  ASSERT_EQ(0, VSIFFlushL(file));
+  ASSERT_EQ(kSuccess, VSIFFlushL(file));
   ASSERT_EQ(4, VSIFTellL(file));
 
   VSIRewindL(file);
@@ -217,10 +229,10 @@ TEST(CplVSIFunctions, VSIFileAndDirOpsLocal) {
   ASSERT_STREQ("3", buf+3);
 
   // Truncate can also grow a file.
-  ASSERT_EQ(0, VSIFTruncateL(file, 42));
-  ASSERT_EQ(0, VSIFFlushL(file));
+  ASSERT_EQ(kSuccess, VSIFTruncateL(file, 42));
+  ASSERT_EQ(kSuccess, VSIFFlushL(file));
   memset(stat_buf.get(), 0, sizeof(VSIStatBufL));
-  ASSERT_EQ(0, VSIStatL(filename.c_str(), stat_buf.get()));
+  ASSERT_EQ(kSuccess, VSIStatL(filename.c_str(), stat_buf.get()));
   ASSERT_EQ(42, stat_buf->st_size);
 
   // Truncate does not move the file index forward or backwards.
@@ -234,19 +246,19 @@ TEST(CplVSIFunctions, VSIFileAndDirOpsLocal) {
   ASSERT_EQ('\0', buf[23]);
   ASSERT_EQ('\0', buf[24]);
 
-  ASSERT_EQ(0, VSIFCloseL(file));
+  ASSERT_EQ(kSuccess, VSIFCloseL(file));
 
   // Fail to rmdir with contents.
   ASSERT_EQ(-1, VSIRmdir(dst_dir.c_str()));
 
-  ASSERT_EQ(0, VSIUnlink(filename.c_str()));
-  ASSERT_EQ(0, VSIRmdir(dst_dir.c_str()));
+  ASSERT_EQ(kSuccess, VSIUnlink(filename.c_str()));
+  ASSERT_EQ(kSuccess, VSIRmdir(dst_dir.c_str()));
 }
 
 // Test reading more than is available in a file on a normal filesystem.
 // Most likely uses Read from cpl_vsil_unix_stdio_64.cpp.
 TEST(CplVSIFunctions, VSIReadTooMuchLocalFileSystem) {
-  const string temp_dir("/vsimem");
+  const string temp_dir(FLAGS_test_tmpdir);
   const string filename(temp_dir + "/short.txt");
   const string contents("012\n\n");
   const int length = contents.length();
