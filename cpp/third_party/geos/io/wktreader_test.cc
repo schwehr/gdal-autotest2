@@ -23,7 +23,9 @@
 #include "gunit.h"
 #include "geom/CoordinateSequence.h"
 #include "geom/Geometry.h"
+#include "io/ParseException.h"
 #include "io/WKTReader.h"
+#include "util/IllegalArgumentException.h"
 
 namespace geos {
 namespace io {
@@ -41,6 +43,51 @@ TEST(WktreaderTest, Points) {
   EXPECT_EQ(2, coords->getDimension());
   EXPECT_EQ(0, coords->getX(0));
   EXPECT_EQ(0, coords->getY(0));
+}
+
+TEST(WktreaderTest, BadMultiLinestring) {
+  const std::string s = "MULTILINESTRING(";
+  WKTReader reader;
+  EXPECT_THROW(reader.read(s), geos::io::ParseException);
+}
+
+TEST(WktreaderTest, BadMultiPolygon) {
+  const std::string s = "MULTIPOLYGON(";
+  WKTReader reader;
+  EXPECT_THROW(reader.read(s), geos::io::ParseException);
+}
+
+TEST(WktreaderTest, BadMultiPolygon2) {
+  const std::string s = "MULTIPOLYGON(\x0a EMPTY(\x9a";
+  WKTReader reader;
+  EXPECT_THROW(reader.read(s), geos::io::ParseException);
+}
+
+TEST(WktreaderTest, BadGeometryCollection) {
+  const char kData[] =
+      "GEOMETRYCOLLECTION\x0a(\x00Q;Q;\x0a\x00,\x00\x04;\x0a\x00,"
+      "\x00\x04\x00\x0a\x00,\x00\x04;\x0a\x00,\x00\x04;\x0a\x00,"
+      "\x00\x04\x00\x0a\x00,\x00\x04;\x0a\x00*,\x00\x04;\x0a\x00*,\x00\x04;"
+      "\x0a\x00,\x00\x04;\x0a\x00,\x00\x04\x00\x0a\x00,\x00\x04;\x0a\x00,"
+      "\x00\x04;\x0a\x00,\x00\x04\x00\x0a\x00,\x00\x04;\x0a\x00*,\x00\x04;"
+      "\x0a\x00*,\x00\x04;\x0a\x00,\x00\x04\x00\x0a\x00,\x00\x04;\x0a\x00,"
+      "\x00\x0a\x00)\x91\xe0\x00\x00\x00";
+  const std::string s(kData, ARRAYSIZE(kData));
+  WKTReader reader;
+  EXPECT_THROW(reader.read(s), geos::io::ParseException);
+}
+
+TEST(WktreaderTest, BadGeometryCollection2) {
+  const char kData[] =
+      "GEOMETRYCOLLECTION\x0a(GEOMETRYCOLLECTION\x0a(LINEARRING\x0a("
+      "2\x0a\x00\x00\x00,"
+      "\x00\x04\x00\x00\x00\x0a\x00\xe0\x9a\xe0\xe0\xe0\xe0N2\x0a\x00\x00\x00,"
+      "\x00\x04\x00 "
+      "\x00\xe0\xe0\x91\x91\x91\x91\x91\x91\xe0Q\x00;,\x00\x0a\x00)"
+      "\x91\xe0\x00\x00\x00\x00\x00\x00";
+  const std::string s(kData, ARRAYSIZE(kData));
+  WKTReader reader;
+  EXPECT_THROW(reader.read(s), geos::util::IllegalArgumentException);
 }
 
 }  // namespace
