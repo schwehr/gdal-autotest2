@@ -108,6 +108,147 @@ TEST(GdalMiscTest, GdalGetDataTypeName) {
 }
 
 // TODO(schwehr): Test GDALGetDataTypeByName.
+
+// Based on autotest/cpp/test_gdal.cpp.
+TEST(GdalMiscTest, GdalAdjustValueToDataType) {
+  // GDAL uses ints as bools for its C API.
+  int bClamped = FALSE;
+  int bRounded = FALSE;
+
+  EXPECT_DOUBLE_EQ(
+      255.0, GDALAdjustValueToDataType(GDT_Byte, 255.0, nullptr, nullptr));
+
+  EXPECT_DOUBLE_EQ(
+      255.0, GDALAdjustValueToDataType(GDT_Byte, 255.0, &bClamped, &bRounded));
+  EXPECT_FALSE(bClamped);
+  EXPECT_FALSE(bRounded);
+
+  EXPECT_DOUBLE_EQ(
+      254.0, GDALAdjustValueToDataType(GDT_Byte, 254.4, &bClamped, &bRounded));
+  EXPECT_FALSE(bClamped);
+  EXPECT_TRUE(bRounded);
+
+  EXPECT_DOUBLE_EQ(
+      0.0, GDALAdjustValueToDataType(GDT_Byte, -1, &bClamped, &bRounded));
+  EXPECT_TRUE(bClamped);
+  EXPECT_FALSE(bRounded);
+
+  EXPECT_DOUBLE_EQ(
+      255.0, GDALAdjustValueToDataType(GDT_Byte, 256.0, &bClamped, &bRounded));
+  EXPECT_TRUE(bClamped);
+  EXPECT_FALSE(bRounded);
+
+  EXPECT_DOUBLE_EQ(65535.0, GDALAdjustValueToDataType(GDT_UInt16, 65535.0,
+                                                      &bClamped, &bRounded));
+  EXPECT_FALSE(bClamped);
+  EXPECT_FALSE(bRounded);
+
+  EXPECT_DOUBLE_EQ(65534.0, GDALAdjustValueToDataType(GDT_UInt16, 65534.4,
+                                                      &bClamped, &bRounded));
+  EXPECT_FALSE(bClamped);
+  EXPECT_TRUE(bRounded);
+
+  EXPECT_DOUBLE_EQ(
+      0.0, GDALAdjustValueToDataType(GDT_UInt16, -1, &bClamped, &bRounded));
+  EXPECT_TRUE(bClamped);
+  EXPECT_FALSE(bRounded);
+
+  EXPECT_DOUBLE_EQ(65535.0, GDALAdjustValueToDataType(GDT_UInt16, 65536.0,
+                                                      &bClamped, &bRounded));
+  EXPECT_TRUE(bClamped);
+  EXPECT_FALSE(bRounded);
+
+  EXPECT_DOUBLE_EQ(-32768.0, GDALAdjustValueToDataType(GDT_Int16, -32768.0,
+                                                       &bClamped, &bRounded));
+  EXPECT_FALSE(bClamped);
+  EXPECT_FALSE(bRounded);
+
+  EXPECT_DOUBLE_EQ(32767.0, GDALAdjustValueToDataType(GDT_Int16, 32767.0,
+                                                      &bClamped, &bRounded));
+  EXPECT_FALSE(bClamped);
+  EXPECT_FALSE(bRounded);
+
+  EXPECT_DOUBLE_EQ(-32767.0, GDALAdjustValueToDataType(GDT_Int16, -32767.4,
+                                                       &bClamped, &bRounded));
+  EXPECT_FALSE(bClamped);
+  EXPECT_TRUE(bRounded);
+
+  EXPECT_DOUBLE_EQ(32766.0, GDALAdjustValueToDataType(GDT_Int16, 32766.4,
+                                                      &bClamped, &bRounded));
+  EXPECT_FALSE(bClamped);
+  EXPECT_TRUE(bRounded);
+
+  EXPECT_DOUBLE_EQ(-32768.0, GDALAdjustValueToDataType(GDT_Int16, -32769.0,
+                                                       &bClamped, &bRounded));
+  EXPECT_TRUE(bClamped);
+  EXPECT_FALSE(bRounded);
+
+  EXPECT_DOUBLE_EQ(32767.0, GDALAdjustValueToDataType(GDT_Int16, 32768.0,
+                                                      &bClamped, &bRounded));
+  EXPECT_TRUE(bClamped);
+  EXPECT_FALSE(bRounded);
+
+  EXPECT_DOUBLE_EQ(10000000.0, GDALAdjustValueToDataType(GDT_UInt32, 10000000.0,
+                                                         &bClamped, &bRounded));
+  EXPECT_FALSE(bClamped);
+  EXPECT_FALSE(bRounded);
+
+  EXPECT_DOUBLE_EQ(10000000.0, GDALAdjustValueToDataType(GDT_UInt32, 10000000.4,
+                                                         &bClamped, &bRounded));
+  EXPECT_FALSE(bClamped);
+  EXPECT_TRUE(bRounded);
+
+  EXPECT_DOUBLE_EQ(
+      0.0, GDALAdjustValueToDataType(GDT_UInt32, -1, &bClamped, &bRounded));
+  EXPECT_TRUE(bClamped);
+  EXPECT_FALSE(bRounded);
+
+  EXPECT_DOUBLE_EQ(
+      -10000000.0,
+      GDALAdjustValueToDataType(GDT_Int32, -10000000.0, &bClamped, &bRounded));
+  EXPECT_FALSE(bClamped);
+  EXPECT_FALSE(bRounded);
+
+  EXPECT_DOUBLE_EQ(10000000.0, GDALAdjustValueToDataType(GDT_Int32, 10000000.0,
+                                                         &bClamped, &bRounded));
+  EXPECT_FALSE(bClamped);
+  EXPECT_FALSE(bRounded);
+
+  EXPECT_NEAR(
+      1.23, GDALAdjustValueToDataType(GDT_Float32, 1.23, &bClamped, &bRounded),
+      0.000001);
+  EXPECT_FALSE(bClamped);
+  EXPECT_FALSE(bRounded);
+
+  EXPECT_DOUBLE_EQ(
+      std::numeric_limits<float>::max(),
+      GDALAdjustValueToDataType(GDT_Float32, 1e300, &bClamped, &bRounded));
+  EXPECT_TRUE(bClamped);
+  EXPECT_FALSE(bRounded);
+
+  EXPECT_DOUBLE_EQ(
+      0.0, GDALAdjustValueToDataType(GDT_Float64, 0.0, &bClamped, &bRounded));
+  EXPECT_FALSE(bClamped);
+  EXPECT_FALSE(bRounded);
+
+  EXPECT_DOUBLE_EQ(1e-50, GDALAdjustValueToDataType(GDT_Float64, 1e-50,
+                                                    &bClamped, &bRounded));
+  EXPECT_FALSE(bClamped);
+  EXPECT_FALSE(bRounded);
+
+  EXPECT_DOUBLE_EQ(-1e40, GDALAdjustValueToDataType(GDT_Float64, -1e40,
+                                                    &bClamped, &bRounded));
+  EXPECT_FALSE(bClamped);
+  EXPECT_FALSE(bRounded);
+
+  EXPECT_DOUBLE_EQ(
+      1e40, GDALAdjustValueToDataType(GDT_Float64, 1e40, &bClamped, &bRounded));
+  EXPECT_FALSE(bClamped);
+  EXPECT_FALSE(bRounded);
+
+  // TODO(schwehr): nan and inf.
+}
+
 // TODO(schwehr): Test GDALGetAsyncStatusTypeByName.
 // TODO(schwehr): Test GDALGetAsyncStatusTypeName.
 // TODO(schwehr): Test GDALGetPaletteInterpretationName.
