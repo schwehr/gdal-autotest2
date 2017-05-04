@@ -14,11 +14,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <deque>
-
 #include "gunit.h"
 #include "autotest2/cpp/util/error_handler.h"
 #include "gcore/gdal.h"
+
 namespace {
 
 TEST(GdalMiscTest, GdalDataTypeUnion) {
