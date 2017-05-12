@@ -36,36 +36,36 @@ TEST(GdalMiscTest, GdalDataTypeUnion) {
   EXPECT_EQ(GDT_Unknown, GDALDataTypeUnion(GDT_Unknown, GDT_CFloat64));
   EXPECT_EQ(GDT_UInt16, GDALDataTypeUnion(GDT_Byte, GDT_UInt16));
   EXPECT_EQ(GDT_Int16, GDALDataTypeUnion(GDT_Byte, GDT_Int16));
-  EXPECT_EQ(GDT_Int16, GDALDataTypeUnion(GDT_Int16, GDT_UInt16));
-  EXPECT_EQ(GDT_Int32, GDALDataTypeUnion(GDT_Int16, GDT_UInt32));
-  EXPECT_EQ(GDT_Int32, GDALDataTypeUnion(GDT_UInt32, GDT_Int16));
-  EXPECT_EQ(GDT_CInt32, GDALDataTypeUnion(GDT_UInt32, GDT_CInt16));
+  EXPECT_EQ(GDT_Int32, GDALDataTypeUnion(GDT_Int16, GDT_UInt16));
+  EXPECT_EQ(GDT_Float64, GDALDataTypeUnion(GDT_Int16, GDT_UInt32));
+  EXPECT_EQ(GDT_Float64, GDALDataTypeUnion(GDT_UInt32, GDT_Int16));
+  EXPECT_EQ(GDT_CFloat64, GDALDataTypeUnion(GDT_UInt32, GDT_CInt16));
   EXPECT_EQ(GDT_CInt32, GDALDataTypeUnion(GDT_Int32, GDT_CInt16));
   EXPECT_EQ(GDT_CFloat32, GDALDataTypeUnion(GDT_Float32, GDT_CInt16));
-  EXPECT_EQ(GDT_CFloat32, GDALDataTypeUnion(GDT_Float32, GDT_CInt32));
+  EXPECT_EQ(GDT_CFloat64, GDALDataTypeUnion(GDT_Float32, GDT_CInt32));
   EXPECT_EQ(GDT_CFloat64, GDALDataTypeUnion(GDT_Float64, GDT_CInt32));
-  EXPECT_EQ(GDT_CInt32, GDALDataTypeUnion(GDT_CInt16, GDT_UInt32));
+  EXPECT_EQ(GDT_CFloat64, GDALDataTypeUnion(GDT_CInt16, GDT_UInt32));
   EXPECT_EQ(GDT_CInt32, GDALDataTypeUnion(GDT_CInt16, GDT_Int32));
   EXPECT_EQ(GDT_CFloat32, GDALDataTypeUnion(GDT_CInt16, GDT_CFloat32));
   EXPECT_EQ(GDT_CFloat64, GDALDataTypeUnion(GDT_CInt16, GDT_CFloat64));
   EXPECT_EQ(GDT_CInt32, GDALDataTypeUnion(GDT_CInt32, GDT_Byte));
   EXPECT_EQ(GDT_CInt32, GDALDataTypeUnion(GDT_CInt32, GDT_UInt16));
   EXPECT_EQ(GDT_CInt32, GDALDataTypeUnion(GDT_CInt32, GDT_Int16));
-  EXPECT_EQ(GDT_CInt32, GDALDataTypeUnion(GDT_CInt32, GDT_UInt32));
+  EXPECT_EQ(GDT_CFloat64, GDALDataTypeUnion(GDT_CInt32, GDT_UInt32));
   EXPECT_EQ(GDT_CInt32, GDALDataTypeUnion(GDT_CInt32, GDT_Int32));
-  EXPECT_EQ(GDT_CFloat32, GDALDataTypeUnion(GDT_CInt32, GDT_Float32));
+  EXPECT_EQ(GDT_CFloat64, GDALDataTypeUnion(GDT_CInt32, GDT_Float32));
   EXPECT_EQ(GDT_CInt32, GDALDataTypeUnion(GDT_CInt32, GDT_CInt16));
-  EXPECT_EQ(GDT_CFloat32, GDALDataTypeUnion(GDT_CInt32, GDT_CFloat32));
+  EXPECT_EQ(GDT_CFloat64, GDALDataTypeUnion(GDT_CInt32, GDT_CFloat32));
   EXPECT_EQ(GDT_CFloat64, GDALDataTypeUnion(GDT_CInt32, GDT_CFloat64));
   EXPECT_EQ(GDT_CFloat32, GDALDataTypeUnion(GDT_CFloat32, GDT_Byte));
   EXPECT_EQ(GDT_CFloat32, GDALDataTypeUnion(GDT_CFloat32, GDT_UInt16));
   EXPECT_EQ(GDT_CFloat32, GDALDataTypeUnion(GDT_CFloat32, GDT_Int16));
-  EXPECT_EQ(GDT_CFloat32, GDALDataTypeUnion(GDT_CFloat32, GDT_UInt32));
-  EXPECT_EQ(GDT_CFloat32, GDALDataTypeUnion(GDT_CFloat32, GDT_Int32));
+  EXPECT_EQ(GDT_CFloat64, GDALDataTypeUnion(GDT_CFloat32, GDT_UInt32));
+  EXPECT_EQ(GDT_CFloat64, GDALDataTypeUnion(GDT_CFloat32, GDT_Int32));
   EXPECT_EQ(GDT_CFloat32, GDALDataTypeUnion(GDT_CFloat32, GDT_Float32));
   EXPECT_EQ(GDT_CFloat64, GDALDataTypeUnion(GDT_CFloat32, GDT_Float64));
   EXPECT_EQ(GDT_CFloat32, GDALDataTypeUnion(GDT_CFloat32, GDT_CInt16));
-  EXPECT_EQ(GDT_CFloat32, GDALDataTypeUnion(GDT_CFloat32, GDT_CInt32));
+  EXPECT_EQ(GDT_CFloat64, GDALDataTypeUnion(GDT_CFloat32, GDT_CInt32));
   EXPECT_EQ(GDT_CFloat64, GDALDataTypeUnion(GDT_CFloat64, GDT_Int32));
   EXPECT_EQ(GDT_CFloat64, GDALDataTypeUnion(GDT_CFloat64, GDT_Float32));
   EXPECT_EQ(GDT_CFloat64, GDALDataTypeUnion(GDT_CFloat64, GDT_Float64));
@@ -73,6 +73,142 @@ TEST(GdalMiscTest, GdalDataTypeUnion) {
   EXPECT_EQ(GDT_CFloat64, GDALDataTypeUnion(GDT_CFloat64, GDT_CInt32));
   EXPECT_EQ(GDT_CFloat64, GDALDataTypeUnion(GDT_CFloat64, GDT_CFloat32));
 }
+
+TEST(GdalMiscTest, GDALDataTypeUnionWithValue) {
+  // The 3rd arg is complex.
+  EXPECT_EQ(GDT_Unknown, GDALDataTypeUnionWithValue(GDT_Unknown, 1.0, FALSE));
+  EXPECT_EQ(GDT_Byte, GDALDataTypeUnionWithValue(GDT_Byte, 1.0, FALSE));
+  EXPECT_EQ(GDT_Int16, GDALDataTypeUnionWithValue(GDT_Byte, -1.0, FALSE));
+  EXPECT_EQ(GDT_Byte, GDALDataTypeUnionWithValue(GDT_Byte, 255.0, FALSE));
+  EXPECT_EQ(GDT_UInt16, GDALDataTypeUnionWithValue(GDT_Byte, 256.0, FALSE));
+  EXPECT_EQ(GDT_UInt16, GDALDataTypeUnionWithValue(GDT_Byte, 32767.0, FALSE));
+  EXPECT_EQ(GDT_UInt16, GDALDataTypeUnionWithValue(GDT_Byte, 32768.0, FALSE));
+  EXPECT_EQ(GDT_Int16, GDALDataTypeUnionWithValue(GDT_Byte, -32768.0, FALSE));
+  EXPECT_EQ(GDT_Int32, GDALDataTypeUnionWithValue(GDT_Byte, -32769.0, FALSE));
+  EXPECT_EQ(GDT_UInt16, GDALDataTypeUnionWithValue(GDT_Byte, 65535.0, FALSE));
+  EXPECT_EQ(GDT_UInt32, GDALDataTypeUnionWithValue(GDT_Byte, 65536.0, FALSE));
+  EXPECT_EQ(GDT_UInt32,
+            GDALDataTypeUnionWithValue(GDT_Byte, 2147483647, FALSE));
+  EXPECT_EQ(GDT_Int32,
+            GDALDataTypeUnionWithValue(GDT_Byte, -2147483648, FALSE));
+  EXPECT_EQ(GDT_Float64,
+            GDALDataTypeUnionWithValue(GDT_Byte, -2147483649, FALSE));
+  EXPECT_EQ(GDT_UInt32,
+            GDALDataTypeUnionWithValue(GDT_Byte, 4294967295, FALSE));
+  EXPECT_EQ(GDT_Float64,
+            GDALDataTypeUnionWithValue(GDT_Byte, 4294967296, FALSE));
+  // TODO(schwehr): More tests
+}
+
+TEST(GdalMiscTest, GDALFindDataType) {
+  // Unsigned int real.
+  EXPECT_EQ(GDT_Byte, GDALFindDataType(-1, FALSE, FALSE, FALSE));
+
+  EXPECT_EQ(GDT_Byte, GDALFindDataType(0, FALSE, FALSE, FALSE));
+  EXPECT_EQ(GDT_Byte, GDALFindDataType(8, FALSE, FALSE, FALSE));
+  EXPECT_EQ(GDT_UInt16, GDALFindDataType(9, FALSE, FALSE, FALSE));
+  EXPECT_EQ(GDT_UInt16, GDALFindDataType(16, FALSE, FALSE, FALSE));
+  EXPECT_EQ(GDT_UInt32, GDALFindDataType(17, FALSE, FALSE, FALSE));
+  EXPECT_EQ(GDT_UInt32, GDALFindDataType(32, FALSE, FALSE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(33, FALSE, FALSE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(63, FALSE, FALSE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(64, FALSE, FALSE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(65, FALSE, FALSE, FALSE));
+
+  // Signed int real.
+  EXPECT_EQ(GDT_Int16, GDALFindDataType(0, TRUE, FALSE, FALSE));
+  EXPECT_EQ(GDT_Int16, GDALFindDataType(8, TRUE, FALSE, FALSE));
+  EXPECT_EQ(GDT_Int16, GDALFindDataType(9, TRUE, FALSE, FALSE));
+  EXPECT_EQ(GDT_Int16, GDALFindDataType(16, TRUE, FALSE, FALSE));
+  EXPECT_EQ(GDT_Int32, GDALFindDataType(17, TRUE, FALSE, FALSE));
+  EXPECT_EQ(GDT_Int32, GDALFindDataType(32, TRUE, FALSE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(33, TRUE, FALSE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(63, TRUE, FALSE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(64, TRUE, FALSE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(65, TRUE, FALSE, FALSE));
+
+  // Unsigned floating point real
+  // TODO(schwehr): What?
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(0, FALSE, TRUE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(8, FALSE, TRUE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(9, FALSE, TRUE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(16, FALSE, TRUE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(17, FALSE, TRUE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(32, FALSE, TRUE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(33, FALSE, TRUE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(63, FALSE, TRUE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(64, FALSE, TRUE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(65, FALSE, TRUE, FALSE));
+
+  // Signed floating point real.
+  EXPECT_EQ(GDT_Float32, GDALFindDataType(0, TRUE, TRUE, FALSE));
+  EXPECT_EQ(GDT_Float32, GDALFindDataType(8, TRUE, TRUE, FALSE));
+  EXPECT_EQ(GDT_Float32, GDALFindDataType(9, TRUE, TRUE, FALSE));
+  EXPECT_EQ(GDT_Float32, GDALFindDataType(16, TRUE, TRUE, FALSE));
+  EXPECT_EQ(GDT_Float32, GDALFindDataType(17, TRUE, TRUE, FALSE));
+  EXPECT_EQ(GDT_Float32, GDALFindDataType(32, TRUE, TRUE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(33, TRUE, TRUE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(63, TRUE, TRUE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(64, TRUE, TRUE, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataType(65, TRUE, TRUE, FALSE));
+
+  // Unsigned and floating point and complex.
+  // TODO(schwehr): And there was much sadness.
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(0, FALSE, TRUE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(8, FALSE, TRUE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(9, FALSE, TRUE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(16, FALSE, TRUE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(17, FALSE, TRUE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(32, FALSE, TRUE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(33, FALSE, TRUE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(63, FALSE, TRUE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(64, FALSE, TRUE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(65, FALSE, TRUE, TRUE));
+
+  // Signed and floating point and complex
+  // TODO(schwehr): And there was much sadness.
+  EXPECT_EQ(GDT_CFloat32, GDALFindDataType(-1, TRUE, TRUE, TRUE));
+  EXPECT_EQ(GDT_CFloat32, GDALFindDataType(0, TRUE, TRUE, TRUE));
+  EXPECT_EQ(GDT_CFloat32, GDALFindDataType(8, TRUE, TRUE, TRUE));
+  EXPECT_EQ(GDT_CFloat32, GDALFindDataType(9, TRUE, TRUE, TRUE));
+  EXPECT_EQ(GDT_CFloat32, GDALFindDataType(16, TRUE, TRUE, TRUE));
+  EXPECT_EQ(GDT_CFloat32, GDALFindDataType(17, TRUE, TRUE, TRUE));
+  EXPECT_EQ(GDT_CFloat32, GDALFindDataType(32, TRUE, TRUE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(33, TRUE, TRUE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(63, TRUE, TRUE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(64, TRUE, TRUE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(65, TRUE, TRUE, TRUE));
+
+  // Signed and int and complex
+  EXPECT_EQ(GDT_CInt16, GDALFindDataType(-1, TRUE, FALSE, TRUE));
+  EXPECT_EQ(GDT_CInt16, GDALFindDataType(0, TRUE, FALSE, TRUE));
+  EXPECT_EQ(GDT_CInt16, GDALFindDataType(8, TRUE, FALSE, TRUE));
+  EXPECT_EQ(GDT_CInt16, GDALFindDataType(9, TRUE, FALSE, TRUE));
+  EXPECT_EQ(GDT_CInt16, GDALFindDataType(16, TRUE, FALSE, TRUE));
+  EXPECT_EQ(GDT_CInt32, GDALFindDataType(17, TRUE, FALSE, TRUE));
+  EXPECT_EQ(GDT_CInt32, GDALFindDataType(32, TRUE, FALSE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(33, TRUE, FALSE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(63, TRUE, FALSE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(64, TRUE, FALSE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(65, TRUE, FALSE, TRUE));
+
+  // Unsigned and int and complex
+  // TODO(schwehr): I want a pony.
+  EXPECT_EQ(GDT_CInt32, GDALFindDataType(0, FALSE, FALSE, TRUE));
+  EXPECT_EQ(GDT_CInt32, GDALFindDataType(8, FALSE, FALSE, TRUE));
+  EXPECT_EQ(GDT_CInt32, GDALFindDataType(9, FALSE, FALSE, TRUE));
+  EXPECT_EQ(GDT_CInt32, GDALFindDataType(16, FALSE, FALSE, TRUE));
+  EXPECT_EQ(GDT_CInt32, GDALFindDataType(17, FALSE, FALSE, TRUE));
+  EXPECT_EQ(GDT_CInt32, GDALFindDataType(32, FALSE, FALSE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(33, FALSE, FALSE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(63, FALSE, FALSE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(64, FALSE, FALSE, TRUE));
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataType(65, FALSE, FALSE, TRUE));
+}
+
+// TODO(schwehr): Test GDALFindDataTypeForValue.
+// TODO(schwehr): Test GDALGetDataTypeSizeBytes.
+// TODO(schwehr): Test GDALGetDataTypeSizeBits.
 
 TEST(GdalMiscTest, GdalDataTypeSize) {
   // Tests getting the size in bits.
