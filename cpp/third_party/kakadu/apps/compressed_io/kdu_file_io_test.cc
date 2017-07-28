@@ -19,8 +19,7 @@
 #include <memory>
 #include <string>
 
-#include "base/googleinit.h"
-#include "base/logging.h"
+#include "logging.h"
 #include "coresys/common/kdu_messaging.h"
 #include "coresys/common/kdu_ubiquitous.h"
 #include "file/base/path.h"

@@ -23,7 +23,7 @@
 
 #include <string>
 
-#include "base/logging.h"
+#include "logging.h"
 #include "file/base/path.h"
 #include "gunit.h"
 #include "third_party/absl/memory/memory.h"

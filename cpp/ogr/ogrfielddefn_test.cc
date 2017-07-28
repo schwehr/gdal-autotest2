@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "third_party/gdal/ogr/ogr_api.h"
-#include "third_party/gdal/ogr/ogr_feature.h"
-#include "third_party/gdal/port/cpl_port.h"
+#include "ogr/ogr_api.h"
+#include "ogr/ogr_feature.h"
+#include "port/cpl_port.h"
 
 #include <memory>   // NOLINT(build/include_order)
 #include <utility>  // NOLINT(build/include_order)
 #include <vector>   // NOLINT(build/include_order)
 
-#include "testing/base/public/gunit.h"
+#include "gunit.h"
 #include "third_party/absl/memory/memory.h"
-#include "third_party/gdal/ogr/ogr_core.h"
+#include "ogr/ogr_core.h"
 
 namespace autotest2 {
 namespace {

@@ -20,7 +20,7 @@
 #include <memory>
 #include <string>
 
-#include "base/logging.h"
+#include "logging.h"
 #include "autotest2/cpp/util/vsimem.h"
 #include "gcore/gdal.h"
 #include "gcore/gdal_priv.h"

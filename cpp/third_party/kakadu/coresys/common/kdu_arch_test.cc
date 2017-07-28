@@ -15,7 +15,7 @@
 // Tests for coresys/common/kdu_arch.cpp.
 
 #include "coresys/common/kdu_arch.h"
-#include "base/logging.h"
+#include "logging.h"
 #include "gunit.h"
 
 namespace kdu_core {

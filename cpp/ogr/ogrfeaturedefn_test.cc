@@ -17,14 +17,14 @@
 // unique_ptr is not the standard way that OGRFeatureDefn is used, but it is
 // convenient for testing.  The Release test demonstrates the normal usage.
 
-#include "third_party/gdal/port/cpl_port.h"
-#include "third_party/gdal/ogr/ogr_feature.h"
+#include "port/cpl_port.h"
+#include "ogr/ogr_feature.h"
 
 #include <memory>  // NOLINT(build/include_order)
 
-#include "testing/base/public/gunit.h"
+#include "gunit.h"
 #include "third_party/absl/memory/memory.h"
-#include "third_party/gdal/ogr/ogr_core.h"
+#include "ogr/ogr_core.h"
 
 namespace autotest2 {
 namespace {

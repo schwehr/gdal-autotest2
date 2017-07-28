@@ -17,7 +17,7 @@
 #include <memory>
 
 #include "base/init_google.h"
-#include "base/logging.h"
+#include "logging.h"
 #include "third_party/absl/memory/memory.h"
 #include "autotest2/cpp/util/vsimem.h"
 #include "frmts/grib/gribdataset.h"

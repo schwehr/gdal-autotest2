@@ -34,7 +34,7 @@
 #include <cmath>
 #include <string>
 
-#include "testing/base/public/gunit.h"
+#include "gunit.h"
 
 namespace geos {
 namespace io {

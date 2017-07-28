@@ -16,17 +16,17 @@
 
 #include "base/commandlineflags.h"
 #include "base/init_google.h"
-#include "base/logging.h"
+#include "logging.h"
 
 #include <stddef.h>
 #include <stdint.h>
 #include <memory>
 #include <string>
 
-#include "third_party/gdal/autotest2/cpp/util/vsimem.h"
-#include "third_party/gdal/gcore/gdal.h"
-#include "third_party/gdal/gcore/gdal_priv.h"
-#include "third_party/gdal/frmts/jp2kak/jp2kakdataset.h"
+#include "autotest2/cpp/util/vsimem.h"
+#include "gcore/gdal.h"
+#include "gcore/gdal_priv.h"
+#include "frmts/jp2kak/jp2kakdataset.h"
 
 int main(int argc, char **argv) {
   InitGoogle(argv[0], &argc, &argv, true);

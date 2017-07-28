@@ -3,7 +3,7 @@
 #include <memory>
 #include <string>
 
-#include "base/logging.h"
+#include "logging.h"
 #include "proto_message_mutator.h"
 #include "third_party/absl/memory/memory.h"
 #include "autotest2/cpp/ogr/ogrsf_frmts/shape/shapedatasource_fuzzer.pb.h"
