@@ -27,7 +27,7 @@
 #include <string.h>
 #include <memory>
 
-#include "base/logging.h"
+#include "logging.h"
 #include "gmock.h"
 #include "gunit.h"
 #include "third_party/absl/memory/memory.h"

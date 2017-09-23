@@ -64,7 +64,7 @@ REGISTER_MODULE_INITIALIZER(glog_kakadu, {
 });
 
 constexpr char kTestData[] =
-    "/google3/third_party/kakadu/tests/apps/compressed_io/testdata/";
+    "cpp/third_party/kakadu/apps/compressed_io/testdata/";
 
 TEST(KduFileIoTest, OpenNonexistentFile) {
   // This test verifies that KduFileIo has the named property.
