@@ -38,3 +38,6 @@ class OgrinfoTest(unittest.TestCase):
     self.assertIn('WGS 84', result)
     self.assertIn('4326', result)
     self.assertIn('POINT (100 0)', result)
+
+if __name__ == '__main__':
+  unittest.main()

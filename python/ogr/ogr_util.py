@@ -146,8 +146,10 @@ def SkipIfDriverMissing(driver_name):
 
 def GetTestFilePath(filename):
   return os.path.join(
-      os.path.split(os.path.abspath(__file__))[0],
-      'testdata',
+      FLAGS.test_srcdir,
+      'autotest2/ogr/testdata',
+             os.path.split(os.path.abspath(__file__))[0],
+             'testdata',
       filename
   )
 
@@ -222,14 +224,15 @@ class DriverTestCase(unittest.TestCase):
       geom = geom.Clone()
 
     if f_geom is not None and geom is None:
-      self.fail('expected NULL geometry but got one.')
+      self.fail('expected NULL geometry but got one: %s' % f_geom)
 
     if f_geom is None and geom is not None:
       self.fail('expected geometry but got NULL.')
 
-    self.assertEquals(
-        f_geom.GetGeometryName(), geom.GetGeometryName(),
-        'geometry names do not match')
+    self.assertEquals(f_geom.GetGeometryName(),
+                      geom.GetGeometryName(),
+                      'geometry names do not match: %s != %s' %
+                      (f_geom.GetGeometryName(), geom.GetGeometryName()))
 
     self.assertEquals(
         f_geom.GetGeometryCount(), geom.GetGeometryCount(),
@@ -265,7 +268,9 @@ class DriverTestCase(unittest.TestCase):
         not count.
       bbox: Expected bounding box as (xmin, xmax, ymin, ymax).
     """
-    self.assertEqual(layer.GetName(), name)
+    self.assertIsNotNone(layer)
+    self.assertEqual(layer.GetName(), name, '"%s" != "%s"' % (layer.GetName(),
+                                                              name))
     self.assertEqual(layer.GetFeatureCount(), feature_count)
     layer_defn = layer.GetLayerDefn()
     self.assertIsNotNone(layer_defn)

@@ -16,9 +16,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "port/cpl_hash_set.h"
+
+#include <stddef.h>
+
 #include "gunit.h"
 #include "gcore/gdal_priv.h"
-#include "port/cpl_hash_set.h"
+#include "port/cpl_conv.h"
 
 namespace {
 

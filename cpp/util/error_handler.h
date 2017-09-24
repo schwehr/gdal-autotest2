@@ -22,4 +22,11 @@ void CPLGoogleLogErrorHandler(CPLErr error_class,
                               int error_num,
                               const char *error_msg);
 
+// Put an instance of this on the stack for noisy test cases.
+class WithQuietHandler {
+ public:
+  WithQuietHandler() { CPLPushErrorHandler(CPLQuietErrorHandler); }
+  ~WithQuietHandler() { CPLPopErrorHandler(); }
+};
+
 #endif  // THIRD_PARTY_GDAL_AUTOTEST2_CPP_UTIL_ERROR_HANDLER_H_

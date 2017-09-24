@@ -61,6 +61,8 @@ TEST(Jp2kakdatasetTest, IdentifyNoJpip) {
   }
 }
 
+// TODO(schwehr): Identify with J2K_SUBFILE.
+
 TEST(Jp2kakdatasetTest, IdentifyJp2) {
   // Only goes off the contents.  Ignores the extension.
   const char kFilename[] = "/vsimem/a";
@@ -110,6 +112,20 @@ TEST(Jp2kakdatasetTest, IdentifyJpc) {
   ASSERT_NE(nullptr, open_info);
   ASSERT_EQ(FALSE, JP2KAKDataset::Identify(open_info.get()));
 }
+
+TEST(Jp2kakdatasetTest, OpenJpip) {
+  // The Identify() at the beginning of Open blocks setting bIsJPIP.
+  for (const auto &url : {"http://localhost/e.jp2", "https://localhost/e.jp2",
+                          "jpip://localhost/e.jp2"}) {
+    std::unique_ptr<GDALOpenInfo> open_info(
+        new GDALOpenInfo(url, GDAL_OF_READONLY, nullptr));
+    ASSERT_NE(nullptr, open_info);
+    ASSERT_LT(open_info->nHeaderBytes, 16);
+    EXPECT_EQ(nullptr, JP2KAKDataset::Open(open_info.get()));
+  }
+}
+
+// TODO(schwehr): more.
 
 }  // namespace
 }  // namespace autotest2

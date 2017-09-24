@@ -96,7 +96,6 @@ TEST(OgrfeaturedefnTest, ReferenceCount) {
 }
 
 TEST(OgrfeaturedefnTest, Release) {
-  // auto fd = gtl::MakeUnique<OGRFeatureDefn>("release");
   auto fd = new OGRFeatureDefn("release");
   EXPECT_EQ(0, fd->GetReferenceCount());
   EXPECT_EQ(1, fd->Reference());
@@ -107,7 +106,29 @@ TEST(OgrfeaturedefnTest, Release) {
   // No need to delete as fd deleted itself.
 }
 
-TEST(OgrfeaturedefnTest, SetGeomTypeOnEmpty) {
+TEST(OgrfeaturedefnTest, Fields) {
+  auto fd = gtl::MakeUnique<OGRFeatureDefn>("a");
+  EXPECT_EQ(0, fd->GetFieldCount());
+  auto a = gtl::MakeUnique<OGRFieldDefn>("b", OFTInteger);
+  fd->AddFieldDefn(a.get());
+  auto b = gtl::MakeUnique<OGRFieldDefn>("c", OFTReal);
+  fd->AddFieldDefn(b.get());
+  EXPECT_EQ(0, fd->GetFieldIndex("b"));
+  EXPECT_EQ(1, fd->GetFieldIndex("c"));
+  EXPECT_EQ(2, fd->GetFieldCount());
+
+  EXPECT_TRUE(b->IsSame(fd->GetFieldDefn(1)));
+
+  int reorder[] = {1, 0};
+  EXPECT_EQ(OGRERR_NONE, fd->ReorderFieldDefns(reorder));
+  EXPECT_EQ(1, fd->GetFieldIndex("b"));
+  EXPECT_EQ(0, fd->GetFieldIndex("c"));
+
+  EXPECT_EQ(OGRERR_NONE, fd->DeleteFieldDefn(1));
+  EXPECT_EQ(1, fd->GetFieldCount());
+}
+
+TEST(OgrfeaturedefnTest, GeomField) {
   auto fd = gtl::MakeUnique<OGRFeatureDefn>("a");
 
   EXPECT_EQ(0, fd->GetFieldCount());
@@ -117,6 +138,114 @@ TEST(OgrfeaturedefnTest, SetGeomTypeOnEmpty) {
   EXPECT_EQ(wkbPoint, fd->GetGeomType());
   EXPECT_EQ(0, fd->GetFieldCount());
   EXPECT_EQ(1, fd->GetGeomFieldCount());
+
+  auto b = gtl::MakeUnique<OGRGeomFieldDefn>("b", wkbLineString);
+  fd->AddGeomFieldDefn(b.get());
+  EXPECT_EQ(wkbPoint, fd->GetGeomType());
+  EXPECT_EQ(0, fd->GetFieldCount());
+  EXPECT_EQ(2, fd->GetGeomFieldCount());
+
+  auto c = gtl::MakeUnique<OGRGeomFieldDefn>("c", wkbPolygon);
+  fd->AddGeomFieldDefn(c.get());
+  EXPECT_EQ(wkbPoint, fd->GetGeomType());
+  EXPECT_EQ(0, fd->GetFieldCount());
+  EXPECT_EQ(3, fd->GetGeomFieldCount());
+
+  // Still the same.  This is the value taken from the first/initial geometry
+  // field (#0). It is not altered by adding the additional "b" and "c" geometry
+  // fields.
+  EXPECT_EQ(wkbPoint, fd->GetGeomType());
+
+  EXPECT_EQ(1, fd->GetGeomFieldIndex("b"));
+  EXPECT_EQ(2, fd->GetGeomFieldIndex("c"));
+  EXPECT_EQ(-1, fd->GetGeomFieldIndex("does not exist"));
+
+  auto c2 = fd->GetGeomFieldDefn(2);
+  ASSERT_NE(nullptr, c2);
+  EXPECT_TRUE(c->IsSame(c2));
+
+  fd->SetGeometryIgnored(true);
+  EXPECT_TRUE(fd->IsGeometryIgnored());
+  fd->SetGeometryIgnored(false);
+  EXPECT_FALSE(fd->IsGeometryIgnored());
+}
+
+TEST(OgrfeaturedefnTest, Style) {
+  auto fd = gtl::MakeUnique<OGRFeatureDefn>("a");
+  EXPECT_FALSE(fd->IsStyleIgnored());
+  fd->SetStyleIgnored(true);
+  EXPECT_TRUE(fd->IsStyleIgnored());
+  fd->SetStyleIgnored(false);
+  EXPECT_FALSE(fd->IsStyleIgnored());
+}
+
+TEST(OgrfeaturedefnTest, CreateDestroy) {
+  // http://stackoverflow.com/questions/443147/c-mix-new-delete-between-libs
+  auto fd = OGRFeatureDefn::CreateFeatureDefn("a");
+  ASSERT_NE(nullptr, fd);
+  OGRFeatureDefn::DestroyFeatureDefn(fd);
+}
+
+TEST(OgrfeaturedefnTest, IsSame) {
+  auto fd = gtl::MakeUnique<OGRFeatureDefn>("a");
+  EXPECT_TRUE(fd->IsSame(fd.get()));
+  {
+    auto other = gtl::MakeUnique<OGRFeatureDefn>("a");
+    EXPECT_TRUE(fd->IsSame(other.get()));
+  }
+  {
+    auto other = gtl::MakeUnique<OGRFeatureDefn>("b");
+    EXPECT_FALSE(fd->IsSame(other.get()));
+  }
+  {
+    auto other = gtl::MakeUnique<OGRFeatureDefn>("a");
+    auto a = gtl::MakeUnique<OGRFieldDefn>("b", OFTInteger);
+    other->AddFieldDefn(a.get());
+    EXPECT_FALSE(fd->IsSame(other.get()));
+  }
+  {
+    auto other = gtl::MakeUnique<OGRFeatureDefn>("a");
+    auto b = gtl::MakeUnique<OGRGeomFieldDefn>("b", wkbLineString);
+    other->AddGeomFieldDefn(b.get());
+    EXPECT_FALSE(fd->IsSame(other.get()));
+  }
+  // Style is ignored.
+  {
+    auto other = gtl::MakeUnique<OGRFeatureDefn>("a");
+    other->SetStyleIgnored(true);
+    EXPECT_TRUE(fd->IsSame(other.get()));
+    other->SetStyleIgnored(false);
+    EXPECT_TRUE(fd->IsSame(other.get()));
+  }
+  // Geometry ignored is ignored.
+  {
+    auto other = gtl::MakeUnique<OGRFeatureDefn>("a");
+    other->SetGeometryIgnored(true);
+    EXPECT_TRUE(fd->IsSame(other.get()));
+    other->SetGeometryIgnored(false);
+    EXPECT_TRUE(fd->IsSame(other.get()));
+  }
+
+  auto a = gtl::MakeUnique<OGRFieldDefn>("b", OFTInteger);
+  fd->AddFieldDefn(a.get());
+  auto c = gtl::MakeUnique<OGRGeomFieldDefn>("c", wkbPolygon);
+  fd->AddGeomFieldDefn(c.get());
+  EXPECT_TRUE(fd->IsSame(fd.get()));
+}
+
+TEST(OgrfeaturedefnTest, Clone) {
+  auto fd = gtl::MakeUnique<OGRFeatureDefn>("a");
+  auto a = gtl::MakeUnique<OGRFieldDefn>("b", OFTInteger);
+  fd->AddFieldDefn(a.get());
+  auto c = gtl::MakeUnique<OGRGeomFieldDefn>("c", wkbPolygon);
+  fd->AddGeomFieldDefn(c.get());
+  fd->SetStyleIgnored(true);
+  fd->SetGeometryIgnored(true);
+
+  auto clone = fd->Clone();
+  ASSERT_NE(nullptr, clone);
+  EXPECT_TRUE(fd->IsSame(clone));
+  delete clone;
 }
 
 }  // namespace

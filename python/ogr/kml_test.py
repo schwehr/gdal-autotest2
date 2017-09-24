@@ -79,6 +79,15 @@ class OgrKmlTest(ogr_util.DriverTestCase):
     feature = layer.GetNextFeature()
     self.assertEqual(feature.GetField('Name'), 'Clipperton Island')
 
+  def testSimplePlacemarkKmz(self):
+    filepath = ogr_util.GetTestFilePath('kml/placemark.kmz')
+    self.assertIsNone(ogr.Open(filepath))
+    src = ogr.Open('/vsizip/' + filepath)
+    self.assertEqual(src.GetLayerCount(), 1)
+    layer = src.GetLayer()
+    feature = layer.GetNextFeature()
+    self.assertEqual(feature.GetField('Name'), 'Hidden Villa')
+
   def testAttributes(self):
     filepath = ogr_util.GetTestFilePath('samples.kml')
     self.CheckOpen(filepath)

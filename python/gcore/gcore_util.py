@@ -39,8 +39,10 @@ def IsGdal2():
 
 def GetTestFilePath(filename):
   return os.path.join(
-      os.path.split(os.path.abspath(__file__))[0],
-      'testdata'
+      FLAGS.test_srcdir,
+      'autotest2/gcore/testdata',
+             os.path.split(os.path.abspath(__file__))[0],
+             'testdata'
       filename
       )
 
@@ -89,9 +91,6 @@ def SetupTestEnv():
     except OSError as exception:
       if exception.errno != errno.EEXIST:
         raise
-
-  logging.info('gdal_tmpdir %s', gdal_tmpdir)
-  logging.info('gdal_pamdir %s', gdal_pamdir)
 
   gdal.SetConfigOption('TMPDIR', gdal_tmpdir)
   gdal.SetConfigOption('CPL_TMPDIR', gdal_tmpdir)

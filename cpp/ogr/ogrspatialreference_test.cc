@@ -14,12 +14,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <ctype.h>
-#include <stdio.h>
-#include <set>
 #include <string>
 
-#include "logging.h"
 #include "gunit.h"
 #include "autotest2/cpp/util/error_handler.h"
 #include "ogr/ogr_core.h"
@@ -185,6 +181,48 @@ TEST(OgrSpatialReferenceTest, IsSameCloser) {
   EXPECT_TRUE(srs_new.IsSame(&srs_old_with_towgs84));
 }
 
+TEST(OgrSpatialReferenceTest, DifferByProj4Extension) {
+  // Test IsSame() on SRS that differs only by their PROJ4 EXTENSION (besides
+  // different EPSG codes).
+  // Upstream: osr_epsg_12
+  // https://trac.osgeo.org/gdal/ticket/7029
+
+  // web_mercator
+  OGRSpatialReference srs3857;
+  EXPECT_EQ(OGRERR_NONE, srs3857.importFromEPSG(3857));
+
+  // WGS84 Mercator
+  OGRSpatialReference srs3395;
+  EXPECT_EQ(OGRERR_NONE, srs3395.importFromEPSG(3395));
+
+  EXPECT_FALSE(srs3395.IsSame(&srs3857));
+
+  EXPECT_TRUE(srs3857.IsSame(&srs3857));
+  EXPECT_TRUE(srs3395.IsSame(&srs3395));
+}
+
+TEST(OgrSpatialReferenceTest, InvalidCentralMeridian) {
+  // Autofuzz POC from b/65413187
+  const char kWkt[] = R"wkt(
+      PROJCS["unnamed",GEOGCS["WGS 84",DATUM["WGS_1984",
+      SPHEROID["WGS 84",6378137,298.257223563,AUTHORITY["EPSG","7030"]],
+      AUTHORITY["EPSG","6326"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],
+      UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],
+      AUTHORITY["EPSG","4326"]],PROJECTION["Transverse_Mercator"],
+      PARAMETER["latitude_of_origin",0],
+      PARAMETER["central_meridian",77777777777],
+      PARAMETER["scale_factor",0.9996],
+      PARAMETER["false_easting","nan"],
+      PARAMETER["false_northing",0],UNIT["Go]",1]])wkt";
+  OGRSpatialReference srs(kWkt);
+  int north = TRUE;
+  EXPECT_EQ(0, srs.GetUTMZone(&north));
+
+  // This formerly triggered an ASAN violation.
+  srs.morphToESRI();
+}
+
 // TODO(schwehr): Write many more tests.
 
 }  // namespace
+

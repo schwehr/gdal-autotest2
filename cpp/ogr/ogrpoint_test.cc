@@ -14,12 +14,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <string.h>
 #include <memory>
 
 #include "gunit.h"
 #include "autotest2/cpp/util/cpl_memory.h"
 #include "autotest2/cpp/util/error_handler.h"
+#include "ogr/ogr_core.h"
 #include "ogr/ogr_geometry.h"
+#include "port/cpl_conv.h"
 
 using autotest2::FreeDeleter;
 

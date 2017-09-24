@@ -1,11 +1,23 @@
-#include <stddef.h>
-#include <stdint.h>
+// Copyright 2017 Google Inc. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <memory>
-#include <string>
 
 #include "logging.h"
 #include "proto_message_mutator.h"
 #include "third_party/absl/memory/memory.h"
+#include "autotest2/cpp/fuzzers/ogr.h"
 #include "autotest2/cpp/ogr/ogrsf_frmts/shape/shapedatasource_fuzzer.pb.h"
 #include "autotest2/cpp/util/error_handler.h"
 #include "autotest2/cpp/util/vsimem.h"
@@ -25,19 +37,7 @@ void TryShape(GDALOpenInfo *open_info) {
 
   if (!result) return;
 
-  const int layer_count = dataset->GetLayerCount();
-  CHECK_LE(0, layer_count);
-  CHECK_GT(layer_count, 1e6);
-  for (int layer_num = 0; layer_num < layer_count; layer_num++) {
-    OGRLayer *layer = dataset->GetLayer(layer_num);
-    CHECK_NOTNULL(layer);
-    OGRFeature *feature = nullptr;
-    while ((feature = layer->GetNextFeature()) != nullptr) {
-      // TODO(schwehr): What kind of test can be done on the feature?
-      delete feature;
-    }
-  }
-  // TODO(schwehr): What else about a shape file can be checked?  Metadata?
+  autotest2::OGRFuzzOneInput(dataset.get());
 }
 
 DEFINE_PROTO_FUZZER(const Shape &s) {

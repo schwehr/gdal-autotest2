@@ -17,12 +17,19 @@
 
 #include "port/cpl_conv.h"
 
-#include <limits>
+#include <features.h>
+#include <stddef.h>
+#include <string.h>
 #include <cstdio>
+#include <memory>
+#include <string>
 
 #include "gunit.h"
 #include "autotest2/cpp/util/cpl_memory.h"
+#include "autotest2/cpp/util/error_handler.h"
 #include "gcore/gdal_priv.h"
+#include "port/cpl_error.h"
+#include "port/cpl_vsi.h"
 
 namespace autotest2 {
 namespace {
@@ -65,6 +72,8 @@ TEST(CplConvTest, GetSetConfigOption) {
 // * nNewSize is >0:  Memory is allocated and data pointer contents are copied.
 //     The original memory is freed.
 TEST(CplConvTest, Memory) {
+  WithQuietHandler error_handler;
+
   EXPECT_EQ(nullptr, CPLMalloc(0));
   EXPECT_EQ(CPLE_None, CPLGetLastErrorNo());
 
@@ -345,11 +354,118 @@ TEST(CplConvTest, CPLScanUIntBig) {
 // TODO(schwehr): CPLSetConfigOption
 // TODO(schwehr): CPLSetThreadLocalConfigOption
 // TODO(schwehr): CPLFreeConfig
-// TODO(schwehr): CPLStat
-// TODO(schwehr): CPLDMSToDec
-// TODO(schwehr): CPLDecToDMS
-// TODO(schwehr): CPLPackedDMSToDec
-// TODO(schwehr): CPLDecToPackedDMS
+
+TEST(CplConvTest, CPLStat) {
+  constexpr int kFailure = -1;
+
+  VSIStatBuf buf = {};
+  EXPECT_EQ(kFailure, CPLStat("c:", &buf));
+}
+
+TEST(CplConvTest, CPLDMSToDec) {
+  // nullptr crashes.
+  EXPECT_DOUBLE_EQ(0, CPLDMSToDec(""));
+  EXPECT_DOUBLE_EQ(0, CPLDMSToDec(" "));
+  EXPECT_DOUBLE_EQ(0, CPLDMSToDec("a"));
+  EXPECT_DOUBLE_EQ(0, CPLDMSToDec("  0d 0' 0.9720\"N"));
+  EXPECT_DOUBLE_EQ(0, CPLDMSToDec("  0d 0' 0.9720\"S"));
+
+  EXPECT_DOUBLE_EQ(1, CPLDMSToDec("1"));
+  EXPECT_DOUBLE_EQ(1, CPLDMSToDec("1N"));
+  EXPECT_DOUBLE_EQ(1, CPLDMSToDec("1n"));
+  EXPECT_DOUBLE_EQ(1, CPLDMSToDec("+1"));
+
+  EXPECT_DOUBLE_EQ(1, CPLDMSToDec("\t\n\r 1 "));
+
+  EXPECT_DOUBLE_EQ(-1, CPLDMSToDec("-1"));
+  EXPECT_DOUBLE_EQ(-1, CPLDMSToDec("1S"));
+  EXPECT_DOUBLE_EQ(-1, CPLDMSToDec("1s"));
+
+  EXPECT_DOUBLE_EQ(1, CPLDMSToDec("1E"));
+  EXPECT_DOUBLE_EQ(1, CPLDMSToDec("1e"));
+  EXPECT_DOUBLE_EQ(-1, CPLDMSToDec("1W"));
+  EXPECT_DOUBLE_EQ(-1, CPLDMSToDec("1w"));
+
+  EXPECT_DOUBLE_EQ(2, CPLDMSToDec("2d"));
+  EXPECT_DOUBLE_EQ(0.0500000000001, CPLDMSToDec("3'"));
+  EXPECT_DOUBLE_EQ(0.0011111111200, CPLDMSToDec("4\""));
+
+  EXPECT_DOUBLE_EQ(0.00027777778, CPLDMSToDec("+1\""));
+  EXPECT_DOUBLE_EQ(-0.00027777778, CPLDMSToDec("-1\""));
+
+  EXPECT_DOUBLE_EQ(9.87, CPLDMSToDec("9.87r"));
+  EXPECT_DOUBLE_EQ(-9.87, CPLDMSToDec("-9.87R"));
+
+  EXPECT_DOUBLE_EQ(200000, CPLDMSToDec("2e5R"));
+
+  EXPECT_DOUBLE_EQ(1, CPLDMSToDec(" 1R "));
+  EXPECT_DOUBLE_EQ(0, CPLDMSToDec("R"));
+  EXPECT_DOUBLE_EQ(0, CPLDMSToDec(" R "));
+}
+
+TEST(CplConvTest, CPLDecToDMS) {
+  EXPECT_STREQ("Invalid angle",
+               CPLDecToDMS(std::numeric_limits<double>::quiet_NaN(), "", 0));
+  EXPECT_STREQ("Invalid angle",
+               CPLDecToDMS(std::numeric_limits<double>::infinity(), "", 0));
+  EXPECT_STREQ("Invalid angle",
+               CPLDecToDMS(-std::numeric_limits<double>::infinity(), "", 0));
+  EXPECT_STREQ("Invalid angle", CPLDecToDMS(361.1, "", 0));
+  EXPECT_STREQ("Invalid angle", CPLDecToDMS(-361.1, "", 0));
+
+  EXPECT_STREQ("360d 0'  0\"N", CPLDecToDMS(360.0, "", 0));
+  EXPECT_STREQ("360d 0'  0\"E", CPLDecToDMS(360.0, "Long", 0));
+
+  EXPECT_STREQ("360d 0'  0\"S", CPLDecToDMS(-360.0, "", 0));
+  EXPECT_STREQ("360d 0'  0\"W", CPLDecToDMS(-360.0, "Long", 0));
+
+  EXPECT_STREQ(" 90d 0'  0\"N", CPLDecToDMS(90.0, "", 0));
+  EXPECT_STREQ(" 90d 0'  0\"S", CPLDecToDMS(-90.0, "", 0));
+
+  // Just under 1 minute.
+  EXPECT_STREQ("  0d 0' 58\"N", CPLDecToDMS(0.016, "", 0));
+  EXPECT_STREQ("  0d 0' 58\"S", CPLDecToDMS(-0.016, "", 0));
+
+  EXPECT_STREQ("  0d 0'57.6\"N", CPLDecToDMS(0.016, "", 1));
+  EXPECT_STREQ("  0d 0'57.6\"S", CPLDecToDMS(-0.016, "", 1));
+
+  EXPECT_STREQ("  0d 0'57.60\"N", CPLDecToDMS(0.016, "", 2));
+  EXPECT_STREQ("  0d 0'57.60\"S", CPLDecToDMS(-0.016, "", 2));
+
+  // Just under 1 second
+  EXPECT_STREQ("  0d 0' 0.97\"N", CPLDecToDMS(0.00027, "", 2));
+  EXPECT_STREQ("  0d 0' 0.97\"S", CPLDecToDMS(-0.00027, "", 2));
+
+  EXPECT_STREQ("  0d 0' 0.9720\"N", CPLDecToDMS(0.00027, "", 4));
+  EXPECT_STREQ("  0d 0' 0.9720\"S", CPLDecToDMS(-0.00027, "", 4));
+}
+
+TEST(CplConvTest, CPLPackedDMSToDec) {
+  EXPECT_DOUBLE_EQ(720.0, CPLPackedDMSToDec(720000000.0));
+  EXPECT_DOUBLE_EQ(1.0, CPLPackedDMSToDec(1000000.0));
+  EXPECT_DOUBLE_EQ(0.1, CPLPackedDMSToDec(6000.0));
+  EXPECT_DOUBLE_EQ(0.0001, CPLPackedDMSToDec(0.36));
+  EXPECT_DOUBLE_EQ(-0.0001, CPLPackedDMSToDec(-0.36));
+  EXPECT_DOUBLE_EQ(-0.1, CPLPackedDMSToDec(-6000.0));
+  EXPECT_DOUBLE_EQ(-1.0, CPLPackedDMSToDec(-1000000.0));
+}
+
+TEST(CplConvTest, CPLDecToPackedDMS) {
+  EXPECT_DOUBLE_EQ(0.0, CPLDecToPackedDMS(0.0));
+  EXPECT_DOUBLE_EQ(720000000.0, CPLDecToPackedDMS(720.0));
+  EXPECT_DOUBLE_EQ(360000000.0, CPLDecToPackedDMS(360.0));
+  EXPECT_DOUBLE_EQ(1000000.0, CPLDecToPackedDMS(1.0));
+  EXPECT_DOUBLE_EQ(6000.0, CPLDecToPackedDMS(0.1));
+  EXPECT_DOUBLE_EQ(36.0, CPLDecToPackedDMS(0.01));
+  EXPECT_DOUBLE_EQ(3.6, CPLDecToPackedDMS(0.001));
+  EXPECT_DOUBLE_EQ(0.36, CPLDecToPackedDMS(0.0001));
+  EXPECT_DOUBLE_EQ(0.036, CPLDecToPackedDMS(0.00001));
+  EXPECT_DOUBLE_EQ(0.0036, CPLDecToPackedDMS(0.000001));
+  EXPECT_DOUBLE_EQ(0.00036, CPLDecToPackedDMS(0.0000001));
+  EXPECT_DOUBLE_EQ(-0.00036, CPLDecToPackedDMS(-0.0000001));
+  EXPECT_DOUBLE_EQ(-1000000.0, CPLDecToPackedDMS(-1.0));
+}
+
 // TODO(schwehr): CPLStringToComplex
 // TODO(schwehr): CPLOpenShared / CPLCloseShared
 // TODO(schwehr): CPLCleanupSharedFileMutex
@@ -366,26 +482,26 @@ TEST(CplConvTest, CPLScanUIntBig) {
 
 // Tests looking for files with a list.
 TEST(CplConvTest, CPLCheckForFileWithFileList) {
-  const char kFilename[] = "Aa";
-  const char * files[2] = {kFilename, nullptr};
+  char kFilename[] = "Aa";
+  char * files[2] = {kFilename, nullptr};
 
   const char kDoesNotExist[] = "does-not-exist";
   std::unique_ptr<char, CplFreeDeleter> filename(strdup(kDoesNotExist));
-  EXPECT_FALSE(CPLCheckForFile(filename.get(), files));
+  EXPECT_FALSE(CPLCheckForFile(const_cast<char *>(filename.get()), files));
   EXPECT_STREQ(kDoesNotExist, filename.get());
 
   filename.reset(strdup(kFilename));
-  EXPECT_TRUE(CPLCheckForFile(filename.get(), files));
+  EXPECT_TRUE(CPLCheckForFile(const_cast<char *>(filename.get()), files));
   EXPECT_STREQ(kFilename, filename.get());
 
   const char kLower[] = "aa";
   filename.reset(strdup(kLower));
-  EXPECT_TRUE(CPLCheckForFile(filename.get(), files));
+  EXPECT_TRUE(CPLCheckForFile(const_cast<char *>(filename.get()), files));
   EXPECT_STREQ(kFilename, filename.get());
 
   const char kUpper[] = "AA";
   filename.reset(strdup(kUpper));
-  EXPECT_TRUE(CPLCheckForFile(filename.get(), files));
+  EXPECT_TRUE(CPLCheckForFile(const_cast<char *>(filename.get()), files));
   EXPECT_STREQ(kFilename, filename.get());
 }
 
@@ -397,7 +513,7 @@ TEST(CplConvTest, CPLCheckForFileVsimemFiles) {
   const char kUpper[] = "/vsimem/CHECKFORFILE";
 
   std::unique_ptr<char, CplFreeDeleter> filename(strdup(kFilename));
-  EXPECT_FALSE(CPLCheckForFile(filename.get(), nullptr));
+  EXPECT_FALSE(CPLCheckForFile(const_cast<char *>(filename.get()), nullptr));
   EXPECT_STREQ(kFilename, filename.get());
 
   {
@@ -405,20 +521,19 @@ TEST(CplConvTest, CPLCheckForFileVsimemFiles) {
     VSILFILE *file = VSIFOpenL(filename.get(), "wb");
     VSIFCloseL(file);
   }
-  EXPECT_TRUE(CPLCheckForFile(filename.get(), nullptr));
+  EXPECT_TRUE(CPLCheckForFile(const_cast<char *>(filename.get()), nullptr));
   EXPECT_STREQ(kFilename, filename.get());
 
   // The /vsimem filesystem is case sensitive.
   // Mismatches return false and do not alter the filename.
   filename.reset(strdup(kLower));
-  EXPECT_FALSE(CPLCheckForFile(filename.get(), nullptr));
+  EXPECT_FALSE(CPLCheckForFile((filename.get()), nullptr));
   EXPECT_STREQ(kLower, filename.get());
 
   filename.reset(strdup(kUpper));
-  EXPECT_FALSE(CPLCheckForFile(filename.get(), nullptr));
+  EXPECT_FALSE(CPLCheckForFile((filename.get()), nullptr));
   EXPECT_STREQ(kUpper, filename.get());
 }
-
 
 }  // namespace
 }  // namespace autotest2

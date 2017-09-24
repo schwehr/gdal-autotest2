@@ -161,7 +161,7 @@ class HistogramJpegTest(gdrivers_util.DriverTestCase):
 
   def testHist6Jpeg(self):
     # http://trac.osgeo.org/gdal/ticket/3304
-    filepath = gdrivers_util.GetTestFilePath('albania.jpg')
+    filepath = gdrivers_util.GetTestFilePath('jpeg/albania.jpg')
     self.CheckOpen(filepath)
 
     band = self.src.GetRasterBand(1)

@@ -14,8 +14,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "gunit.h"
 #include "autotest2/cpp/util/error_handler.h"
+
+#include <string>
+
+#include "gunit.h"
 #include "port/cpl_error.h"
 
 namespace {
@@ -36,7 +39,6 @@ TEST(ErrorHandlerDeathTest, CPLGoogleLogErrorHandlerNullptrTest) {
       CPLGoogleLogErrorHandler(static_cast<CPLErr>(-1), 999, nullptr), "");
 }
 
-// Tests
 TEST(ErrorHandlerDeathTest, CPLGoogleLogErrorHandlerFatalTest) {
   const string fatal_msg("CE_Failure gives FATAL and die");
   EXPECT_DEATH(
@@ -44,7 +46,6 @@ TEST(ErrorHandlerDeathTest, CPLGoogleLogErrorHandlerFatalTest) {
       fatal_msg);
 }
 
-// Tests
 TEST(ErrorHandlerDeathTest, CPLGoogleLogErrorHandlerInvalidTest) {
   const string invalid_msg("Invalid should give FATAL and die");
   EXPECT_DEATH(

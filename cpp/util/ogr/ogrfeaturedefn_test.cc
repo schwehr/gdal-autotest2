@@ -26,13 +26,13 @@ namespace autotest2 {
 namespace {
 
 TEST(BuilderTest, SkipBuild) {
-  OGRFeatureDefnBuilder builder("schema", wkbUnknown);
+  OGRFeatureDefnBuilder builder("schema");
   builder.AddField("int32", OFTInteger, OFSTNone);
   // Do nothing to make sure there is nothing left on the heap.
 }
 
 TEST(BuilderTest, BuildTwiceFails) {
-  OGRFeatureDefnBuilder builder("schema", wkbUnknown);
+  OGRFeatureDefnBuilder builder("schema");
   auto fd = builder.Build();
   ASSERT_NE(nullptr, fd);
   fd->Release();
@@ -42,7 +42,8 @@ TEST(BuilderTest, BuildTwiceFails) {
 }
 
 TEST(BuilderTest, OneGeo) {
-  OGRFeatureDefnBuilder builder("schema", wkbPoint);
+  OGRFeatureDefnBuilder builder("schema");
+  builder.AddGeom("geo", wkbPoint);
   auto fd = builder.Build();
   auto fd_cleaner = gtl::MakeCleanup([fd] { fd->Release(); });
 
@@ -54,22 +55,33 @@ TEST(BuilderTest, OneGeo) {
   EXPECT_EQ(0, fd->GetFieldCount());
 }
 
-TEST(BuilderTest, SameAsOneGeo) {
-  OGRFeatureDefnBuilder builder("schema", wkbLineString);
-  builder.AddGeom("geo", wkbLineString);
+TEST(BuilderTest, Empty) {
+  // Create a definition without a geometry.
+  OGRFeatureDefnBuilder builder("schema");
   auto fd = builder.Build();
   auto fd_cleaner = gtl::MakeCleanup([fd] { fd->Release(); });
 
-  OGRFeatureDefnBuilder expected_builder("schema", wkbLineString);
-  auto expected = expected_builder.Build();
-  auto expected_cleaner = gtl::MakeCleanup([expected] { expected->Release(); });
-
-  EXPECT_TRUE(expected->IsSame(fd));
+  EXPECT_EQ(0, fd->GetGeomFieldCount());
+  EXPECT_EQ(0, fd->GetFieldCount());
 }
 
-TEST(BuilderTest, OneGeoRenamed) {
-  OGRFeatureDefnBuilder builder("schema", wkbUnknown);
-  // Rename the first geometry from "geo" to "a".
+TEST(BuilderTest, OneField) {
+  OGRFeatureDefnBuilder builder("schema");
+  builder.AddField("i", OFTInteger, OFSTNone);
+  auto fd = builder.Build();
+  auto fd_cleaner = gtl::MakeCleanup([fd] { fd->Release(); });
+
+  EXPECT_EQ(0, fd->GetGeomFieldCount());
+
+  EXPECT_EQ(1, fd->GetFieldCount());
+  auto field = fd->GetFieldDefn(0);
+  EXPECT_STREQ("i", field->GetNameRef());
+  EXPECT_EQ(OFTInteger, field->GetType());
+  EXPECT_EQ(OFSTNone, field->GetSubType());
+}
+
+TEST(BuilderTest, OneGeom) {
+  OGRFeatureDefnBuilder builder("schema");
   builder.AddGeom("a", wkbUnknown);
   auto fd = builder.Build();
   auto fd_cleaner = gtl::MakeCleanup([fd] { fd->Release(); });
@@ -80,7 +92,7 @@ TEST(BuilderTest, OneGeoRenamed) {
 }
 
 TEST(BuilderTest, BuildFields) {
-  OGRFeatureDefnBuilder builder("schema", wkbUnknown);
+  OGRFeatureDefnBuilder builder("schema");
   builder.AddField("int32", OFTInteger, OFSTNone);
   builder.AddField("int64", OFTInteger64, OFSTNone);
   builder.AddField("string", OFTString, OFSTNone);
@@ -88,7 +100,6 @@ TEST(BuilderTest, BuildFields) {
   builder.AddField("double", OFTReal, OFSTNone);
   builder.AddField("bytes", OFTBinary, OFSTNone);
   builder.AddField("bool", OFTInteger, OFSTBoolean);
-  // Rename the initial first geom column to "geo2".
   builder.AddGeom("geo2", wkbUnknown);
   auto fd = builder.Build();
   auto fd_cleaner = gtl::MakeCleanup([fd] { fd->Release(); });
@@ -140,7 +151,7 @@ TEST(BuilderTest, BuildFields) {
 }
 
 TEST(BuilderTest, MultipleGeomFields) {
-  OGRFeatureDefnBuilder builder("schema", wkbPolygon);
+  OGRFeatureDefnBuilder builder("schema");
   builder.AddGeom("a", wkbPolygon);
   builder.AddGeom("b", wkbMultiPolygon);
   auto fd = builder.Build();
@@ -159,7 +170,7 @@ TEST(BuilderTest, MultipleGeomFields) {
 }
 
 TEST(BuilderTest, Lists) {
-  OGRFeatureDefnBuilder builder("schema", wkbUnknown);
+  OGRFeatureDefnBuilder builder("schema");
   builder.AddField("intlist", OFTIntegerList, OFSTNone);
   builder.AddField("doublelist", OFTRealList, OFSTNone);
   builder.AddField("stringlist", OFTStringList, OFSTNone);

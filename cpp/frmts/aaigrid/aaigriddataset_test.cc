@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests Kakadu GRIB raster driver.
+// Tests ASCII Arc/Info (AAI) and GRASS ASCII raster driver.
 //
 // See also:
 //   http://www.gdal.org/frmt_various.html

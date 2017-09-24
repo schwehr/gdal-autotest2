@@ -18,7 +18,11 @@
 
 #include "port/cpl_string.h"
 
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
 #include <memory>
+#include <string>
 
 #include "gunit.h"
 

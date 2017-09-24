@@ -20,20 +20,19 @@
 //   http://www.gdal.org/drv_libkml.html
 //   https://trac.osgeo.org/gdal/browser/trunk/autotest/ogr/ogr_libkml.py
 
-#include <cstdio>
-#include <cstring>
 #include <memory>
 #include <string>
 
-#include "gmock.h"
 #include "gunit.h"
 #include "gcore/gdal.h"
 #include "gcore/gdal_priv.h"
+#include "ogr/ogr_api.h"
 #include "ogr/ogr_feature.h"
 #include "ogr/ogr_geometry.h"
 #include "ogr/ogr_spatialref.h"
 #include "ogr/ogrsf_frmts/ogrsf_frmts.h"
 #include "port/cpl_error.h"
+#include "port/cpl_vsi.h"
 
 using std::unique_ptr;
 

@@ -42,7 +42,6 @@
 #include "gunit.h"
 #include "autotest2/cpp/util/cpl_cstringlist.h"
 #include "autotest2/cpp/util/error_handler.h"
-#include "google/gdal_init.h"
 #include "ogr/ogr_core.h"
 #include "ogr/ogr_spatialref.h"
 #include "ogr/ogr_srs_api.h"

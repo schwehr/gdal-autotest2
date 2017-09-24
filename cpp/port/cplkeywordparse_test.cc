@@ -20,9 +20,10 @@
 
 #include "port/cplkeywordparser.h"
 
-#include "gunit.h"
+#include <string>
 
-#undef DEBUG  // TODO(schwehr): Why does this test fail with debug defined?
+#include "gunit.h"
+#include "port/cpl_vsi.h"
 
 // Tests parsing the data from gdrivers/data/testtil.til.
 TEST(CPLKeywordParser, BasicData) {

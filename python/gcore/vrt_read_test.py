@@ -44,7 +44,7 @@ http://trac.osgeo.org/gdal/browser/trunk/autotest/gcore/vrt_read.py
 import struct
 import unittest
 
-
+import numpy
 from osgeo import gdal
 from autotest2.gcore import gcore_util
 from autotest2.gdrivers import gdrivers_util
@@ -99,7 +99,7 @@ class VrtReadTest(gdrivers_util.DriverTestCase):
       self.assertIsNone(src)
       err_msg = gdal.GetLastErrorMsg()
       self.assertIn('idontexist.tif', err_msg)
-      self.assertIn('does not exist in the file system', err_msg)
+      self.assertIn('No such file', err_msg)
 
   def testVrt02NonExistingTifProxyPoolAPI(self):
     # http://trac.osgeo.org/gdal/ticket/2837

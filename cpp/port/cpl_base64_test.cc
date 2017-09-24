@@ -16,8 +16,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <string>
+
 #include "gunit.h"
 #include "gcore/gdal_priv.h"
+#include "port/cpl_conv.h"
+#include "port/cpl_port.h"
 #include "port/cpl_string.h"
 
 namespace {

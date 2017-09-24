@@ -18,6 +18,8 @@
 #include "ogr/ogr_p.h"
 
 #include "gunit.h"
+#include "autotest2/cpp/util/error_handler.h"
+#include "ogr/ogr_core.h"
 
 namespace autotest2 {
 namespace {
@@ -91,7 +93,88 @@ TEST(OGRMakeWktCoordinateTest, Basic) {
 // TODO(schwehr): Test OGRWktReadToken.
 // TODO(schwehr): Test OGRWktReadPoints.
 // TODO(schwehr): Test OGRWktReadPointsM.
-// TODO(schwehr): Test OGRParseDate.
+
+TEST(OGRParseDateTest, Fail) {
+  // nullptr for the string not allowed.
+
+  WithQuietHandler error_handler;
+
+  OGRField field;
+  EXPECT_FALSE(OGRParseDate("", &field, 0));
+
+  // Invalid separators.
+  EXPECT_FALSE(OGRParseDate("2017#08-10 19:59:01.123", &field, 0));
+  EXPECT_FALSE(OGRParseDate("2017-08#10 19:59:01.123", &field, 0));
+  EXPECT_FALSE(OGRParseDate("2017-08-10#19:59:01.123", &field, 0));
+  EXPECT_FALSE(OGRParseDate("2017-08-10 19#59:01.123", &field, 0));
+
+  // Partial date.
+  EXPECT_FALSE(OGRParseDate("2000", &field, 0));
+  EXPECT_FALSE(OGRParseDate("2000-08", &field, 0));
+
+  // Out of bounds fields.
+  EXPECT_FALSE(OGRParseDate("-32769-08-19", &field, 0));
+  EXPECT_FALSE(OGRParseDate("32768-08-19", &field, 0));
+  EXPECT_FALSE(OGRParseDate("32768-08-18", &field, 0));
+  EXPECT_FALSE(OGRParseDate("2000-0-18", &field, 0));
+  EXPECT_FALSE(OGRParseDate("2000-13-18", &field, 0));
+  EXPECT_FALSE(OGRParseDate("2000-08-0", &field, 0));
+  EXPECT_FALSE(OGRParseDate("2000-08-33", &field, 0));
+
+  EXPECT_FALSE(OGRParseDate("2017-08-10 24:32:01.123", &field, 0));
+  EXPECT_FALSE(OGRParseDate("2017-08-10 23:60:01.123", &field, 0));
+  EXPECT_FALSE(OGRParseDate("2017-08-10 23:32:62.123", &field, 0));
+}
+
+TEST(OGRParseDateTest, Basic) {
+  {
+    OGRField field;
+    EXPECT_TRUE(OGRParseDate("2017-08-10", &field, 0));
+    EXPECT_EQ(2017, field.Date.Year);
+    EXPECT_EQ(0, field.Date.TZFlag);  // Unknown
+  }
+
+  {
+    OGRField field;
+    EXPECT_TRUE(OGRParseDate("2017-08-10 19:59:01.123", &field, 0));
+    EXPECT_EQ(2017, field.Date.Year);
+  }
+
+  // Offset time zone.
+  {
+    OGRField field;
+    EXPECT_TRUE(OGRParseDate("2017-08-10 19:59:01.123+0:15", &field, 0));
+    EXPECT_EQ(101, field.Date.TZFlag);
+  }
+  {
+    OGRField field;
+    EXPECT_TRUE(OGRParseDate("2017-08-10 19:59:01.123+1", &field, 0));
+    EXPECT_EQ(104, field.Date.TZFlag);
+  }
+  {
+    OGRField field;
+    EXPECT_TRUE(OGRParseDate("2017-08-10 19:59:01.123+12", &field, 0));
+    EXPECT_EQ(148, field.Date.TZFlag);
+  }
+  {
+    OGRField field;
+    EXPECT_TRUE(OGRParseDate("2017-08-10 19:59:01.123-1", &field, 0));
+    EXPECT_EQ(96, field.Date.TZFlag);
+  }
+
+  // Zulu.
+  OGRField field;
+  EXPECT_TRUE(OGRParseDate("2017-08-07T17:29:49.123Z", &field, 0));
+  EXPECT_EQ(2017, field.Date.Year);
+  EXPECT_EQ(8, field.Date.Month);
+  EXPECT_EQ(7, field.Date.Day);
+  EXPECT_EQ(17, field.Date.Hour);
+  EXPECT_EQ(29, field.Date.Minute);
+  EXPECT_FLOAT_EQ(49.123, field.Date.Second);
+  EXPECT_EQ(100, field.Date.TZFlag);  // GMT
+  EXPECT_EQ(0, field.Date.Reserved);
+}
+
 // TODO(schwehr): Test OGRParseXMLDateTime.
 // TODO(schwehr): Test OGRParseRFC822DateTime.
 // TODO(schwehr): Test OGRGetDayOfWeek.

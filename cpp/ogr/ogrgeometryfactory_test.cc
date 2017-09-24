@@ -39,15 +39,18 @@
 //   https://trac.osgeo.org/gdal/browser/trunk/autotest/ogr/ogr_wkbwkt_geom.py
 //   https://trac.osgeo.org/gdal/browser/trunk/autotest/ogr/ogr_wktempty.py
 
-#include "port/cpl_port.h"
-
+#include <stdlib.h>
+#include <string.h>
 #include <memory>
 #include <string>
 
+#include "logging.h"
+#include "gunit.h"
+#include "third_party/absl/memory/memory.h"
+#include "autotest2/cpp/util/cpl_memory.h"
 #include "ogr/ogr_core.h"
 #include "ogr/ogr_geometry.h"
-#include "autotest2/cpp/util/cpl_memory.h"
-#include "gunit.h"
+#include "port/cpl_port.h"
 
 namespace {
 
@@ -267,5 +270,25 @@ TEST(OgrGemeometryFactoryWkbWktTest, Point) {
 // TODO(schwehr): What is the reason for having 8.wkt, 9.wkt and 10.wkt?
 // All POINTS, but what is special?
 // And 11.wkt is another MULTIPOINT.  What is different from 1.wkt?
+
+TEST(OgrGemeometryFactoryWkt, OGRGeometryFactoryStrokeArcCrash) {
+  // crash-11b07184f621765599968fd34949c4b58426de88
+  const char kWkt[] =
+      "COMPOUNDCURVE(CIRCULARSTRING(5 0V, 555e501 0, 0 00 0V, 1 01, 0 0)),";
+  OGRGeometry *geomptr = nullptr;
+  unique_ptr<char, autotest2::FreeDeleter> wkt_copy(strdup(kWkt));
+  char *wkt_end = wkt_copy.get();
+  EXPECT_EQ(OGRERR_NONE, OGRGeometryFactory::createFromWkt(&wkt_end, nullptr,
+                                                           &geomptr));
+  auto geom = absl::WrapUnique<OGRGeometry>(geomptr);
+
+  // Updated to point to the just past last character consumed.
+  EXPECT_EQ(',', *wkt_end);
+
+  EXPECT_EQ(wkbCompoundCurveZ, geom->getGeometryType());
+  const char kExpected[] =
+      "COMPOUNDCURVE Z (CIRCULARSTRING Z (5 0 0,inf 0.0 0,0 0 0,1 1 0,0 0 0))";
+  EXPECT_EQ(kExpected, Wkt(*geom));
+}
 
 }  // namespace

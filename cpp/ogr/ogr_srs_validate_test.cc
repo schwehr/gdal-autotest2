@@ -13,9 +13,9 @@
 // limitations under the License.
 
 #include <ctype.h>
-#include <stdio.h>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "logging.h"
 #include "gunit.h"
@@ -52,8 +52,8 @@ TEST(OgrSrsValidateTest, ValidatePcsWkt) {
     3993, 5017, 5224, 5225, 5515, 5516, 5819, 5820, 5821,
     6200, 6201, 6202, 6244, 6245, 6246, 6247, 6248, 6249, 6250, 6251, 6252,
     6253, 6254, 6255, 6256, 6257, 6258, 6259, 6260, 6261, 6262, 6263, 6264,
-    6265, 6266, 6267, 6268, 6269, 6270, 6271, 6272, 6273, 6274, 6275,
-    32600, 32700,
+    6265, 6266, 6267, 6268, 6269, 6270, 6271, 6272, 6273, 6274, 6275, 6966,
+    7082, 32600, 32700,
     // None from cubewerx_extra.wkt.
     // From esri_StatePlane_extra.wkt:
     1010, 1011, 1012, 1014, 1020, 1021, 1022, 1024, 4040, 4064, 4074, 5010,
@@ -147,9 +147,9 @@ TEST(OgrSrsValidateTest, ValidatePcsWkt) {
     // From esri_Wisconsin_extra.wkt:
     103300,
     // From esri_extra.wkt:
-    53001, 53003, 53004, 53008, 53017, 53018, 53019, 53022, 53023, 53025,
+    53001, 53003, 53004, 53008, 53017, 53018, 53019, 53022, 53023,
     53028, 53030, 53032, 54003, 54008, 54017, 54018, 54019, 54022, 54023,
-    54025, 54028, 54030, 54032, 102011, 102016, 102017, 102019, 102020,
+    54028, 54030, 54032, 102011, 102016, 102017, 102019, 102020,
     102065, 102066, 102067, 102191, 102192, 102193, 102491, 102492, 102581,
     102582, 102583, 102584, 102591, 102592,
   };
@@ -162,6 +162,8 @@ TEST(OgrSrsValidateTest, ValidatePcsWkt) {
     "esri_Wisconsin_extra.wkt",
     "esri_extra.wkt",
   };
+
+  WithQuietHandler handler;
 
   for (const string &filename : filenames) {
     LOG(INFO) << "Checking " << filename;
@@ -215,7 +217,6 @@ TEST(OgrSrsValidateTest, ValidatePcsWkt) {
             << "EPSG known to not validate started validating: " << epsg;
       }
     }
-    LOG(INFO) << "Closing file";
     ASSERT_EQ(0, VSIFCloseL(csv));
   }
 }

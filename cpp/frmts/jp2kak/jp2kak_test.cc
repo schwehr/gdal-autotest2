@@ -43,8 +43,7 @@
 namespace autotest2 {
 namespace {
 
-const char kTestData[] =
-    "testdata/";
+const char kTestData[] = "cpp/frmts/jp2kak/testdata/";
 
 class Jp2kakTest : public ::testing::Test {
  protected:

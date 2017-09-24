@@ -14,10 +14,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "autotest2/cpp/util/cpl_memory.h"
+
+#include <string.h>
 #include <memory>
 
 #include "gunit.h"
-#include "autotest2/cpp/util/cpl_memory.h"
 
 namespace {
 

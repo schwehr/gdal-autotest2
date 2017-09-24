@@ -18,15 +18,26 @@
 //   http://www.gdal.org/drv_shapefile.html
 //   https://trac.osgeo.org/gdal/browser/trunk/autotest/ogr/ogr_shapefile.py
 
-#include <functional>
+#include <stddef.h>
 #include <memory>
+#include <string>
+#include <vector>
 
+#include "file/base/path.h"
 #include "gmock.h"
+#include "googletest.h"
 #include "gunit.h"
+#include "autotest2/cpp/util/cpl_cstringlist.h"
 #include "autotest2/cpp/util/cpl_memory.h"
+#include "gcore/gdal.h"
 #include "gcore/gdal_priv.h"
 #include "ogr/ogr_api.h"
+#include "ogr/ogr_core.h"
+#include "ogr/ogr_feature.h"
+#include "ogr/ogr_geometry.h"
 #include "ogr/ogrsf_frmts/ogrsf_frmts.h"
+#include "port/cpl_error.h"
+#include "port/cpl_string.h"
 #include "port/cpl_vsi.h"
 
 using std::unique_ptr;
@@ -34,21 +45,10 @@ using std::unique_ptr;
 namespace autotest2 {
 namespace {
 
-typedef unique_ptr<char *, std::function<void(char **)>> StringListPtr;
-
 const char kDriverName[] = "ESRI Shapefile";
 
 const char kTestData[] = "autotest2/cpp/ogr/"
     "ogrsf_frmts/shape/testdata/";
-
-std::vector<string> CslToVector(const char *const *string_list) {
-  if (string_list == nullptr) return {};
-  std::vector<string> result;
-  for (; *string_list != NULL; ++string_list) {
-    result.push_back(*string_list);
-  }
-  return result;
-}
 
 class ShapeTest : public ::testing::Test {
  protected:

@@ -37,7 +37,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][0][45][225] = 324.73561031724535;
     expected_track_[0][0][45][270] = 315;
     expected_track_[0][0][45][315] = 324.73561031724535;
-    expected_track_[0][0][135][0] = 180;
+    expected_track_[0][0][135][0] = 0;
     expected_track_[0][0][135][45] = 144.73561031724535;
     expected_track_[0][0][135][90] = 135;
     expected_track_[0][0][135][135] = 144.73561031724535;
@@ -45,7 +45,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][0][135][225] = 215.26438968275465;
     expected_track_[0][0][135][270] = 225;
     expected_track_[0][0][135][315] = 215.26438968275465;
-    expected_track_[0][0][180][0] = 180;
+    expected_track_[0][0][180][0] = 0;
     expected_track_[0][0][180][45] = 90.000000000000014;
     expected_track_[0][0][180][90] = 90;
     expected_track_[0][0][180][135] = 90.000000000000014;
@@ -62,7 +62,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][0][270][225] = 360;
     expected_track_[0][0][270][270] = 360;
     expected_track_[0][0][270][315] = 360;
-    expected_track_[0][0][315][0] = 180;
+    expected_track_[0][0][315][0] = 0;
     expected_track_[0][0][315][45] = 144.73561031724535;
     expected_track_[0][0][315][90] = 135;
     expected_track_[0][0][315][135] = 144.73561031724535;
@@ -85,7 +85,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][45][45][270] = 324.73561031724535;
     expected_track_[0][45][45][315] = 315;
     expected_track_[0][45][135][0] = 215.26438968275465;
-    expected_track_[0][45][135][45] = 180;
+    expected_track_[0][45][135][45] = 0;
     expected_track_[0][45][135][90] = 144.73561031724535;
     expected_track_[0][45][135][135] = 135;
     expected_track_[0][45][135][180] = 144.73561031724535;
@@ -93,7 +93,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][45][135][270] = 215.26438968275465;
     expected_track_[0][45][135][315] = 225;
     expected_track_[0][45][180][0] = 270;
-    expected_track_[0][45][180][45] = 180;
+    expected_track_[0][45][180][45] = 0;
     expected_track_[0][45][180][90] = 90.000000000000014;
     expected_track_[0][45][180][135] = 90;
     expected_track_[0][45][180][180] = 90.000000000000014;
@@ -110,7 +110,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][45][270][270] = 360;
     expected_track_[0][45][270][315] = 360;
     expected_track_[0][45][315][0] = 215.26438968275465;
-    expected_track_[0][45][315][45] = 180;
+    expected_track_[0][45][315][45] = 0;
     expected_track_[0][45][315][90] = 144.73561031724535;
     expected_track_[0][45][315][135] = 135;
     expected_track_[0][45][315][180] = 144.73561031724535;
@@ -133,7 +133,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][90][45][315] = 324.73561031724535;
     expected_track_[0][90][135][0] = 225;
     expected_track_[0][90][135][45] = 215.26438968275465;
-    expected_track_[0][90][135][90] = 180;
+    expected_track_[0][90][135][90] = 0;
     expected_track_[0][90][135][135] = 144.73561031724535;
     expected_track_[0][90][135][180] = 135;
     expected_track_[0][90][135][225] = 144.73561031724535;
@@ -141,7 +141,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][90][135][315] = 215.26438968275465;
     expected_track_[0][90][180][0] = 270;
     expected_track_[0][90][180][45] = 270;
-    expected_track_[0][90][180][90] = 180;
+    expected_track_[0][90][180][90] = 0;
     expected_track_[0][90][180][135] = 90.000000000000014;
     expected_track_[0][90][180][180] = 90;
     expected_track_[0][90][180][225] = 90.000000000000014;
@@ -158,7 +158,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][90][270][315] = 360;
     expected_track_[0][90][315][0] = 225;
     expected_track_[0][90][315][45] = 215.26438968275465;
-    expected_track_[0][90][315][90] = 180;
+    expected_track_[0][90][315][90] = 0;
     expected_track_[0][90][315][135] = 144.73561031724535;
     expected_track_[0][90][315][180] = 135;
     expected_track_[0][90][315][225] = 144.73561031724535;
@@ -181,7 +181,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][135][135][0] = 215.26438968275465;
     expected_track_[0][135][135][45] = 225;
     expected_track_[0][135][135][90] = 215.26438968275465;
-    expected_track_[0][135][135][135] = 180;
+    expected_track_[0][135][135][135] = 0;
     expected_track_[0][135][135][180] = 144.73561031724535;
     expected_track_[0][135][135][225] = 135;
     expected_track_[0][135][135][270] = 144.73561031724535;
@@ -189,7 +189,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][135][180][0] = 270;
     expected_track_[0][135][180][45] = 270;
     expected_track_[0][135][180][90] = 270;
-    expected_track_[0][135][180][135] = 180;
+    expected_track_[0][135][180][135] = 0;
     expected_track_[0][135][180][180] = 90.000000000000014;
     expected_track_[0][135][180][225] = 90;
     expected_track_[0][135][180][270] = 90.000000000000014;
@@ -206,7 +206,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][135][315][0] = 215.26438968275465;
     expected_track_[0][135][315][45] = 225;
     expected_track_[0][135][315][90] = 215.26438968275465;
-    expected_track_[0][135][315][135] = 180;
+    expected_track_[0][135][315][135] = 0;
     expected_track_[0][135][315][180] = 144.73561031724535;
     expected_track_[0][135][315][225] = 135;
     expected_track_[0][135][315][270] = 144.73561031724535;
@@ -230,7 +230,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][180][135][45] = 215.26438968275465;
     expected_track_[0][180][135][90] = 225;
     expected_track_[0][180][135][135] = 215.26438968275465;
-    expected_track_[0][180][135][180] = 180;
+    expected_track_[0][180][135][180] = 0;
     expected_track_[0][180][135][225] = 144.73561031724535;
     expected_track_[0][180][135][270] = 135;
     expected_track_[0][180][135][315] = 144.73561031724535;
@@ -238,7 +238,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][180][180][45] = 270;
     expected_track_[0][180][180][90] = 270;
     expected_track_[0][180][180][135] = 270;
-    expected_track_[0][180][180][180] = 180;
+    expected_track_[0][180][180][180] = 0;
     expected_track_[0][180][180][225] = 90.000000000000014;
     expected_track_[0][180][180][270] = 90;
     expected_track_[0][180][180][315] = 90.000000000000014;
@@ -257,7 +257,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][180][315][45] = 215.26438968275465;
     expected_track_[0][180][315][90] = 225;
     expected_track_[0][180][315][135] = 215.26438968275465;
-    expected_track_[0][180][315][180] = 180;
+    expected_track_[0][180][315][180] = 0;
     expected_track_[0][180][315][225] = 144.73561031724535;
     expected_track_[0][180][315][270] = 135;
     expected_track_[0][180][315][315] = 144.73561031724535;
@@ -281,7 +281,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][225][135][90] = 215.26438968275465;
     expected_track_[0][225][135][135] = 225;
     expected_track_[0][225][135][180] = 215.26438968275465;
-    expected_track_[0][225][135][225] = 180;
+    expected_track_[0][225][135][225] = 0;
     expected_track_[0][225][135][270] = 144.73561031724535;
     expected_track_[0][225][135][315] = 135;
     expected_track_[0][225][180][0] = 90.000000000000014;
@@ -289,7 +289,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][225][180][90] = 270;
     expected_track_[0][225][180][135] = 270;
     expected_track_[0][225][180][180] = 270;
-    expected_track_[0][225][180][225] = 180;
+    expected_track_[0][225][180][225] = 0;
     expected_track_[0][225][180][270] = 90.000000000000014;
     expected_track_[0][225][180][315] = 90;
     expected_track_[0][225][225][0] = 35.264389682754661;
@@ -308,7 +308,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][225][315][90] = 215.26438968275465;
     expected_track_[0][225][315][135] = 225;
     expected_track_[0][225][315][180] = 215.26438968275465;
-    expected_track_[0][225][315][225] = 180;
+    expected_track_[0][225][315][225] = 0;
     expected_track_[0][225][315][270] = 144.73561031724535;
     expected_track_[0][225][315][315] = 135;
     expected_track_[0][270][0][0] = 270;
@@ -332,7 +332,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][270][135][135] = 215.26438968275465;
     expected_track_[0][270][135][180] = 225;
     expected_track_[0][270][135][225] = 215.26438968275465;
-    expected_track_[0][270][135][270] = 180;
+    expected_track_[0][270][135][270] = 0;
     expected_track_[0][270][135][315] = 144.73561031724535;
     expected_track_[0][270][180][0] = 90;
     expected_track_[0][270][180][45] = 90.000000000000014;
@@ -340,7 +340,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][270][180][135] = 270;
     expected_track_[0][270][180][180] = 270;
     expected_track_[0][270][180][225] = 270;
-    expected_track_[0][270][180][270] = 180;
+    expected_track_[0][270][180][270] = 0;
     expected_track_[0][270][180][315] = 90.000000000000014;
     expected_track_[0][270][225][0] = 45.000000000000014;
     expected_track_[0][270][225][45] = 35.264389682754661;
@@ -359,7 +359,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][270][315][135] = 215.26438968275465;
     expected_track_[0][270][315][180] = 225;
     expected_track_[0][270][315][225] = 215.26438968275465;
-    expected_track_[0][270][315][270] = 180;
+    expected_track_[0][270][315][270] = 0;
     expected_track_[0][270][315][315] = 144.73561031724535;
     expected_track_[0][315][0][0] = 270;
     expected_track_[0][315][0][45] = 270;
@@ -383,7 +383,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][315][135][180] = 215.26438968275465;
     expected_track_[0][315][135][225] = 225;
     expected_track_[0][315][135][270] = 215.26438968275465;
-    expected_track_[0][315][135][315] = 180;
+    expected_track_[0][315][135][315] = 0;
     expected_track_[0][315][180][0] = 90.000000000000014;
     expected_track_[0][315][180][45] = 90;
     expected_track_[0][315][180][90] = 90.000000000000014;
@@ -391,7 +391,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][315][180][180] = 270;
     expected_track_[0][315][180][225] = 270;
     expected_track_[0][315][180][270] = 270;
-    expected_track_[0][315][180][315] = 180;
+    expected_track_[0][315][180][315] = 0;
     expected_track_[0][315][225][0] = 35.264389682754668;
     expected_track_[0][315][225][45] = 45.000000000000014;
     expected_track_[0][315][225][90] = 35.264389682754661;
@@ -410,7 +410,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[0][315][315][180] = 215.26438968275465;
     expected_track_[0][315][315][225] = 225;
     expected_track_[0][315][315][270] = 215.26438968275465;
-    expected_track_[0][315][315][315] = 180;
+    expected_track_[0][315][315][315] = 0;
     expected_track_[45][0][0][0] = 180;
     expected_track_[45][0][0][45] = 125.26438968275465;
     expected_track_[45][0][0][90] = 90;
@@ -425,7 +425,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][0][45][225] = 329.63880659517827;
     expected_track_[45][0][45][270] = 305.26438968275465;
     expected_track_[45][0][45][315] = 286.32494993689522;
-    expected_track_[45][0][135][0] = 180;
+    expected_track_[45][0][135][0] = 0;
     expected_track_[45][0][135][45] = 149.63880659517829;
     expected_track_[45][0][135][90] = 125.26438968275465;
     expected_track_[45][0][135][135] = 106.32494993689525;
@@ -433,14 +433,14 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][0][135][225] = 253.67505006310478;
     expected_track_[45][0][135][270] = 234.73561031724535;
     expected_track_[45][0][135][315] = 210.36119340482173;
-    expected_track_[45][0][180][0] = 180;
+    expected_track_[45][0][180][0] = 0;
     expected_track_[45][0][180][45] = 125.26438968275465;
     expected_track_[45][0][180][90] = 90;
     expected_track_[45][0][180][135] = 54.73561031724536;
     expected_track_[45][0][180][225] = 305.26438968275465;
     expected_track_[45][0][180][270] = 270;
     expected_track_[45][0][180][315] = 234.73561031724535;
-    expected_track_[45][0][225][0] = 180;
+    expected_track_[45][0][225][0] = 0;
     expected_track_[45][0][225][45] = 73.675050063104777;
     expected_track_[45][0][225][90] = 54.735610317245353;
     expected_track_[45][0][225][135] = 30.361193404821723;
@@ -450,7 +450,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][0][270][225] = 360;
     expected_track_[45][0][270][270] = 360;
     expected_track_[45][0][270][315] = 360;
-    expected_track_[45][0][315][0] = 180;
+    expected_track_[45][0][315][0] = 0;
     expected_track_[45][0][315][45] = 149.63880659517829;
     expected_track_[45][0][315][90] = 125.26438968275467;
     expected_track_[45][0][315][135] = 106.32494993689527;
@@ -473,7 +473,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][45][45][270] = 329.63880659517827;
     expected_track_[45][45][45][315] = 305.26438968275465;
     expected_track_[45][45][135][0] = 210.36119340482171;
-    expected_track_[45][45][135][45] = 180;
+    expected_track_[45][45][135][45] = 0;
     expected_track_[45][45][135][90] = 149.63880659517829;
     expected_track_[45][45][135][135] = 125.26438968275465;
     expected_track_[45][45][135][180] = 106.32494993689525;
@@ -481,14 +481,14 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][45][135][270] = 253.67505006310478;
     expected_track_[45][45][135][315] = 234.73561031724535;
     expected_track_[45][45][180][0] = 234.73561031724535;
-    expected_track_[45][45][180][45] = 180;
+    expected_track_[45][45][180][45] = 0;
     expected_track_[45][45][180][90] = 125.26438968275465;
     expected_track_[45][45][180][135] = 90;
     expected_track_[45][45][180][180] = 54.73561031724536;
     expected_track_[45][45][180][270] = 305.26438968275465;
     expected_track_[45][45][180][315] = 270;
     expected_track_[45][45][225][0] = 286.32494993689522;
-    expected_track_[45][45][225][45] = 180;
+    expected_track_[45][45][225][45] = 0;
     expected_track_[45][45][225][90] = 73.675050063104777;
     expected_track_[45][45][225][135] = 54.735610317245353;
     expected_track_[45][45][225][180] = 30.361193404821723;
@@ -498,7 +498,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][45][270][270] = 360;
     expected_track_[45][45][270][315] = 360;
     expected_track_[45][45][315][0] = 210.36119340482171;
-    expected_track_[45][45][315][45] = 180;
+    expected_track_[45][45][315][45] = 0;
     expected_track_[45][45][315][90] = 149.63880659517829;
     expected_track_[45][45][315][135] = 125.26438968275467;
     expected_track_[45][45][315][180] = 106.32494993689527;
@@ -521,7 +521,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][90][45][315] = 329.63880659517827;
     expected_track_[45][90][135][0] = 234.73561031724535;
     expected_track_[45][90][135][45] = 210.36119340482171;
-    expected_track_[45][90][135][90] = 180;
+    expected_track_[45][90][135][90] = 0;
     expected_track_[45][90][135][135] = 149.63880659517829;
     expected_track_[45][90][135][180] = 125.26438968275465;
     expected_track_[45][90][135][225] = 106.32494993689525;
@@ -529,14 +529,14 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][90][135][315] = 253.67505006310478;
     expected_track_[45][90][180][0] = 270;
     expected_track_[45][90][180][45] = 234.73561031724535;
-    expected_track_[45][90][180][90] = 180;
+    expected_track_[45][90][180][90] = 0;
     expected_track_[45][90][180][135] = 125.26438968275465;
     expected_track_[45][90][180][180] = 90;
     expected_track_[45][90][180][225] = 54.73561031724536;
     expected_track_[45][90][180][315] = 305.26438968275465;
     expected_track_[45][90][225][0] = 305.26438968275465;
     expected_track_[45][90][225][45] = 286.32494993689522;
-    expected_track_[45][90][225][90] = 180;
+    expected_track_[45][90][225][90] = 0;
     expected_track_[45][90][225][135] = 73.675050063104777;
     expected_track_[45][90][225][180] = 54.735610317245353;
     expected_track_[45][90][225][225] = 30.361193404821723;
@@ -546,7 +546,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][90][270][315] = 360;
     expected_track_[45][90][315][0] = 234.73561031724535;
     expected_track_[45][90][315][45] = 210.36119340482171;
-    expected_track_[45][90][315][90] = 180;
+    expected_track_[45][90][315][90] = 0;
     expected_track_[45][90][315][135] = 149.63880659517829;
     expected_track_[45][90][315][180] = 125.26438968275467;
     expected_track_[45][90][315][225] = 106.32494993689527;
@@ -569,7 +569,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][135][135][0] = 253.67505006310475;
     expected_track_[45][135][135][45] = 234.73561031724535;
     expected_track_[45][135][135][90] = 210.36119340482171;
-    expected_track_[45][135][135][135] = 180;
+    expected_track_[45][135][135][135] = 0;
     expected_track_[45][135][135][180] = 149.63880659517829;
     expected_track_[45][135][135][225] = 125.26438968275465;
     expected_track_[45][135][135][270] = 106.32494993689525;
@@ -577,14 +577,14 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][135][180][0] = 305.26438968275465;
     expected_track_[45][135][180][45] = 270;
     expected_track_[45][135][180][90] = 234.73561031724535;
-    expected_track_[45][135][180][135] = 180;
+    expected_track_[45][135][180][135] = 0;
     expected_track_[45][135][180][180] = 125.26438968275465;
     expected_track_[45][135][180][225] = 90;
     expected_track_[45][135][180][270] = 54.73561031724536;
     expected_track_[45][135][225][0] = 329.63880659517827;
     expected_track_[45][135][225][45] = 305.26438968275465;
     expected_track_[45][135][225][90] = 286.32494993689522;
-    expected_track_[45][135][225][135] = 180;
+    expected_track_[45][135][225][135] = 0;
     expected_track_[45][135][225][180] = 73.675050063104777;
     expected_track_[45][135][225][225] = 54.735610317245353;
     expected_track_[45][135][225][270] = 30.361193404821723;
@@ -594,7 +594,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][135][315][0] = 253.67505006310472;
     expected_track_[45][135][315][45] = 234.73561031724535;
     expected_track_[45][135][315][90] = 210.36119340482171;
-    expected_track_[45][135][315][135] = 180;
+    expected_track_[45][135][315][135] = 0;
     expected_track_[45][135][315][180] = 149.63880659517829;
     expected_track_[45][135][315][225] = 125.26438968275467;
     expected_track_[45][135][315][270] = 106.32494993689527;
@@ -619,7 +619,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][180][135][45] = 253.67505006310475;
     expected_track_[45][180][135][90] = 234.73561031724535;
     expected_track_[45][180][135][135] = 210.36119340482171;
-    expected_track_[45][180][135][180] = 180;
+    expected_track_[45][180][135][180] = 0;
     expected_track_[45][180][135][225] = 149.63880659517829;
     expected_track_[45][180][135][270] = 125.26438968275465;
     expected_track_[45][180][135][315] = 106.32494993689525;
@@ -627,7 +627,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][180][180][45] = 305.26438968275465;
     expected_track_[45][180][180][90] = 270;
     expected_track_[45][180][180][135] = 234.73561031724535;
-    expected_track_[45][180][180][180] = 180;
+    expected_track_[45][180][180][180] = 0;
     expected_track_[45][180][180][225] = 125.26438968275465;
     expected_track_[45][180][180][270] = 90;
     expected_track_[45][180][180][315] = 54.73561031724536;
@@ -635,7 +635,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][180][225][45] = 329.63880659517827;
     expected_track_[45][180][225][90] = 305.26438968275465;
     expected_track_[45][180][225][135] = 286.32494993689522;
-    expected_track_[45][180][225][180] = 180;
+    expected_track_[45][180][225][180] = 0;
     expected_track_[45][180][225][225] = 73.675050063104777;
     expected_track_[45][180][225][270] = 54.735610317245353;
     expected_track_[45][180][225][315] = 30.361193404821723;
@@ -647,7 +647,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][180][315][45] = 253.67505006310472;
     expected_track_[45][180][315][90] = 234.73561031724535;
     expected_track_[45][180][315][135] = 210.36119340482171;
-    expected_track_[45][180][315][180] = 180;
+    expected_track_[45][180][315][180] = 0;
     expected_track_[45][180][315][225] = 149.63880659517829;
     expected_track_[45][180][315][270] = 125.26438968275467;
     expected_track_[45][180][315][315] = 106.32494993689527;
@@ -672,7 +672,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][225][135][90] = 253.67505006310475;
     expected_track_[45][225][135][135] = 234.73561031724535;
     expected_track_[45][225][135][180] = 210.36119340482171;
-    expected_track_[45][225][135][225] = 180;
+    expected_track_[45][225][135][225] = 0;
     expected_track_[45][225][135][270] = 149.63880659517829;
     expected_track_[45][225][135][315] = 125.26438968275465;
     expected_track_[45][225][180][0] = 54.735610317245346;
@@ -680,7 +680,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][225][180][90] = 305.26438968275465;
     expected_track_[45][225][180][135] = 270;
     expected_track_[45][225][180][180] = 234.73561031724535;
-    expected_track_[45][225][180][225] = 180;
+    expected_track_[45][225][180][225] = 0;
     expected_track_[45][225][180][270] = 125.26438968275465;
     expected_track_[45][225][180][315] = 90;
     expected_track_[45][225][225][0] = 30.361193404821716;
@@ -688,7 +688,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][225][225][90] = 329.63880659517827;
     expected_track_[45][225][225][135] = 305.26438968275465;
     expected_track_[45][225][225][180] = 286.32494993689522;
-    expected_track_[45][225][225][225] = 180;
+    expected_track_[45][225][225][225] = 0;
     expected_track_[45][225][225][270] = 73.675050063104777;
     expected_track_[45][225][225][315] = 54.735610317245353;
     expected_track_[45][225][270][45] = 360;
@@ -700,7 +700,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][225][315][90] = 253.67505006310472;
     expected_track_[45][225][315][135] = 234.73561031724535;
     expected_track_[45][225][315][180] = 210.36119340482171;
-    expected_track_[45][225][315][225] = 180;
+    expected_track_[45][225][315][225] = 0;
     expected_track_[45][225][315][270] = 149.63880659517829;
     expected_track_[45][225][315][315] = 125.26438968275467;
     expected_track_[45][270][0][0] = 90;
@@ -725,7 +725,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][270][135][135] = 253.67505006310475;
     expected_track_[45][270][135][180] = 234.73561031724535;
     expected_track_[45][270][135][225] = 210.36119340482171;
-    expected_track_[45][270][135][270] = 180;
+    expected_track_[45][270][135][270] = 0;
     expected_track_[45][270][135][315] = 149.63880659517829;
     expected_track_[45][270][180][0] = 90;
     expected_track_[45][270][180][45] = 54.735610317245346;
@@ -733,7 +733,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][270][180][135] = 305.26438968275465;
     expected_track_[45][270][180][180] = 270;
     expected_track_[45][270][180][225] = 234.73561031724535;
-    expected_track_[45][270][180][270] = 180;
+    expected_track_[45][270][180][270] = 0;
     expected_track_[45][270][180][315] = 125.26438968275465;
     expected_track_[45][270][225][0] = 54.735610317245346;
     expected_track_[45][270][225][45] = 30.361193404821716;
@@ -741,7 +741,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][270][225][135] = 329.63880659517827;
     expected_track_[45][270][225][180] = 305.26438968275465;
     expected_track_[45][270][225][225] = 286.32494993689522;
-    expected_track_[45][270][225][270] = 180;
+    expected_track_[45][270][225][270] = 0;
     expected_track_[45][270][225][315] = 73.675050063104777;
     expected_track_[45][270][270][90] = 360;
     expected_track_[45][270][270][135] = 360;
@@ -753,7 +753,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][270][315][135] = 253.67505006310472;
     expected_track_[45][270][315][180] = 234.73561031724535;
     expected_track_[45][270][315][225] = 210.36119340482171;
-    expected_track_[45][270][315][270] = 180;
+    expected_track_[45][270][315][270] = 0;
     expected_track_[45][270][315][315] = 149.63880659517829;
     expected_track_[45][315][0][0] = 125.26438968275464;
     expected_track_[45][315][0][45] = 90;
@@ -778,7 +778,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][315][135][180] = 253.67505006310475;
     expected_track_[45][315][135][225] = 234.73561031724535;
     expected_track_[45][315][135][270] = 210.36119340482171;
-    expected_track_[45][315][135][315] = 180;
+    expected_track_[45][315][135][315] = 0;
     expected_track_[45][315][180][0] = 125.26438968275465;
     expected_track_[45][315][180][45] = 90;
     expected_track_[45][315][180][90] = 54.735610317245346;
@@ -786,7 +786,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][315][180][180] = 305.26438968275465;
     expected_track_[45][315][180][225] = 270;
     expected_track_[45][315][180][270] = 234.73561031724535;
-    expected_track_[45][315][180][315] = 180;
+    expected_track_[45][315][180][315] = 0;
     expected_track_[45][315][225][0] = 73.675050063104763;
     expected_track_[45][315][225][45] = 54.735610317245346;
     expected_track_[45][315][225][90] = 30.361193404821716;
@@ -794,7 +794,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][315][225][180] = 329.63880659517827;
     expected_track_[45][315][225][225] = 305.26438968275465;
     expected_track_[45][315][225][270] = 286.32494993689522;
-    expected_track_[45][315][225][315] = 180;
+    expected_track_[45][315][225][315] = 0;
     expected_track_[45][315][270][135] = 360;
     expected_track_[45][315][270][180] = 360;
     expected_track_[45][315][270][225] = 360;
@@ -806,7 +806,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[45][315][315][180] = 253.67505006310472;
     expected_track_[45][315][315][225] = 234.73561031724535;
     expected_track_[45][315][315][270] = 210.36119340482171;
-    expected_track_[45][315][315][315] = 180;
+    expected_track_[45][315][315][315] = 0;
     expected_track_[90][0][0][0] = 180;
     expected_track_[90][0][0][45] = 180;
     expected_track_[90][0][0][90] = 180;
@@ -1341,14 +1341,14 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[135][0][135][225] = 329.63880659517827;
     expected_track_[135][0][135][270] = 305.26438968275465;
     expected_track_[135][0][135][315] = 286.32494993689522;
-    expected_track_[135][0][180][0] = 180;
+    expected_track_[135][0][180][0] = 0;
     expected_track_[135][0][180][45] = 125.26438968275465;
     expected_track_[135][0][180][90] = 90;
     expected_track_[135][0][180][135] = 54.735610317245346;
     expected_track_[135][0][180][225] = 305.26438968275465;
     expected_track_[135][0][180][270] = 270;
     expected_track_[135][0][180][315] = 234.73561031724537;
-    expected_track_[135][0][225][0] = 180;
+    expected_track_[135][0][225][0] = 0;
     expected_track_[135][0][225][45] = 149.63880659517829;
     expected_track_[135][0][225][90] = 125.26438968275465;
     expected_track_[135][0][225][135] = 106.32494993689521;
@@ -1356,7 +1356,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[135][0][225][225] = 253.67505006310478;
     expected_track_[135][0][225][270] = 234.73561031724535;
     expected_track_[135][0][225][315] = 210.36119340482173;
-    expected_track_[135][0][270][0] = 180;
+    expected_track_[135][0][270][0] = 0;
     expected_track_[135][0][270][45] = 180;
     expected_track_[135][0][270][90] = 179.99999999999997;
     expected_track_[135][0][270][135] = 180;
@@ -1393,14 +1393,14 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[135][45][135][270] = 329.63880659517827;
     expected_track_[135][45][135][315] = 305.26438968275465;
     expected_track_[135][45][180][0] = 234.73561031724535;
-    expected_track_[135][45][180][45] = 180;
+    expected_track_[135][45][180][45] = 0;
     expected_track_[135][45][180][90] = 125.26438968275465;
     expected_track_[135][45][180][135] = 90;
     expected_track_[135][45][180][180] = 54.735610317245346;
     expected_track_[135][45][180][270] = 305.26438968275465;
     expected_track_[135][45][180][315] = 270;
     expected_track_[135][45][225][0] = 210.36119340482171;
-    expected_track_[135][45][225][45] = 180;
+    expected_track_[135][45][225][45] = 0;
     expected_track_[135][45][225][90] = 149.63880659517829;
     expected_track_[135][45][225][135] = 125.26438968275465;
     expected_track_[135][45][225][180] = 106.32494993689521;
@@ -1408,7 +1408,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[135][45][225][270] = 253.67505006310478;
     expected_track_[135][45][225][315] = 234.73561031724535;
     expected_track_[135][45][270][0] = 180;
-    expected_track_[135][45][270][45] = 180;
+    expected_track_[135][45][270][45] = 0;
     expected_track_[135][45][270][90] = 180;
     expected_track_[135][45][270][135] = 179.99999999999997;
     expected_track_[135][45][270][180] = 180;
@@ -1445,14 +1445,14 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[135][90][135][315] = 329.63880659517827;
     expected_track_[135][90][180][0] = 270;
     expected_track_[135][90][180][45] = 234.73561031724535;
-    expected_track_[135][90][180][90] = 180;
+    expected_track_[135][90][180][90] = 0;
     expected_track_[135][90][180][135] = 125.26438968275465;
     expected_track_[135][90][180][180] = 90;
     expected_track_[135][90][180][225] = 54.735610317245346;
     expected_track_[135][90][180][315] = 305.26438968275465;
     expected_track_[135][90][225][0] = 234.73561031724535;
     expected_track_[135][90][225][45] = 210.36119340482171;
-    expected_track_[135][90][225][90] = 180;
+    expected_track_[135][90][225][90] = 0;
     expected_track_[135][90][225][135] = 149.63880659517829;
     expected_track_[135][90][225][180] = 125.26438968275465;
     expected_track_[135][90][225][225] = 106.32494993689521;
@@ -1460,7 +1460,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[135][90][225][315] = 253.67505006310478;
     expected_track_[135][90][270][0] = 180.00000000000003;
     expected_track_[135][90][270][45] = 180;
-    expected_track_[135][90][270][90] = 180;
+    expected_track_[135][90][270][90] = 0;
     expected_track_[135][90][270][135] = 180;
     expected_track_[135][90][270][180] = 179.99999999999997;
     expected_track_[135][90][270][225] = 180;
@@ -1497,14 +1497,14 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[135][135][180][0] = 305.26438968275465;
     expected_track_[135][135][180][45] = 270;
     expected_track_[135][135][180][90] = 234.73561031724535;
-    expected_track_[135][135][180][135] = 180;
+    expected_track_[135][135][180][135] = 0;
     expected_track_[135][135][180][180] = 125.26438968275465;
     expected_track_[135][135][180][225] = 90;
     expected_track_[135][135][180][270] = 54.735610317245346;
     expected_track_[135][135][225][0] = 253.67505006310478;
     expected_track_[135][135][225][45] = 234.73561031724535;
     expected_track_[135][135][225][90] = 210.36119340482171;
-    expected_track_[135][135][225][135] = 180;
+    expected_track_[135][135][225][135] = 0;
     expected_track_[135][135][225][180] = 149.63880659517829;
     expected_track_[135][135][225][225] = 125.26438968275465;
     expected_track_[135][135][225][270] = 106.32494993689521;
@@ -1512,7 +1512,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[135][135][270][0] = 180;
     expected_track_[135][135][270][45] = 180.00000000000003;
     expected_track_[135][135][270][90] = 180;
-    expected_track_[135][135][270][135] = 180;
+    expected_track_[135][135][270][135] = 0;
     expected_track_[135][135][270][180] = 180;
     expected_track_[135][135][270][225] = 179.99999999999997;
     expected_track_[135][135][270][270] = 180;
@@ -1551,7 +1551,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[135][180][180][45] = 305.26438968275465;
     expected_track_[135][180][180][90] = 270;
     expected_track_[135][180][180][135] = 234.73561031724535;
-    expected_track_[135][180][180][180] = 180;
+    expected_track_[135][180][180][180] = 0;
     expected_track_[135][180][180][225] = 125.26438968275465;
     expected_track_[135][180][180][270] = 90;
     expected_track_[135][180][180][315] = 54.735610317245346;
@@ -1559,7 +1559,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[135][180][225][45] = 253.67505006310478;
     expected_track_[135][180][225][90] = 234.73561031724535;
     expected_track_[135][180][225][135] = 210.36119340482171;
-    expected_track_[135][180][225][180] = 180;
+    expected_track_[135][180][225][180] = 0;
     expected_track_[135][180][225][225] = 149.63880659517829;
     expected_track_[135][180][225][270] = 125.26438968275465;
     expected_track_[135][180][225][315] = 106.32494993689521;
@@ -1567,7 +1567,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[135][180][270][45] = 180;
     expected_track_[135][180][270][90] = 180.00000000000003;
     expected_track_[135][180][270][135] = 180;
-    expected_track_[135][180][270][180] = 180;
+    expected_track_[135][180][270][180] = 0;
     expected_track_[135][180][270][225] = 180;
     expected_track_[135][180][270][270] = 179.99999999999997;
     expected_track_[135][180][270][315] = 180;
@@ -1607,7 +1607,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[135][225][180][90] = 305.26438968275465;
     expected_track_[135][225][180][135] = 270;
     expected_track_[135][225][180][180] = 234.73561031724535;
-    expected_track_[135][225][180][225] = 180;
+    expected_track_[135][225][180][225] = 0;
     expected_track_[135][225][180][270] = 125.26438968275465;
     expected_track_[135][225][180][315] = 90;
     expected_track_[135][225][225][0] = 106.32494993689521;
@@ -1615,7 +1615,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[135][225][225][90] = 253.67505006310478;
     expected_track_[135][225][225][135] = 234.73561031724535;
     expected_track_[135][225][225][180] = 210.36119340482171;
-    expected_track_[135][225][225][225] = 180;
+    expected_track_[135][225][225][225] = 0;
     expected_track_[135][225][225][270] = 149.63880659517829;
     expected_track_[135][225][225][315] = 125.26438968275465;
     expected_track_[135][225][270][0] = 180;
@@ -1623,7 +1623,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[135][225][270][90] = 180;
     expected_track_[135][225][270][135] = 180.00000000000003;
     expected_track_[135][225][270][180] = 180;
-    expected_track_[135][225][270][225] = 180;
+    expected_track_[135][225][270][225] = 0;
     expected_track_[135][225][270][270] = 180;
     expected_track_[135][225][270][315] = 179.99999999999997;
     expected_track_[135][225][315][0] = 30.361193404821705;
@@ -1663,7 +1663,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[135][270][180][135] = 305.26438968275465;
     expected_track_[135][270][180][180] = 270;
     expected_track_[135][270][180][225] = 234.73561031724535;
-    expected_track_[135][270][180][270] = 180;
+    expected_track_[135][270][180][270] = 0;
     expected_track_[135][270][180][315] = 125.26438968275465;
     expected_track_[135][270][225][0] = 125.26438968275464;
     expected_track_[135][270][225][45] = 106.32494993689521;
@@ -1671,7 +1671,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[135][270][225][135] = 253.67505006310478;
     expected_track_[135][270][225][180] = 234.73561031724535;
     expected_track_[135][270][225][225] = 210.36119340482171;
-    expected_track_[135][270][225][270] = 180;
+    expected_track_[135][270][225][270] = 0;
     expected_track_[135][270][225][315] = 149.63880659517829;
     expected_track_[135][270][270][0] = 179.99999999999997;
     expected_track_[135][270][270][45] = 180;
@@ -1679,7 +1679,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[135][270][270][135] = 180;
     expected_track_[135][270][270][180] = 180.00000000000003;
     expected_track_[135][270][270][225] = 180;
-    expected_track_[135][270][270][270] = 180;
+    expected_track_[135][270][270][270] = 0;
     expected_track_[135][270][270][315] = 180;
     expected_track_[135][270][315][0] = 54.735610317245332;
     expected_track_[135][270][315][45] = 30.361193404821705;
@@ -1719,7 +1719,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[135][315][180][180] = 305.26438968275465;
     expected_track_[135][315][180][225] = 270;
     expected_track_[135][315][180][270] = 234.73561031724535;
-    expected_track_[135][315][180][315] = 180;
+    expected_track_[135][315][180][315] = 0;
     expected_track_[135][315][225][0] = 149.63880659517827;
     expected_track_[135][315][225][45] = 125.26438968275464;
     expected_track_[135][315][225][90] = 106.32494993689521;
@@ -1727,7 +1727,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[135][315][225][180] = 253.67505006310478;
     expected_track_[135][315][225][225] = 234.73561031724535;
     expected_track_[135][315][225][270] = 210.36119340482171;
-    expected_track_[135][315][225][315] = 180;
+    expected_track_[135][315][225][315] = 0;
     expected_track_[135][315][270][0] = 180;
     expected_track_[135][315][270][45] = 179.99999999999997;
     expected_track_[135][315][270][90] = 180;
@@ -1735,7 +1735,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[135][315][270][180] = 180;
     expected_track_[135][315][270][225] = 180.00000000000003;
     expected_track_[135][315][270][270] = 180;
-    expected_track_[135][315][270][315] = 180;
+    expected_track_[135][315][270][315] = 0;
     expected_track_[135][315][315][0] = 73.675050063104734;
     expected_track_[135][315][315][45] = 54.735610317245332;
     expected_track_[135][315][315][90] = 30.361193404821705;
@@ -1759,6 +1759,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][0][45][225] = 215.26438968275465;
     expected_track_[180][0][45][270] = 225;
     expected_track_[180][0][45][315] = 215.26438968275465;
+    expected_track_[180][0][135][0] = 180;
     expected_track_[180][0][135][45] = 35.264389682754654;
     expected_track_[180][0][135][90] = 44.999999999999993;
     expected_track_[180][0][135][135] = 35.264389682754654;
@@ -1773,7 +1774,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][0][180][225] = 270;
     expected_track_[180][0][180][270] = 270;
     expected_track_[180][0][180][315] = 270;
-    expected_track_[180][0][225][0] = 180;
+    expected_track_[180][0][225][0] = 0;
     expected_track_[180][0][225][45] = 144.73561031724535;
     expected_track_[180][0][225][90] = 135;
     expected_track_[180][0][225][135] = 144.73561031724535;
@@ -1781,7 +1782,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][0][225][225] = 215.26438968275465;
     expected_track_[180][0][225][270] = 225;
     expected_track_[180][0][225][315] = 215.26438968275465;
-    expected_track_[180][0][270][0] = 180;
+    expected_track_[180][0][270][0] = 0;
     expected_track_[180][0][270][45] = 180;
     expected_track_[180][0][270][90] = 180;
     expected_track_[180][0][270][135] = 180;
@@ -1812,6 +1813,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][45][45][270] = 215.26438968275465;
     expected_track_[180][45][45][315] = 225;
     expected_track_[180][45][135][0] = 324.73561031724535;
+    expected_track_[180][45][135][45] = 180;
     expected_track_[180][45][135][90] = 35.264389682754654;
     expected_track_[180][45][135][135] = 44.999999999999993;
     expected_track_[180][45][135][180] = 35.264389682754654;
@@ -1826,7 +1828,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][45][180][270] = 270;
     expected_track_[180][45][180][315] = 270;
     expected_track_[180][45][225][0] = 215.26438968275465;
-    expected_track_[180][45][225][45] = 180;
+    expected_track_[180][45][225][45] = 0;
     expected_track_[180][45][225][90] = 144.73561031724535;
     expected_track_[180][45][225][135] = 135;
     expected_track_[180][45][225][180] = 144.73561031724535;
@@ -1834,7 +1836,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][45][225][270] = 215.26438968275465;
     expected_track_[180][45][225][315] = 225;
     expected_track_[180][45][270][0] = 180;
-    expected_track_[180][45][270][45] = 180;
+    expected_track_[180][45][270][45] = 0;
     expected_track_[180][45][270][90] = 180;
     expected_track_[180][45][270][135] = 180;
     expected_track_[180][45][270][180] = 180;
@@ -1865,6 +1867,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][90][45][315] = 215.26438968275465;
     expected_track_[180][90][135][0] = 315;
     expected_track_[180][90][135][45] = 324.73561031724535;
+    expected_track_[180][90][135][90] = 180;
     expected_track_[180][90][135][135] = 35.264389682754654;
     expected_track_[180][90][135][180] = 44.999999999999993;
     expected_track_[180][90][135][225] = 35.264389682754654;
@@ -1879,7 +1882,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][90][180][315] = 270;
     expected_track_[180][90][225][0] = 225;
     expected_track_[180][90][225][45] = 215.26438968275465;
-    expected_track_[180][90][225][90] = 180;
+    expected_track_[180][90][225][90] = 0;
     expected_track_[180][90][225][135] = 144.73561031724535;
     expected_track_[180][90][225][180] = 135;
     expected_track_[180][90][225][225] = 144.73561031724535;
@@ -1887,7 +1890,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][90][225][315] = 215.26438968275465;
     expected_track_[180][90][270][0] = 180;
     expected_track_[180][90][270][45] = 180;
-    expected_track_[180][90][270][90] = 180;
+    expected_track_[180][90][270][90] = 0;
     expected_track_[180][90][270][135] = 180;
     expected_track_[180][90][270][180] = 180;
     expected_track_[180][90][270][225] = 180;
@@ -1918,6 +1921,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][135][135][0] = 324.73561031724535;
     expected_track_[180][135][135][45] = 315;
     expected_track_[180][135][135][90] = 324.73561031724535;
+    expected_track_[180][135][135][135] = 180;
     expected_track_[180][135][135][180] = 35.264389682754654;
     expected_track_[180][135][135][225] = 44.999999999999993;
     expected_track_[180][135][135][270] = 35.264389682754654;
@@ -1932,7 +1936,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][135][225][0] = 215.26438968275465;
     expected_track_[180][135][225][45] = 225;
     expected_track_[180][135][225][90] = 215.26438968275465;
-    expected_track_[180][135][225][135] = 180;
+    expected_track_[180][135][225][135] = 0;
     expected_track_[180][135][225][180] = 144.73561031724535;
     expected_track_[180][135][225][225] = 135;
     expected_track_[180][135][225][270] = 144.73561031724535;
@@ -1940,7 +1944,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][135][270][0] = 180;
     expected_track_[180][135][270][45] = 180;
     expected_track_[180][135][270][90] = 180;
-    expected_track_[180][135][270][135] = 180;
+    expected_track_[180][135][270][135] = 0;
     expected_track_[180][135][270][180] = 180;
     expected_track_[180][135][270][225] = 180;
     expected_track_[180][135][270][270] = 180;
@@ -1971,6 +1975,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][180][135][45] = 324.73561031724535;
     expected_track_[180][180][135][90] = 315;
     expected_track_[180][180][135][135] = 324.73561031724535;
+    expected_track_[180][180][135][180] = 180;
     expected_track_[180][180][135][225] = 35.264389682754654;
     expected_track_[180][180][135][270] = 44.999999999999993;
     expected_track_[180][180][135][315] = 35.264389682754654;
@@ -1986,7 +1991,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][180][225][45] = 215.26438968275465;
     expected_track_[180][180][225][90] = 225;
     expected_track_[180][180][225][135] = 215.26438968275465;
-    expected_track_[180][180][225][180] = 180;
+    expected_track_[180][180][225][180] = 0;
     expected_track_[180][180][225][225] = 144.73561031724535;
     expected_track_[180][180][225][270] = 135;
     expected_track_[180][180][225][315] = 144.73561031724535;
@@ -1994,7 +1999,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][180][270][45] = 180;
     expected_track_[180][180][270][90] = 180;
     expected_track_[180][180][270][135] = 180;
-    expected_track_[180][180][270][180] = 180;
+    expected_track_[180][180][270][180] = 0;
     expected_track_[180][180][270][225] = 180;
     expected_track_[180][180][270][270] = 180;
     expected_track_[180][180][270][315] = 180;
@@ -2026,6 +2031,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][225][135][90] = 324.73561031724535;
     expected_track_[180][225][135][135] = 315;
     expected_track_[180][225][135][180] = 324.73561031724535;
+    expected_track_[180][225][135][225] = 180;
     expected_track_[180][225][135][270] = 35.264389682754654;
     expected_track_[180][225][135][315] = 44.999999999999993;
     expected_track_[180][225][180][0] = 89.999999999999986;
@@ -2041,7 +2047,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][225][225][90] = 215.26438968275465;
     expected_track_[180][225][225][135] = 225;
     expected_track_[180][225][225][180] = 215.26438968275465;
-    expected_track_[180][225][225][225] = 180;
+    expected_track_[180][225][225][225] = 0;
     expected_track_[180][225][225][270] = 144.73561031724535;
     expected_track_[180][225][225][315] = 135;
     expected_track_[180][225][270][0] = 180;
@@ -2049,7 +2055,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][225][270][90] = 180;
     expected_track_[180][225][270][135] = 180;
     expected_track_[180][225][270][180] = 180;
-    expected_track_[180][225][270][225] = 180;
+    expected_track_[180][225][270][225] = 0;
     expected_track_[180][225][270][270] = 180;
     expected_track_[180][225][270][315] = 180;
     expected_track_[180][225][315][0] = 35.26438968275464;
@@ -2081,6 +2087,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][270][135][135] = 324.73561031724535;
     expected_track_[180][270][135][180] = 315;
     expected_track_[180][270][135][225] = 324.73561031724535;
+    expected_track_[180][270][135][270] = 180;
     expected_track_[180][270][135][315] = 35.264389682754654;
     expected_track_[180][270][180][0] = 90;
     expected_track_[180][270][180][45] = 89.999999999999986;
@@ -2096,7 +2103,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][270][225][135] = 215.26438968275465;
     expected_track_[180][270][225][180] = 225;
     expected_track_[180][270][225][225] = 215.26438968275465;
-    expected_track_[180][270][225][270] = 180;
+    expected_track_[180][270][225][270] = 0;
     expected_track_[180][270][225][315] = 144.73561031724535;
     expected_track_[180][270][270][0] = 180;
     expected_track_[180][270][270][45] = 180;
@@ -2104,7 +2111,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][270][270][135] = 180;
     expected_track_[180][270][270][180] = 180;
     expected_track_[180][270][270][225] = 180;
-    expected_track_[180][270][270][270] = 180;
+    expected_track_[180][270][270][270] = 0;
     expected_track_[180][270][270][315] = 180;
     expected_track_[180][270][315][0] = 44.999999999999986;
     expected_track_[180][270][315][45] = 35.26438968275464;
@@ -2136,6 +2143,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][315][135][180] = 324.73561031724535;
     expected_track_[180][315][135][225] = 315;
     expected_track_[180][315][135][270] = 324.73561031724535;
+    expected_track_[180][315][135][315] = 180;
     expected_track_[180][315][180][0] = 90;
     expected_track_[180][315][180][45] = 90;
     expected_track_[180][315][180][90] = 89.999999999999986;
@@ -2151,7 +2159,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][315][225][180] = 215.26438968275465;
     expected_track_[180][315][225][225] = 225;
     expected_track_[180][315][225][270] = 215.26438968275465;
-    expected_track_[180][315][225][315] = 180;
+    expected_track_[180][315][225][315] = 0;
     expected_track_[180][315][270][0] = 180;
     expected_track_[180][315][270][45] = 180;
     expected_track_[180][315][270][90] = 180;
@@ -2159,7 +2167,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][315][270][180] = 180;
     expected_track_[180][315][270][225] = 180;
     expected_track_[180][315][270][270] = 180;
-    expected_track_[180][315][270][315] = 180;
+    expected_track_[180][315][270][315] = 0;
     expected_track_[180][315][315][0] = 35.264389682754654;
     expected_track_[180][315][315][45] = 44.999999999999986;
     expected_track_[180][315][315][90] = 35.26438968275464;
@@ -2167,6 +2175,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[180][315][315][180] = 324.73561031724535;
     expected_track_[180][315][315][225] = 315;
     expected_track_[180][315][315][270] = 324.73561031724535;
+    expected_track_[225][0][0][0] = 180;
     expected_track_[225][0][0][45] = 54.735610317245346;
     expected_track_[225][0][0][90] = 90;
     expected_track_[225][0][0][135] = 125.26438968275465;
@@ -2182,6 +2191,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][0][45][225] = 210.36119340482171;
     expected_track_[225][0][45][270] = 234.73561031724535;
     expected_track_[225][0][45][315] = 253.67505006310475;
+    expected_track_[225][0][135][0] = 180;
     expected_track_[225][0][135][45] = 30.361193404821705;
     expected_track_[225][0][135][90] = 54.735610317245339;
     expected_track_[225][0][135][135] = 73.675050063104734;
@@ -2189,6 +2199,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][0][135][225] = 286.32494993689522;
     expected_track_[225][0][135][270] = 305.26438968275465;
     expected_track_[225][0][135][315] = 329.63880659517827;
+    expected_track_[225][0][180][0] = 180;
     expected_track_[225][0][180][45] = 54.735610317245346;
     expected_track_[225][0][180][90] = 90;
     expected_track_[225][0][180][135] = 125.26438968275464;
@@ -2204,7 +2215,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][0][225][225] = 210.36119340482171;
     expected_track_[225][0][225][270] = 234.73561031724535;
     expected_track_[225][0][225][315] = 253.67505006310478;
-    expected_track_[225][0][270][0] = 180;
+    expected_track_[225][0][270][0] = 0;
     expected_track_[225][0][270][45] = 180;
     expected_track_[225][0][270][90] = 179.99999999999997;
     expected_track_[225][0][270][135] = 180;
@@ -2220,6 +2231,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][0][315][270] = 305.26438968275465;
     expected_track_[225][0][315][315] = 329.63880659517827;
     expected_track_[225][45][0][0] = 305.26438968275465;
+    expected_track_[225][45][0][45] = 180;
     expected_track_[225][45][0][90] = 54.735610317245346;
     expected_track_[225][45][0][135] = 90;
     expected_track_[225][45][0][180] = 125.26438968275465;
@@ -2235,6 +2247,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][45][45][270] = 210.36119340482171;
     expected_track_[225][45][45][315] = 234.73561031724535;
     expected_track_[225][45][135][0] = 329.63880659517827;
+    expected_track_[225][45][135][45] = 180;
     expected_track_[225][45][135][90] = 30.361193404821705;
     expected_track_[225][45][135][135] = 54.735610317245339;
     expected_track_[225][45][135][180] = 73.675050063104734;
@@ -2242,6 +2255,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][45][135][270] = 286.32494993689522;
     expected_track_[225][45][135][315] = 305.26438968275465;
     expected_track_[225][45][180][0] = 305.26438968275465;
+    expected_track_[225][45][180][45] = 180;
     expected_track_[225][45][180][90] = 54.735610317245346;
     expected_track_[225][45][180][135] = 90;
     expected_track_[225][45][180][180] = 125.26438968275464;
@@ -2257,7 +2271,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][45][225][270] = 210.36119340482171;
     expected_track_[225][45][225][315] = 234.73561031724535;
     expected_track_[225][45][270][0] = 180;
-    expected_track_[225][45][270][45] = 180;
+    expected_track_[225][45][270][45] = 0;
     expected_track_[225][45][270][90] = 180;
     expected_track_[225][45][270][135] = 179.99999999999997;
     expected_track_[225][45][270][180] = 180;
@@ -2273,6 +2287,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][45][315][315] = 305.26438968275465;
     expected_track_[225][90][0][0] = 270;
     expected_track_[225][90][0][45] = 305.26438968275465;
+    expected_track_[225][90][0][90] = 180;
     expected_track_[225][90][0][135] = 54.735610317245346;
     expected_track_[225][90][0][180] = 90;
     expected_track_[225][90][0][225] = 125.26438968275465;
@@ -2288,6 +2303,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][90][45][315] = 210.36119340482171;
     expected_track_[225][90][135][0] = 305.26438968275465;
     expected_track_[225][90][135][45] = 329.63880659517827;
+    expected_track_[225][90][135][90] = 180;
     expected_track_[225][90][135][135] = 30.361193404821705;
     expected_track_[225][90][135][180] = 54.735610317245339;
     expected_track_[225][90][135][225] = 73.675050063104734;
@@ -2295,6 +2311,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][90][135][315] = 286.32494993689522;
     expected_track_[225][90][180][0] = 270;
     expected_track_[225][90][180][45] = 305.26438968275465;
+    expected_track_[225][90][180][90] = 180;
     expected_track_[225][90][180][135] = 54.735610317245346;
     expected_track_[225][90][180][180] = 90;
     expected_track_[225][90][180][225] = 125.26438968275464;
@@ -2310,7 +2327,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][90][225][315] = 210.36119340482171;
     expected_track_[225][90][270][0] = 180.00000000000003;
     expected_track_[225][90][270][45] = 180;
-    expected_track_[225][90][270][90] = 180;
+    expected_track_[225][90][270][90] = 0;
     expected_track_[225][90][270][135] = 180;
     expected_track_[225][90][270][180] = 179.99999999999997;
     expected_track_[225][90][270][225] = 180;
@@ -2326,6 +2343,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][135][0][0] = 234.73561031724535;
     expected_track_[225][135][0][45] = 270;
     expected_track_[225][135][0][90] = 305.26438968275465;
+    expected_track_[225][135][0][135] = 180;
     expected_track_[225][135][0][180] = 54.735610317245346;
     expected_track_[225][135][0][225] = 90;
     expected_track_[225][135][0][270] = 125.26438968275465;
@@ -2341,6 +2359,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][135][135][0] = 286.32494993689528;
     expected_track_[225][135][135][45] = 305.26438968275465;
     expected_track_[225][135][135][90] = 329.63880659517827;
+    expected_track_[225][135][135][135] = 180;
     expected_track_[225][135][135][180] = 30.361193404821705;
     expected_track_[225][135][135][225] = 54.735610317245339;
     expected_track_[225][135][135][270] = 73.675050063104734;
@@ -2348,6 +2367,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][135][180][0] = 234.73561031724535;
     expected_track_[225][135][180][45] = 270;
     expected_track_[225][135][180][90] = 305.26438968275465;
+    expected_track_[225][135][180][135] = 180;
     expected_track_[225][135][180][180] = 54.735610317245346;
     expected_track_[225][135][180][225] = 90;
     expected_track_[225][135][180][270] = 125.26438968275464;
@@ -2363,7 +2383,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][135][270][0] = 180;
     expected_track_[225][135][270][45] = 180.00000000000003;
     expected_track_[225][135][270][90] = 180;
-    expected_track_[225][135][270][135] = 180;
+    expected_track_[225][135][270][135] = 0;
     expected_track_[225][135][270][180] = 180;
     expected_track_[225][135][270][225] = 179.99999999999997;
     expected_track_[225][135][270][270] = 180;
@@ -2379,6 +2399,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][180][0][45] = 234.73561031724535;
     expected_track_[225][180][0][90] = 270;
     expected_track_[225][180][0][135] = 305.26438968275465;
+    expected_track_[225][180][0][180] = 180;
     expected_track_[225][180][0][225] = 54.735610317245346;
     expected_track_[225][180][0][270] = 90;
     expected_track_[225][180][0][315] = 125.26438968275465;
@@ -2394,6 +2415,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][180][135][45] = 286.32494993689528;
     expected_track_[225][180][135][90] = 305.26438968275465;
     expected_track_[225][180][135][135] = 329.63880659517827;
+    expected_track_[225][180][135][180] = 180;
     expected_track_[225][180][135][225] = 30.361193404821705;
     expected_track_[225][180][135][270] = 54.735610317245339;
     expected_track_[225][180][135][315] = 73.675050063104734;
@@ -2401,6 +2423,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][180][180][45] = 234.73561031724535;
     expected_track_[225][180][180][90] = 270;
     expected_track_[225][180][180][135] = 305.26438968275465;
+    expected_track_[225][180][180][180] = 180;
     expected_track_[225][180][180][225] = 54.735610317245346;
     expected_track_[225][180][180][270] = 90;
     expected_track_[225][180][180][315] = 125.26438968275464;
@@ -2416,7 +2439,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][180][270][45] = 180;
     expected_track_[225][180][270][90] = 180.00000000000003;
     expected_track_[225][180][270][135] = 180;
-    expected_track_[225][180][270][180] = 180;
+    expected_track_[225][180][270][180] = 0;
     expected_track_[225][180][270][225] = 180;
     expected_track_[225][180][270][270] = 179.99999999999997;
     expected_track_[225][180][270][315] = 180;
@@ -2432,6 +2455,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][225][0][90] = 234.73561031724535;
     expected_track_[225][225][0][135] = 270;
     expected_track_[225][225][0][180] = 305.26438968275465;
+    expected_track_[225][225][0][225] = 180;
     expected_track_[225][225][0][270] = 54.735610317245346;
     expected_track_[225][225][0][315] = 90;
     expected_track_[225][225][45][0] = 149.63880659517829;
@@ -2447,6 +2471,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][225][135][90] = 286.32494993689528;
     expected_track_[225][225][135][135] = 305.26438968275465;
     expected_track_[225][225][135][180] = 329.63880659517827;
+    expected_track_[225][225][135][225] = 180;
     expected_track_[225][225][135][270] = 30.361193404821705;
     expected_track_[225][225][135][315] = 54.735610317245339;
     expected_track_[225][225][180][0] = 125.26438968275465;
@@ -2454,6 +2479,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][225][180][90] = 234.73561031724535;
     expected_track_[225][225][180][135] = 270;
     expected_track_[225][225][180][180] = 305.26438968275465;
+    expected_track_[225][225][180][225] = 180;
     expected_track_[225][225][180][270] = 54.735610317245346;
     expected_track_[225][225][180][315] = 90;
     expected_track_[225][225][225][0] = 149.63880659517829;
@@ -2469,7 +2495,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][225][270][90] = 180;
     expected_track_[225][225][270][135] = 180.00000000000003;
     expected_track_[225][225][270][180] = 180;
-    expected_track_[225][225][270][225] = 180;
+    expected_track_[225][225][270][225] = 0;
     expected_track_[225][225][270][270] = 180;
     expected_track_[225][225][270][315] = 179.99999999999997;
     expected_track_[225][225][315][0] = 73.675050063104734;
@@ -2485,6 +2511,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][270][0][135] = 234.73561031724535;
     expected_track_[225][270][0][180] = 270;
     expected_track_[225][270][0][225] = 305.26438968275465;
+    expected_track_[225][270][0][270] = 180;
     expected_track_[225][270][0][315] = 54.735610317245346;
     expected_track_[225][270][45][0] = 125.26438968275465;
     expected_track_[225][270][45][45] = 149.63880659517829;
@@ -2500,6 +2527,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][270][135][135] = 286.32494993689528;
     expected_track_[225][270][135][180] = 305.26438968275465;
     expected_track_[225][270][135][225] = 329.63880659517827;
+    expected_track_[225][270][135][270] = 180;
     expected_track_[225][270][135][315] = 30.361193404821705;
     expected_track_[225][270][180][0] = 90;
     expected_track_[225][270][180][45] = 125.26438968275465;
@@ -2507,6 +2535,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][270][180][135] = 234.73561031724535;
     expected_track_[225][270][180][180] = 270;
     expected_track_[225][270][180][225] = 305.26438968275465;
+    expected_track_[225][270][180][270] = 180;
     expected_track_[225][270][180][315] = 54.735610317245346;
     expected_track_[225][270][225][0] = 125.26438968275465;
     expected_track_[225][270][225][45] = 149.63880659517829;
@@ -2522,7 +2551,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][270][270][135] = 180;
     expected_track_[225][270][270][180] = 180.00000000000003;
     expected_track_[225][270][270][225] = 180;
-    expected_track_[225][270][270][270] = 180;
+    expected_track_[225][270][270][270] = 0;
     expected_track_[225][270][270][315] = 180;
     expected_track_[225][270][315][0] = 54.735610317245332;
     expected_track_[225][270][315][45] = 73.675050063104734;
@@ -2538,6 +2567,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][315][0][180] = 234.73561031724535;
     expected_track_[225][315][0][225] = 270;
     expected_track_[225][315][0][270] = 305.26438968275465;
+    expected_track_[225][315][0][315] = 180;
     expected_track_[225][315][45][0] = 106.32494993689525;
     expected_track_[225][315][45][45] = 125.26438968275465;
     expected_track_[225][315][45][90] = 149.63880659517829;
@@ -2553,6 +2583,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][315][135][180] = 286.32494993689528;
     expected_track_[225][315][135][225] = 305.26438968275465;
     expected_track_[225][315][135][270] = 329.63880659517827;
+    expected_track_[225][315][135][315] = 180;
     expected_track_[225][315][180][0] = 54.735610317245353;
     expected_track_[225][315][180][45] = 90;
     expected_track_[225][315][180][90] = 125.26438968275465;
@@ -2560,6 +2591,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][315][180][180] = 234.73561031724535;
     expected_track_[225][315][180][225] = 270;
     expected_track_[225][315][180][270] = 305.26438968275465;
+    expected_track_[225][315][180][315] = 180;
     expected_track_[225][315][225][0] = 106.32494993689524;
     expected_track_[225][315][225][45] = 125.26438968275465;
     expected_track_[225][315][225][90] = 149.63880659517829;
@@ -2575,7 +2607,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][315][270][180] = 180;
     expected_track_[225][315][270][225] = 180.00000000000003;
     expected_track_[225][315][270][270] = 180;
-    expected_track_[225][315][270][315] = 180;
+    expected_track_[225][315][270][315] = 0;
     expected_track_[225][315][315][0] = 30.361193404821709;
     expected_track_[225][315][315][45] = 54.735610317245332;
     expected_track_[225][315][315][90] = 73.675050063104734;
@@ -2583,6 +2615,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[225][315][315][180] = 286.32494993689528;
     expected_track_[225][315][315][225] = 305.26438968275465;
     expected_track_[225][315][315][270] = 329.63880659517827;
+    expected_track_[270][0][0][0] = 180;
     expected_track_[270][0][0][45] = 45;
     expected_track_[270][0][0][90] = 90;
     expected_track_[270][0][0][135] = 135;
@@ -2590,6 +2623,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][0][0][225] = 225;
     expected_track_[270][0][0][270] = 270;
     expected_track_[270][0][0][315] = 315;
+    expected_track_[270][0][45][0] = 180;
     expected_track_[270][0][45][45] = 45.000000000000007;
     expected_track_[270][0][45][90] = 90;
     expected_track_[270][0][45][135] = 135;
@@ -2597,6 +2631,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][0][45][225] = 224.99999999999997;
     expected_track_[270][0][45][270] = 270;
     expected_track_[270][0][45][315] = 315;
+    expected_track_[270][0][135][0] = 180;
     expected_track_[270][0][135][45] = 44.999999999999986;
     expected_track_[270][0][135][90] = 89.999999999999986;
     expected_track_[270][0][135][135] = 135;
@@ -2604,6 +2639,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][0][135][225] = 225;
     expected_track_[270][0][135][270] = 270;
     expected_track_[270][0][135][315] = 315;
+    expected_track_[270][0][180][0] = 180;
     expected_track_[270][0][180][45] = 45;
     expected_track_[270][0][180][90] = 90;
     expected_track_[270][0][180][135] = 135;
@@ -2611,6 +2647,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][0][180][225] = 225;
     expected_track_[270][0][180][270] = 270;
     expected_track_[270][0][180][315] = 315;
+    expected_track_[270][0][225][0] = 180;
     expected_track_[270][0][225][45] = 45.000000000000007;
     expected_track_[270][0][225][90] = 90;
     expected_track_[270][0][225][135] = 135;
@@ -2633,6 +2670,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][0][315][270] = 270;
     expected_track_[270][0][315][315] = 315;
     expected_track_[270][45][0][0] = 315;
+    expected_track_[270][45][0][45] = 180;
     expected_track_[270][45][0][90] = 45;
     expected_track_[270][45][0][135] = 90;
     expected_track_[270][45][0][180] = 135;
@@ -2640,6 +2678,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][45][0][270] = 225;
     expected_track_[270][45][0][315] = 270;
     expected_track_[270][45][45][0] = 315;
+    expected_track_[270][45][45][45] = 180;
     expected_track_[270][45][45][90] = 45.000000000000007;
     expected_track_[270][45][45][135] = 90;
     expected_track_[270][45][45][180] = 135;
@@ -2647,6 +2686,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][45][45][270] = 224.99999999999997;
     expected_track_[270][45][45][315] = 270;
     expected_track_[270][45][135][0] = 315;
+    expected_track_[270][45][135][45] = 180;
     expected_track_[270][45][135][90] = 44.999999999999986;
     expected_track_[270][45][135][135] = 89.999999999999986;
     expected_track_[270][45][135][180] = 135;
@@ -2654,6 +2694,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][45][135][270] = 225;
     expected_track_[270][45][135][315] = 270;
     expected_track_[270][45][180][0] = 315;
+    expected_track_[270][45][180][45] = 180;
     expected_track_[270][45][180][90] = 45;
     expected_track_[270][45][180][135] = 90;
     expected_track_[270][45][180][180] = 135;
@@ -2661,6 +2702,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][45][180][270] = 225;
     expected_track_[270][45][180][315] = 270;
     expected_track_[270][45][225][0] = 315;
+    expected_track_[270][45][225][45] = 180;
     expected_track_[270][45][225][90] = 45.000000000000007;
     expected_track_[270][45][225][135] = 90;
     expected_track_[270][45][225][180] = 135;
@@ -2683,6 +2725,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][45][315][315] = 270;
     expected_track_[270][90][0][0] = 270;
     expected_track_[270][90][0][45] = 315;
+    expected_track_[270][90][0][90] = 180;
     expected_track_[270][90][0][135] = 45;
     expected_track_[270][90][0][180] = 90;
     expected_track_[270][90][0][225] = 135;
@@ -2690,6 +2733,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][90][0][315] = 225;
     expected_track_[270][90][45][0] = 270;
     expected_track_[270][90][45][45] = 315;
+    expected_track_[270][90][45][90] = 180;
     expected_track_[270][90][45][135] = 45.000000000000007;
     expected_track_[270][90][45][180] = 90;
     expected_track_[270][90][45][225] = 135;
@@ -2697,6 +2741,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][90][45][315] = 224.99999999999997;
     expected_track_[270][90][135][0] = 270;
     expected_track_[270][90][135][45] = 315;
+    expected_track_[270][90][135][90] = 180;
     expected_track_[270][90][135][135] = 44.999999999999986;
     expected_track_[270][90][135][180] = 89.999999999999986;
     expected_track_[270][90][135][225] = 135;
@@ -2704,6 +2749,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][90][135][315] = 225;
     expected_track_[270][90][180][0] = 270;
     expected_track_[270][90][180][45] = 315;
+    expected_track_[270][90][180][90] = 180;
     expected_track_[270][90][180][135] = 45;
     expected_track_[270][90][180][180] = 90;
     expected_track_[270][90][180][225] = 135;
@@ -2711,6 +2757,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][90][180][315] = 225;
     expected_track_[270][90][225][0] = 270;
     expected_track_[270][90][225][45] = 315;
+    expected_track_[270][90][225][90] = 180;
     expected_track_[270][90][225][135] = 45.000000000000007;
     expected_track_[270][90][225][180] = 90;
     expected_track_[270][90][225][225] = 135;
@@ -2733,6 +2780,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][135][0][0] = 225;
     expected_track_[270][135][0][45] = 270;
     expected_track_[270][135][0][90] = 315;
+    expected_track_[270][135][0][135] = 180;
     expected_track_[270][135][0][180] = 45;
     expected_track_[270][135][0][225] = 90;
     expected_track_[270][135][0][270] = 135;
@@ -2741,12 +2789,14 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][135][45][45] = 270;
     expected_track_[270][135][45][90] = 315;
     expected_track_[270][135][45][180] = 45.000000000000007;
+    expected_track_[270][135][45][135] = 180;
     expected_track_[270][135][45][225] = 90;
     expected_track_[270][135][45][270] = 135;
     expected_track_[270][135][45][315] = 180;
     expected_track_[270][135][135][0] = 225;
     expected_track_[270][135][135][45] = 270;
     expected_track_[270][135][135][90] = 315;
+    expected_track_[270][135][135][135] = 180;
     expected_track_[270][135][135][180] = 44.999999999999986;
     expected_track_[270][135][135][225] = 89.999999999999986;
     expected_track_[270][135][135][270] = 135;
@@ -2754,6 +2804,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][135][180][0] = 225;
     expected_track_[270][135][180][45] = 270;
     expected_track_[270][135][180][90] = 315;
+    expected_track_[270][135][180][135] = 180;
     expected_track_[270][135][180][180] = 45;
     expected_track_[270][135][180][225] = 90;
     expected_track_[270][135][180][270] = 135;
@@ -2761,6 +2812,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][135][225][0] = 225;
     expected_track_[270][135][225][45] = 270;
     expected_track_[270][135][225][90] = 315;
+    expected_track_[270][135][225][135] = 180;
     expected_track_[270][135][225][180] = 45.000000000000007;
     expected_track_[270][135][225][225] = 90;
     expected_track_[270][135][225][270] = 135;
@@ -2783,6 +2835,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][180][0][45] = 225;
     expected_track_[270][180][0][90] = 270;
     expected_track_[270][180][0][135] = 315;
+    expected_track_[270][180][0][180] = 180;
     expected_track_[270][180][0][225] = 45;
     expected_track_[270][180][0][270] = 90;
     expected_track_[270][180][0][315] = 135;
@@ -2790,6 +2843,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][180][45][45] = 225;
     expected_track_[270][180][45][90] = 270;
     expected_track_[270][180][45][135] = 315;
+    expected_track_[270][180][45][180] = 180;
     expected_track_[270][180][45][225] = 45.000000000000007;
     expected_track_[270][180][45][270] = 90;
     expected_track_[270][180][45][315] = 135;
@@ -2797,6 +2851,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][180][135][45] = 225;
     expected_track_[270][180][135][90] = 270;
     expected_track_[270][180][135][135] = 315;
+    expected_track_[270][180][135][180] = 180;
     expected_track_[270][180][135][225] = 44.999999999999986;
     expected_track_[270][180][135][270] = 89.999999999999986;
     expected_track_[270][180][135][315] = 135;
@@ -2804,6 +2859,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][180][180][45] = 225;
     expected_track_[270][180][180][90] = 270;
     expected_track_[270][180][180][135] = 315;
+    expected_track_[270][180][180][180] = 180;
     expected_track_[270][180][180][225] = 45;
     expected_track_[270][180][180][270] = 90;
     expected_track_[270][180][180][315] = 135;
@@ -2811,6 +2867,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][180][225][45] = 225;
     expected_track_[270][180][225][90] = 270;
     expected_track_[270][180][225][135] = 315;
+    expected_track_[270][180][225][180] = 180;
     expected_track_[270][180][225][225] = 45.000000000000007;
     expected_track_[270][180][225][270] = 90;
     expected_track_[270][180][225][315] = 135;
@@ -2833,6 +2890,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][225][0][90] = 225;
     expected_track_[270][225][0][135] = 270;
     expected_track_[270][225][0][180] = 315;
+    expected_track_[270][225][0][225] = 180;
     expected_track_[270][225][0][270] = 45;
     expected_track_[270][225][0][315] = 90;
     expected_track_[270][225][45][0] = 135.00000000000003;
@@ -2840,6 +2898,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][225][45][90] = 225;
     expected_track_[270][225][45][135] = 270;
     expected_track_[270][225][45][180] = 315;
+    expected_track_[270][225][45][225] = 180;
     expected_track_[270][225][45][270] = 45.000000000000007;
     expected_track_[270][225][45][315] = 90;
     expected_track_[270][225][135][0] = 135;
@@ -2847,6 +2906,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][225][135][90] = 225;
     expected_track_[270][225][135][135] = 270;
     expected_track_[270][225][135][180] = 315;
+    expected_track_[270][225][135][225] = 180;
     expected_track_[270][225][135][270] = 44.999999999999986;
     expected_track_[270][225][135][315] = 89.999999999999986;
     expected_track_[270][225][180][0] = 135;
@@ -2854,6 +2914,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][225][180][90] = 225;
     expected_track_[270][225][180][135] = 270;
     expected_track_[270][225][180][180] = 315;
+    expected_track_[270][225][180][225] = 180;
     expected_track_[270][225][180][270] = 45;
     expected_track_[270][225][180][315] = 90;
     expected_track_[270][225][225][0] = 135.00000000000003;
@@ -2861,6 +2922,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][225][225][90] = 225;
     expected_track_[270][225][225][135] = 270;
     expected_track_[270][225][225][180] = 315;
+    expected_track_[270][225][225][225] = 180;
     expected_track_[270][225][225][270] = 45.000000000000007;
     expected_track_[270][225][225][315] = 90;
     expected_track_[270][225][270][0] = 157.5;
@@ -2883,6 +2945,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][270][0][135] = 225;
     expected_track_[270][270][0][180] = 270;
     expected_track_[270][270][0][225] = 315;
+    expected_track_[270][270][0][270] = 180;
     expected_track_[270][270][0][315] = 45;
     expected_track_[270][270][45][0] = 90.000000000000014;
     expected_track_[270][270][45][45] = 135.00000000000003;
@@ -2890,6 +2953,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][270][45][135] = 225;
     expected_track_[270][270][45][180] = 270;
     expected_track_[270][270][45][225] = 315;
+    expected_track_[270][270][45][270] = 180;
     expected_track_[270][270][45][315] = 45.000000000000007;
     expected_track_[270][270][135][0] = 90;
     expected_track_[270][270][135][45] = 135;
@@ -2897,6 +2961,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][270][135][135] = 225;
     expected_track_[270][270][135][180] = 270;
     expected_track_[270][270][135][225] = 315;
+    expected_track_[270][270][135][270] = 180;
     expected_track_[270][270][135][315] = 44.999999999999986;
     expected_track_[270][270][180][0] = 90.000000000000014;
     expected_track_[270][270][180][45] = 135;
@@ -2904,6 +2969,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][270][180][135] = 225;
     expected_track_[270][270][180][180] = 270;
     expected_track_[270][270][180][225] = 315;
+    expected_track_[270][270][180][270] = 180;
     expected_track_[270][270][180][315] = 45;
     expected_track_[270][270][225][0] = 90.000000000000014;
     expected_track_[270][270][225][45] = 135.00000000000003;
@@ -2911,6 +2977,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][270][225][135] = 225;
     expected_track_[270][270][225][180] = 270;
     expected_track_[270][270][225][225] = 315;
+    expected_track_[270][270][225][270] = 180;
     expected_track_[270][270][225][315] = 45.000000000000007;
     expected_track_[270][270][270][0] = 135;
     expected_track_[270][270][270][45] = 157.5;
@@ -2933,6 +3000,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][315][0][180] = 225;
     expected_track_[270][315][0][225] = 270;
     expected_track_[270][315][0][270] = 315;
+    expected_track_[270][315][0][315] = 180;
     expected_track_[270][315][45][0] = 45.000000000000028;
     expected_track_[270][315][45][45] = 90.000000000000014;
     expected_track_[270][315][45][90] = 135.00000000000003;
@@ -2940,6 +3008,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][315][45][180] = 225;
     expected_track_[270][315][45][225] = 270;
     expected_track_[270][315][45][270] = 315;
+    expected_track_[270][315][45][315] = 180;
     expected_track_[270][315][135][0] = 45.000000000000007;
     expected_track_[270][315][135][45] = 90;
     expected_track_[270][315][135][90] = 135;
@@ -2947,6 +3016,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][315][135][180] = 225;
     expected_track_[270][315][135][225] = 270;
     expected_track_[270][315][135][270] = 315;
+    expected_track_[270][315][135][315] = 180;
     expected_track_[270][315][180][0] = 45.000000000000014;
     expected_track_[270][315][180][45] = 90.000000000000014;
     expected_track_[270][315][180][90] = 135;
@@ -2954,6 +3024,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][315][180][180] = 225;
     expected_track_[270][315][180][225] = 270;
     expected_track_[270][315][180][270] = 315;
+    expected_track_[270][315][180][315] = 180;
     expected_track_[270][315][225][0] = 45.000000000000028;
     expected_track_[270][315][225][45] = 90.000000000000014;
     expected_track_[270][315][225][90] = 135.00000000000003;
@@ -2961,6 +3032,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][315][225][180] = 225;
     expected_track_[270][315][225][225] = 270;
     expected_track_[270][315][225][270] = 315;
+    expected_track_[270][315][225][315] = 180;
     expected_track_[270][315][270][0] = 112.5;
     expected_track_[270][315][270][45] = 135;
     expected_track_[270][315][270][90] = 157.5;
@@ -2975,6 +3047,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[270][315][315][180] = 225;
     expected_track_[270][315][315][225] = 270;
     expected_track_[270][315][315][270] = 315;
+    expected_track_[315][0][0][0] = 180;
     expected_track_[315][0][0][45] = 54.735610317245346;
     expected_track_[315][0][0][90] = 90;
     expected_track_[315][0][0][135] = 125.26438968275465;
@@ -2982,6 +3055,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][0][0][225] = 234.73561031724535;
     expected_track_[315][0][0][270] = 270;
     expected_track_[315][0][0][315] = 305.26438968275465;
+    expected_track_[315][0][45][0] = 180;
     expected_track_[315][0][45][45] = 30.361193404821716;
     expected_track_[315][0][45][90] = 54.735610317245353;
     expected_track_[315][0][45][135] = 73.675050063104791;
@@ -2989,6 +3063,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][0][45][225] = 286.32494993689522;
     expected_track_[315][0][45][270] = 305.26438968275465;
     expected_track_[315][0][45][315] = 329.63880659517827;
+    expected_track_[315][0][135][0] = 180;
     expected_track_[315][0][135][45] = 106.32494993689522;
     expected_track_[315][0][135][90] = 125.26438968275465;
     expected_track_[315][0][135][135] = 149.63880659517827;
@@ -2997,12 +3072,14 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][0][135][270] = 234.73561031724535;
     expected_track_[315][0][135][315] = 253.67505006310478;
     expected_track_[315][0][180][45] = 54.735610317245346;
+    expected_track_[315][0][180][0] = 180;
     expected_track_[315][0][180][90] = 90;
     expected_track_[315][0][180][135] = 125.26438968275465;
     expected_track_[315][0][180][180] = 180;
     expected_track_[315][0][180][225] = 234.73561031724535;
     expected_track_[315][0][180][270] = 270;
     expected_track_[315][0][180][315] = 305.26438968275465;
+    expected_track_[315][0][225][0] = 180;
     expected_track_[315][0][225][45] = 30.361193404821723;
     expected_track_[315][0][225][90] = 54.73561031724536;
     expected_track_[315][0][225][135] = 73.675050063104806;
@@ -3010,6 +3087,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][0][225][225] = 286.32494993689517;
     expected_track_[315][0][225][270] = 305.26438968275465;
     expected_track_[315][0][225][315] = 329.63880659517827;
+    expected_track_[315][0][270][0] = 180;
     expected_track_[315][0][270][225] = 360;
     expected_track_[315][0][270][270] = 360;
     expected_track_[315][0][270][315] = 360;
@@ -3022,6 +3100,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][0][315][270] = 234.73561031724535;
     expected_track_[315][0][315][315] = 253.67505006310475;
     expected_track_[315][45][0][0] = 305.26438968275465;
+    expected_track_[315][45][0][45] = 180;
     expected_track_[315][45][0][90] = 54.735610317245346;
     expected_track_[315][45][0][135] = 90;
     expected_track_[315][45][0][180] = 125.26438968275465;
@@ -3029,6 +3108,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][45][0][270] = 234.73561031724535;
     expected_track_[315][45][0][315] = 270;
     expected_track_[315][45][45][0] = 329.63880659517827;
+    expected_track_[315][45][45][45] = 180;
     expected_track_[315][45][45][90] = 30.361193404821716;
     expected_track_[315][45][45][135] = 54.735610317245353;
     expected_track_[315][45][45][180] = 73.675050063104791;
@@ -3036,6 +3116,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][45][45][270] = 286.32494993689522;
     expected_track_[315][45][45][315] = 305.26438968275465;
     expected_track_[315][45][135][0] = 253.67505006310478;
+    expected_track_[315][45][135][45] = 180;
     expected_track_[315][45][135][90] = 106.32494993689522;
     expected_track_[315][45][135][135] = 125.26438968275465;
     expected_track_[315][45][135][180] = 149.63880659517827;
@@ -3043,6 +3124,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][45][135][270] = 210.36119340482171;
     expected_track_[315][45][135][315] = 234.73561031724535;
     expected_track_[315][45][180][0] = 305.26438968275465;
+    expected_track_[315][45][180][45] = 180;
     expected_track_[315][45][180][90] = 54.735610317245346;
     expected_track_[315][45][180][135] = 90;
     expected_track_[315][45][180][180] = 125.26438968275465;
@@ -3050,6 +3132,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][45][180][270] = 234.73561031724535;
     expected_track_[315][45][180][315] = 270;
     expected_track_[315][45][225][0] = 329.63880659517827;
+    expected_track_[315][45][225][45] = 180;
     expected_track_[315][45][225][90] = 30.361193404821723;
     expected_track_[315][45][225][135] = 54.73561031724536;
     expected_track_[315][45][225][180] = 73.675050063104806;
@@ -3057,6 +3140,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][45][225][270] = 286.32494993689517;
     expected_track_[315][45][225][315] = 305.26438968275465;
     expected_track_[315][45][270][0] = 360;
+    expected_track_[315][45][270][45] = 180;
     expected_track_[315][45][270][270] = 360;
     expected_track_[315][45][270][315] = 360;
     expected_track_[315][45][315][0] = 253.67505006310478;
@@ -3069,6 +3153,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][45][315][315] = 234.73561031724535;
     expected_track_[315][90][0][0] = 270;
     expected_track_[315][90][0][45] = 305.26438968275465;
+    expected_track_[315][90][0][90] = 180;
     expected_track_[315][90][0][135] = 54.735610317245346;
     expected_track_[315][90][0][180] = 90;
     expected_track_[315][90][0][225] = 125.26438968275465;
@@ -3076,6 +3161,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][90][0][315] = 234.73561031724535;
     expected_track_[315][90][45][0] = 305.26438968275465;
     expected_track_[315][90][45][45] = 329.63880659517827;
+    expected_track_[315][90][45][90] = 180;
     expected_track_[315][90][45][135] = 30.361193404821716;
     expected_track_[315][90][45][180] = 54.735610317245353;
     expected_track_[315][90][45][225] = 73.675050063104791;
@@ -3083,6 +3169,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][90][45][315] = 286.32494993689522;
     expected_track_[315][90][135][0] = 234.73561031724535;
     expected_track_[315][90][135][45] = 253.67505006310478;
+    expected_track_[315][90][135][90] = 180;
     expected_track_[315][90][135][135] = 106.32494993689522;
     expected_track_[315][90][135][180] = 125.26438968275465;
     expected_track_[315][90][135][225] = 149.63880659517827;
@@ -3090,6 +3177,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][90][135][315] = 210.36119340482171;
     expected_track_[315][90][180][0] = 270;
     expected_track_[315][90][180][45] = 305.26438968275465;
+    expected_track_[315][90][180][90] = 180;
     expected_track_[315][90][180][135] = 54.735610317245346;
     expected_track_[315][90][180][180] = 90;
     expected_track_[315][90][180][225] = 125.26438968275465;
@@ -3097,6 +3185,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][90][180][315] = 234.73561031724535;
     expected_track_[315][90][225][0] = 305.26438968275465;
     expected_track_[315][90][225][45] = 329.63880659517827;
+    expected_track_[315][90][225][90] = 180;
     expected_track_[315][90][225][135] = 30.361193404821723;
     expected_track_[315][90][225][180] = 54.73561031724536;
     expected_track_[315][90][225][225] = 73.675050063104806;
@@ -3104,6 +3193,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][90][225][315] = 286.32494993689517;
     expected_track_[315][90][270][0] = 360;
     expected_track_[315][90][270][45] = 360;
+    expected_track_[315][90][270][90] = 180;
     expected_track_[315][90][270][315] = 360;
     expected_track_[315][90][315][0] = 234.73561031724535;
     expected_track_[315][90][315][45] = 253.67505006310478;
@@ -3116,6 +3206,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][135][0][0] = 234.73561031724535;
     expected_track_[315][135][0][45] = 270;
     expected_track_[315][135][0][90] = 305.26438968275465;
+    expected_track_[315][135][0][135] = 180;
     expected_track_[315][135][0][180] = 54.735610317245346;
     expected_track_[315][135][0][225] = 90;
     expected_track_[315][135][0][270] = 125.26438968275465;
@@ -3123,6 +3214,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][135][45][0] = 286.32494993689522;
     expected_track_[315][135][45][45] = 305.26438968275465;
     expected_track_[315][135][45][90] = 329.63880659517827;
+    expected_track_[315][135][45][135] = 180;
     expected_track_[315][135][45][180] = 30.361193404821716;
     expected_track_[315][135][45][225] = 54.735610317245353;
     expected_track_[315][135][45][270] = 73.675050063104791;
@@ -3130,6 +3222,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][135][135][0] = 210.36119340482173;
     expected_track_[315][135][135][45] = 234.73561031724535;
     expected_track_[315][135][135][90] = 253.67505006310478;
+    expected_track_[315][135][135][135] = 180;
     expected_track_[315][135][135][180] = 106.32494993689522;
     expected_track_[315][135][135][225] = 125.26438968275465;
     expected_track_[315][135][135][270] = 149.63880659517827;
@@ -3137,6 +3230,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][135][180][0] = 234.73561031724535;
     expected_track_[315][135][180][45] = 270;
     expected_track_[315][135][180][90] = 305.26438968275465;
+    expected_track_[315][135][180][135] = 180;
     expected_track_[315][135][180][180] = 54.735610317245346;
     expected_track_[315][135][180][225] = 90;
     expected_track_[315][135][180][270] = 125.26438968275465;
@@ -3144,6 +3238,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][135][225][0] = 286.32494993689522;
     expected_track_[315][135][225][45] = 305.26438968275465;
     expected_track_[315][135][225][90] = 329.63880659517827;
+    expected_track_[315][135][225][135] = 180;
     expected_track_[315][135][225][180] = 30.361193404821723;
     expected_track_[315][135][225][225] = 54.73561031724536;
     expected_track_[315][135][225][270] = 73.675050063104806;
@@ -3151,6 +3246,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][135][270][0] = 360;
     expected_track_[315][135][270][45] = 360;
     expected_track_[315][135][270][90] = 360;
+    expected_track_[315][135][270][135] = 180;
     expected_track_[315][135][315][0] = 210.36119340482171;
     expected_track_[315][135][315][45] = 234.73561031724535;
     expected_track_[315][135][315][90] = 253.67505006310478;
@@ -3163,12 +3259,14 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][180][0][45] = 234.73561031724535;
     expected_track_[315][180][0][90] = 270;
     expected_track_[315][180][0][135] = 305.26438968275465;
+    expected_track_[315][180][0][180] = 180;
     expected_track_[315][180][0][225] = 54.735610317245346;
     expected_track_[315][180][0][270] = 90;
     expected_track_[315][180][0][315] = 125.26438968275465;
     expected_track_[315][180][45][0] = 195.41704309119234;
     expected_track_[315][180][45][45] = 286.32494993689522;
     expected_track_[315][180][45][90] = 305.26438968275465;
+    expected_track_[315][180][45][180] = 180;
     expected_track_[315][180][45][135] = 329.63880659517827;
     expected_track_[315][180][45][225] = 30.361193404821716;
     expected_track_[315][180][45][270] = 54.735610317245353;
@@ -3177,6 +3275,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][180][135][45] = 210.36119340482173;
     expected_track_[315][180][135][90] = 234.73561031724535;
     expected_track_[315][180][135][135] = 253.67505006310478;
+    expected_track_[315][180][135][180] = 180;
     expected_track_[315][180][135][225] = 106.32494993689522;
     expected_track_[315][180][135][270] = 125.26438968275465;
     expected_track_[315][180][135][315] = 149.63880659517827;
@@ -3184,6 +3283,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][180][180][45] = 234.73561031724535;
     expected_track_[315][180][180][90] = 270;
     expected_track_[315][180][180][135] = 305.26438968275465;
+    expected_track_[315][180][180][180] = 180;
     expected_track_[315][180][180][225] = 54.735610317245346;
     expected_track_[315][180][180][270] = 90;
     expected_track_[315][180][180][315] = 125.26438968275465;
@@ -3191,6 +3291,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][180][225][45] = 286.32494993689522;
     expected_track_[315][180][225][90] = 305.26438968275465;
     expected_track_[315][180][225][135] = 329.63880659517827;
+    expected_track_[315][180][225][180] = 180;
     expected_track_[315][180][225][225] = 30.361193404821723;
     expected_track_[315][180][225][270] = 54.73561031724536;
     expected_track_[315][180][225][315] = 73.675050063104806;
@@ -3198,6 +3299,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][180][270][45] = 360;
     expected_track_[315][180][270][90] = 360;
     expected_track_[315][180][270][135] = 360;
+    expected_track_[315][180][270][180] = 180;
     expected_track_[315][180][315][0] = 180;
     expected_track_[315][180][315][45] = 210.36119340482171;
     expected_track_[315][180][315][90] = 234.73561031724535;
@@ -3211,6 +3313,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][225][0][90] = 234.73561031724535;
     expected_track_[315][225][0][135] = 270;
     expected_track_[315][225][0][180] = 305.26438968275465;
+    expected_track_[315][225][0][225] = 180;
     expected_track_[315][225][0][270] = 54.735610317245346;
     expected_track_[315][225][0][315] = 90;
     expected_track_[315][225][45][0] = 73.675050063104806;
@@ -3218,6 +3321,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][225][45][90] = 286.32494993689522;
     expected_track_[315][225][45][135] = 305.26438968275465;
     expected_track_[315][225][45][180] = 329.63880659517827;
+    expected_track_[315][225][45][225] = 180;
     expected_track_[315][225][45][270] = 30.361193404821716;
     expected_track_[315][225][45][315] = 54.735610317245353;
     expected_track_[315][225][135][0] = 149.63880659517829;
@@ -3225,6 +3329,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][225][135][90] = 210.36119340482173;
     expected_track_[315][225][135][135] = 234.73561031724535;
     expected_track_[315][225][135][180] = 253.67505006310478;
+    expected_track_[315][225][135][225] = 180;
     expected_track_[315][225][135][270] = 106.32494993689522;
     expected_track_[315][225][135][315] = 125.26438968275465;
     expected_track_[315][225][180][0] = 125.26438968275467;
@@ -3232,6 +3337,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][225][180][90] = 234.73561031724535;
     expected_track_[315][225][180][135] = 270;
     expected_track_[315][225][180][180] = 305.26438968275465;
+    expected_track_[315][225][180][225] = 180;
     expected_track_[315][225][180][270] = 54.735610317245346;
     expected_track_[315][225][180][315] = 90;
     expected_track_[315][225][225][0] = 73.67505006310482;
@@ -3239,12 +3345,14 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][225][225][90] = 286.32494993689522;
     expected_track_[315][225][225][135] = 305.26438968275465;
     expected_track_[315][225][225][180] = 329.63880659517827;
+    expected_track_[315][225][225][225] = 180;
     expected_track_[315][225][225][270] = 30.361193404821723;
     expected_track_[315][225][225][315] = 54.73561031724536;
     expected_track_[315][225][270][45] = 360;
     expected_track_[315][225][270][90] = 360;
     expected_track_[315][225][270][135] = 360;
     expected_track_[315][225][270][180] = 360;
+    expected_track_[315][225][270][225] = 180;
     expected_track_[315][225][315][0] = 149.63880659517829;
     expected_track_[315][225][315][45] = 180;
     expected_track_[315][225][315][90] = 210.36119340482171;
@@ -3259,6 +3367,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][270][0][135] = 234.73561031724535;
     expected_track_[315][270][0][180] = 270;
     expected_track_[315][270][0][225] = 305.26438968275465;
+    expected_track_[315][270][0][270] = 180;
     expected_track_[315][270][0][315] = 54.735610317245346;
     expected_track_[315][270][45][0] = 54.73561031724536;
     expected_track_[315][270][45][45] = 73.675050063104806;
@@ -3266,6 +3375,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][270][45][135] = 286.32494993689522;
     expected_track_[315][270][45][180] = 305.26438968275465;
     expected_track_[315][270][45][225] = 329.63880659517827;
+    expected_track_[315][270][45][270] = 180;
     expected_track_[315][270][45][315] = 30.361193404821716;
     expected_track_[315][270][135][0] = 125.26438968275465;
     expected_track_[315][270][135][45] = 149.63880659517829;
@@ -3273,6 +3383,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][270][135][135] = 210.36119340482173;
     expected_track_[315][270][135][180] = 234.73561031724535;
     expected_track_[315][270][135][225] = 253.67505006310478;
+    expected_track_[315][270][135][270] = 180;
     expected_track_[315][270][135][315] = 106.32494993689522;
     expected_track_[315][270][180][0] = 90.000000000000014;
     expected_track_[315][270][180][45] = 125.26438968275467;
@@ -3280,6 +3391,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][270][180][135] = 234.73561031724535;
     expected_track_[315][270][180][180] = 270;
     expected_track_[315][270][180][225] = 305.26438968275465;
+    expected_track_[315][270][180][270] = 180;
     expected_track_[315][270][180][315] = 54.735610317245346;
     expected_track_[315][270][225][0] = 54.735610317245367;
     expected_track_[315][270][225][45] = 73.67505006310482;
@@ -3287,11 +3399,13 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][270][225][135] = 286.32494993689522;
     expected_track_[315][270][225][180] = 305.26438968275465;
     expected_track_[315][270][225][225] = 329.63880659517827;
+    expected_track_[315][270][225][270] = 180;
     expected_track_[315][270][225][315] = 30.361193404821723;
     expected_track_[315][270][270][90] = 360;
     expected_track_[315][270][270][135] = 360;
     expected_track_[315][270][270][180] = 360;
     expected_track_[315][270][270][225] = 360;
+    expected_track_[315][270][270][270] = 180;
     expected_track_[315][270][315][0] = 125.26438968275465;
     expected_track_[315][270][315][45] = 149.63880659517829;
     expected_track_[315][270][315][90] = 180;
@@ -3307,6 +3421,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][315][0][180] = 234.73561031724535;
     expected_track_[315][315][0][225] = 270;
     expected_track_[315][315][0][270] = 305.26438968275465;
+    expected_track_[315][315][0][315] = 180;
     expected_track_[315][315][45][0] = 30.361193404821723;
     expected_track_[315][315][45][45] = 54.73561031724536;
     expected_track_[315][315][45][90] = 73.675050063104806;
@@ -3314,6 +3429,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][315][45][180] = 286.32494993689522;
     expected_track_[315][315][45][225] = 305.26438968275465;
     expected_track_[315][315][45][270] = 329.63880659517827;
+    expected_track_[315][315][45][315] = 180;
     expected_track_[315][315][135][0] = 106.32494993689522;
     expected_track_[315][315][135][45] = 125.26438968275465;
     expected_track_[315][315][135][90] = 149.63880659517829;
@@ -3321,6 +3437,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][315][135][180] = 210.36119340482173;
     expected_track_[315][315][135][225] = 234.73561031724535;
     expected_track_[315][315][135][270] = 253.67505006310478;
+    expected_track_[315][315][135][315] = 180;
     expected_track_[315][315][180][0] = 54.735610317245353;
     expected_track_[315][315][180][45] = 90.000000000000014;
     expected_track_[315][315][180][90] = 125.26438968275467;
@@ -3328,6 +3445,7 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][315][180][180] = 234.73561031724535;
     expected_track_[315][315][180][225] = 270;
     expected_track_[315][315][180][270] = 305.26438968275465;
+    expected_track_[315][315][180][315] = 180;
     expected_track_[315][315][225][0] = 30.36119340482173;
     expected_track_[315][315][225][45] = 54.735610317245367;
     expected_track_[315][315][225][90] = 73.67505006310482;
@@ -3335,10 +3453,12 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][315][225][180] = 286.32494993689522;
     expected_track_[315][315][225][225] = 305.26438968275465;
     expected_track_[315][315][225][270] = 329.63880659517827;
+    expected_track_[315][315][225][315] = 180;
     expected_track_[315][315][270][135] = 360;
     expected_track_[315][315][270][180] = 360;
     expected_track_[315][315][270][225] = 360;
     expected_track_[315][315][270][270] = 360;
+    expected_track_[315][315][270][315] = 180;
     expected_track_[315][315][315][0] = 106.32494993689525;
     expected_track_[315][315][315][45] = 125.26438968275465;
     expected_track_[315][315][315][90] = 149.63880659517829;
@@ -3378,14 +3498,14 @@ TEST_F(OgrGeoUtilsTest, OGR_GreatCircle_InitialHeading) {
                  << "expected_track_"
                  << "[" << LatA_deg << "][" << LonA_deg << "]"
                  << "[" << LatB_deg << "][" << LonB_deg << "]"
-                 << " = " << actual;
+                 << " = " << actual << ";";
              continue;
            }
            EXPECT_NEAR(expected, actual, 1E-10)
                  << "expected_track_"
                  << "[" << LatA_deg << "][" << LonA_deg << "]"
                  << "[" << LatB_deg << "][" << LonB_deg << "]"
-                 << " = " << actual;
+                 << " = " << actual << ";";
          }
        }
     }

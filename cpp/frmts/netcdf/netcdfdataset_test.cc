@@ -18,8 +18,8 @@
 //   http://www.gdal.org/frmt_netcdf.html
 //   https://trac.osgeo.org/gdal/browser/trunk/autotest/gdrivers/netcdf.py
 
-#include "gdal/port/cpl_port.h"
-#include "gdal/frmts/netcdf/netcdfdataset.h"
+#include "port/cpl_port.h"
+#include "frmts/netcdf/netcdfdataset.h"
 
 #include <map>
 #include <vector>

@@ -100,7 +100,19 @@ TEST(CplStrtodTest, StrtodDelim) {
   value = CPLStrtodDelim("-1.#QNAN", nullptr, '.');
   EXPECT_TRUE(isnan(value));
 
+  value = CPLStrtodDelim("-1.#QNAN0000000", nullptr, '.');
+  EXPECT_TRUE(isnan(value));
+
+  value = CPLStrtodDelim("1.#QNAN", nullptr, '.');
+  EXPECT_TRUE(isnan(value));
+
+  value = CPLStrtodDelim("1.#QNAN0000000", nullptr, '.');
+  EXPECT_TRUE(isnan(value));
+
   value = CPLStrtodDelim("-1.#IND", nullptr, '.');
+  EXPECT_TRUE(isnan(value));
+
+  value = CPLStrtodDelim("-1.#IND0000000", nullptr, '.');
   EXPECT_TRUE(isnan(value));
 
   value = CPLStrtodDelim("inf", nullptr, '.');

@@ -17,12 +17,11 @@
 #include "port/cpl_port.h"
 
 #include <memory>   // NOLINT(build/include_order)
-#include <utility>  // NOLINT(build/include_order)
-#include <vector>   // NOLINT(build/include_order)
 
 #include "gunit.h"
-#include "ogr/ogr_core.h"
 #include "third_party/absl/memory/memory.h"
+#include "ogr/ogr_core.h"
+#include "ogr/ogr_spatialref.h"
 
 namespace autotest2 {
 namespace {

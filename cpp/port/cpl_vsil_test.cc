@@ -24,9 +24,9 @@
 #include <string>
 #include <vector>
 
+#include "gunit.h"
 #include "gcore/gdal.h"
 #include "gcore/gdal_priv.h"
-#include "gunit.h"
 #include "port/cpl_vsi.h"
 #include "port/cpl_vsi_virtual.h"
 
@@ -39,7 +39,8 @@ namespace {
 class DummyFilesystem : public VSIFilesystemHandler {
  public:
   DummyFilesystem();
-  virtual VSIVirtualHandle *Open(const char *path, const char *access);
+  virtual VSIVirtualHandle *Open(const char *path, const char *access,
+                                 bool bSetError);
   virtual int Stat(const char *path, VSIStatBufL *stat, int nFlags);
 
   // Record what happened during the test.
@@ -51,8 +52,8 @@ class DummyFilesystem : public VSIFilesystemHandler {
 
 DummyFilesystem::DummyFilesystem() {}
 
-
-VSIVirtualHandle *DummyFilesystem::Open(const char *path, const char *access) {
+VSIVirtualHandle *DummyFilesystem::Open(const char *path, const char *access,
+                                        bool /* bSetError */) {
   open_last_path_ = path;
   open_last_access_ = access;
   return nullptr;

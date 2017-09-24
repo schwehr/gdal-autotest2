@@ -14,7 +14,6 @@
 
 #include "autotest2/cpp/util/error_handler.h"
 
-#include "log_severity.h"
 #include "logging.h"
 #include "port/cpl_error.h"
 

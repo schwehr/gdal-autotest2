@@ -89,7 +89,7 @@ class Jp2kakTest(gdrivers_util.DriverTestCase):
             vsimem=True)
 
   def testCheckCopyDefaultQuality(self):
-    filepath = gdrivers_util.GetTestFilePath('rgbsmall.tif')
+    filepath = gdrivers_util.GetTestFilePath('gtiff/rgbsmall.tif')
     self.CheckOpen(filepath, check_driver=False)
     self.assertEqual(self.src.RasterCount, 3)
     self.CheckBand(1, 21212, gdal.GDT_Byte)
@@ -200,7 +200,8 @@ class Jp2kakTest(gdrivers_util.DriverTestCase):
 
   def testLosslessCopyInt16(self):
     # Matches upstream jp2kak_18 and jp2kak_19.
-    tests = (('int16.tif', gdal.GDT_Int16), ('uint16.tif', gdal.GDT_UInt16))
+    tests = (('gtiff/int16.tif', gdal.GDT_Int16), ('gtiff/uint16.tif',
+                                                   gdal.GDT_UInt16))
     for filename, gdal_type in tests:
       filepath = gdrivers_util.GetTestFilePath(filename)
       self.CheckOpen(filepath, check_driver=False)
@@ -224,6 +225,36 @@ class Jp2kakTest(gdrivers_util.DriverTestCase):
 
   # TODO(schwehr): Rewrite test case jp2kak_21.
 
+
+@gdrivers_util.SkipIfDriverMissing(DRIVER)
+class Jp2kakReadTest(gdrivers_util.DriverTestCase):
+
+  def setUp(self):
+    super(Jp2kakReadTest, self).setUp(DRIVER, EXT)
+
+  def getTestFilePath(self, filename):
+    return gdrivers_util.GetTestFilePath(os.path.join('jpeg2k', filename))
+
+  def testDriver(self):
+    self.CheckDriver()
+
+  def testInfo(self):
+    for base in [
+        'byte_without_geotransform', 'byte_nogeoref', 'byte_2gcps',
+        'byte_point', 'int16', 'byte_gmljp2_with_nul_car',
+        'gmljp2_epsg3035_easting_northing', 'inconsitant_geojp2_gmljp2',
+        'rgbwcmyk01_YeGeo_kakadu', 'byte_tile_2048',
+        'float32_ieee754_split_reversible', 'small_200ppcm', 'int16_lossless',
+        'byte_with_xmp', 'stefan_full_rgba_alpha_1bit',
+        'gmljp2_dtedsm_epsg_4326_axes',
+        'gmljp2_dtedsm_epsg_4326_axes_alt_offsetVector', 'rgb16_ecwsdk', 'byte',
+        'gtsmall_10_uint16', 'gtsmall_11_int16', 'IMG_md_ple',
+        '3_13bit_and_1bit', 'll', 'erdas_foo',
+        'byte_palette'
+    ]:
+      filepath = self.getTestFilePath(base + EXT)
+      self.CheckOpen(filepath)
+      self.CheckInfo()
 
 if __name__ == '__main__':
   unittest.main()

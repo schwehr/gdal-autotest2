@@ -20,14 +20,22 @@
 //   http://www.gdal.org/drv_geojson.html
 //   https://trac.osgeo.org/gdal/browser/trunk/autotest/ogr/ogr_geojson.py
 
+#include <functional>
 #include <memory>
+#include <string>
 
-#include "gmock.h"
+#include "file/base/path.h"
 #include "gunit.h"
 #include "autotest2/cpp/util/cpl_memory.h"
 #include "gcore/gdal.h"
+#include "gcore/gdal_priv.h"
 #include "ogr/ogr_api.h"
+#include "ogr/ogr_core.h"
+#include "ogr/ogr_geometry.h"
 #include "ogr/ogrsf_frmts/ogrsf_frmts.h"
+#include "ogr/ogr_feature.h"
+#include "port/cpl_error.h"
+#include "port/cpl_vsi.h"
 
 using std::unique_ptr;
 
@@ -80,7 +88,7 @@ TEST_F(GeoJsonTest, Point) {
   ASSERT_NE(nullptr, layer);
   ASSERT_EQ(wkbPoint, layer->GetGeomType());
   ASSERT_EQ(1, layer->GetFeatureCount());
-  ASSERT_STREQ("OGRGeoJSON", layer->GetName());
+  ASSERT_STREQ("point", layer->GetName());
 
   OGRFeatureDefn *defn = layer->GetLayerDefn();
   ASSERT_EQ(0, defn->GetFieldCount());
@@ -147,7 +155,7 @@ TEST_F(GeoJsonTest, LineWithFields) {
   ASSERT_NE(nullptr, layer);
   ASSERT_EQ(wkbLineString, layer->GetGeomType());
   ASSERT_EQ(1, layer->GetFeatureCount());
-  ASSERT_STREQ("OGRGeoJSON", layer->GetName());
+  ASSERT_STREQ("linestring", layer->GetName());
 
   OGRFeatureDefn *defn = layer->GetLayerDefn();
   ASSERT_EQ(2, defn->GetFieldCount());
@@ -224,7 +232,7 @@ TEST_F(GeoJsonTest, CreatePoint) {
   ASSERT_NE(nullptr, layer);
   EXPECT_EQ(wkbPoint, layer->GetGeomType());
   ASSERT_EQ(1, layer->GetFeatureCount());
-  EXPECT_STREQ("OGRGeoJSON", layer->GetName());
+  EXPECT_STREQ("a_layer", layer->GetName());
 
   unique_ptr<OGRFeature> feature(layer->GetNextFeature());
   OGRGeometry *geometry = feature->GetGeometryRef();

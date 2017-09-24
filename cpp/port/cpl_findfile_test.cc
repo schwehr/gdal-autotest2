@@ -16,8 +16,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <string>
+
+#include "googletest.h"
 #include "gunit.h"
 #include "gcore/gdal_priv.h"
+#include "port/cpl_conv.h"
+#include "port/cpl_vsi.h"
 
 namespace {
 

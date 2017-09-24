@@ -16,6 +16,9 @@
 
 Assumes that gdal must be built with geotiff support.
 """
+
+import contextlib
+import json
 import os
 import unittest
 
@@ -74,7 +77,7 @@ class DriverTest(gdrivers_util.DriverTestCase):
     self.assertRaises(AssertionError, self.CheckOpen, '/missing')
     self.assertRaises(AssertionError, self.CheckOpen, 'missing_relative')
     if 'aaigrid' in gdrivers_util.drivers:
-      filepath = gdrivers_util.GetTestFilePath('pixel_per_line.asc')
+      filepath = gdrivers_util.GetTestFilePath('aaigrid/pixel_per_line.asc')
       self.CheckOpen(filepath)
       self.driver_name = 'junk driver'
       self.assertRaises(AssertionError, self.CheckOpen, filepath)
@@ -119,6 +122,64 @@ class DriverTest(gdrivers_util.DriverTestCase):
     self.assertRaises(AssertionError, self.CheckBand, band_num, checksum,
                       data_type, nodata - 1)
 
+
+@contextlib.contextmanager
+def TempRemoveEnv(key):
+  original = os.getenv(key)
+  os.environ.pop(key, None)
+
+  try:
+    yield
+  finally:
+    if original is not None:
+      os.environ[key] = original
+
+
+class OtherFunctionsTest(unittest.TestCase):
+
+  def testGetExtentField(self):
+    self.assertEqual(
+        'extent',
+        gdrivers_util._GetExtentField(
+            json.loads('{"extent":{"type":"Polygon", "coordinates":[[]]}}')))
+    self.assertEqual(
+        'wgs84Extent',
+        gdrivers_util._GetExtentField(
+            json.loads(
+                '{"wgs84Extent":{"type":"Polygon", "coordinates":[[]]}}')))
+
+    self.assertIsNone(
+        gdrivers_util._GetExtentField(
+            json.loads('{"wgs84Extent": "foo","extent": "bar"}')))
+    self.assertIsNone(gdrivers_util._GetExtentField(json.loads('{}')))
+
+  def testMaybeWriteOutputFile(self):
+    undeclared = 'TEST_UNDECLARED_OUTPUTS_DIR'
+    filename_noexist = 'noexist.txt'
+    data_noexist = 'Bad Wolf'
+
+    # If there is no undeclared location, do the best we can.
+    if undeclared not in os.environ:
+      gdrivers_util.MaybeWriteOutputFile(filename_noexist, data_noexist)
+      # No way to check this.
+      return
+
+    # Verify that we can write a file to the undeclared location.
+    filename_exists = 'ignore_me.txt'
+    data = 'Sample write to ' + undeclared
+    gdrivers_util.MaybeWriteOutputFile(filename_exists, data)
+    self.assertEqual(
+        data,
+        open(os.path.join(os.getenv(undeclared),
+                          filename_exists)).read())
+
+    # Verify that nothing is written if we unset the environment variable
+    # and try writing.
+    filepath_noexist = os.path.join(os.getenv(undeclared), filename_noexist)
+
+    with TempRemoveEnv(undeclared):
+      gdrivers_util.MaybeWriteOutputFile(filename_noexist, data_noexist)
+      self.assertFalse(os.path.exists(filepath_noexist))
 
 if __name__ == '__main__':
   unittest.main()

@@ -26,10 +26,10 @@
 #include <cstdlib>
 #include <functional>
 #include <memory>
-#include <string>
 
 #include "gunit.h"
 #include "autotest2/cpp/util/error_handler.h"
+#include "port/cpl_port.h"
 
 using std::unique_ptr;
 
@@ -37,6 +37,8 @@ namespace autotest2 {
 namespace {
 
 typedef unique_ptr<char *, std::function<void(char **)>> StringListPtr;
+
+constexpr int CSLT_NOFLAGS = 0x0000;  // TODO(schwehr): Move to cpl_string.h.
 
 TEST(CslStringTest, CslNullptr) {
   // Tests CSLCount and CSLAddString.
@@ -419,8 +421,6 @@ TEST(CslStringTest, TestCSLTokenizeString) {
 //   CSLTokenizeStringComplex - Deprecated.  Will not test.
 
 TEST(CslStringTest, TestCSLTokenizeString2) {
-  constexpr int CSLT_NOFLAGS = 0x0000;  // TODO(schwher): Move to cpl_string.h.
-
   unique_ptr<char *, std::function<void(char **)>> result(
       CSLTokenizeString2(nullptr, nullptr, CSLT_NOFLAGS), CSLDestroy);
   ASSERT_NE(nullptr, result);
@@ -625,6 +625,13 @@ TEST(CslStringTest, TestCSLTokenizeString2) {
   result.reset(CSLTokenizeString2("\"", " ", CSLT_PRESERVEESCAPES));
   ASSERT_EQ(1, CSLCount(result.get()));
   EXPECT_STREQ("\"", result.get()[0]);
+}
+
+TEST(CslStringTest, TestCSLTokenizeString2_b63363493) {
+  unique_ptr<char *, std::function<void(char **)>> result(
+      CSLTokenizeString2("(:)", ",:()", CSLT_NOFLAGS), CSLDestroy);
+  ASSERT_NE(nullptr, result);
+  EXPECT_EQ(nullptr, result.get()[0]);
 }
 
 //   CPLSPrintf

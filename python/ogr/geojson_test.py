@@ -84,56 +84,56 @@ class OgrGeoJsonTest(ogr_util.DriverTestCase):
     filepath = ogr_util.GetTestFilePath('point.geojson')
     src = self.CheckOpen(filepath)
     self.assertEqual(src.GetLayerCount(), 1)
-    layer = src.GetLayerByName(DEFAULT_LAYER_NAME)
-    self.CheckLayer(layer, DEFAULT_LAYER_NAME, 1, ogr.wkbPoint, 0,
+    layer = src.GetLayerByName('point')
+    self.CheckLayer(layer, 'point', 1, ogr.wkbPoint, 0,
                     (100.0, 100.0, 0.0, 0.0))
 
   def test03Line(self):
     filepath = ogr_util.GetTestFilePath('linestring.geojson')
     src = self.CheckOpen(filepath)
     self.assertEqual(src.GetLayerCount(), 1)
-    layer = src.GetLayerByName(DEFAULT_LAYER_NAME)
-    self.CheckLayer(layer, DEFAULT_LAYER_NAME, 1, ogr.wkbLineString, 0,
+    layer = src.GetLayerByName('linestring')
+    self.CheckLayer(layer, 'linestring', 1, ogr.wkbLineString, 0,
                     (100.0, 101.0, 0.0, 1.0))
 
   def test04Polygon(self):
     filepath = ogr_util.GetTestFilePath('polygon.geojson')
     src = self.CheckOpen(filepath)
     self.assertEqual(src.GetLayerCount(), 1)
-    layer = src.GetLayerByName(DEFAULT_LAYER_NAME)
-    self.CheckLayer(layer, DEFAULT_LAYER_NAME, 1, ogr.wkbPolygon, 0,
+    layer = src.GetLayerByName('polygon')
+    self.CheckLayer(layer, 'polygon', 1, ogr.wkbPolygon, 0,
                     (100.0, 101.0, 0.0, 1.0))
 
   def test05GeometryCollection(self):
     filepath = ogr_util.GetTestFilePath('geometrycollection.geojson')
     src = self.CheckOpen(filepath)
     self.assertEqual(src.GetLayerCount(), 1)
-    layer = src.GetLayerByName(DEFAULT_LAYER_NAME)
-    self.CheckLayer(layer, DEFAULT_LAYER_NAME, 1, ogr.wkbGeometryCollection, 0,
+    layer = src.GetLayerByName('geometrycollection')
+    self.CheckLayer(layer, 'geometrycollection', 1, ogr.wkbGeometryCollection, 0,
                     (100.0, 102.0, 0.0, 1.0))
 
   def test06MultiPoint(self):
     filepath = ogr_util.GetTestFilePath('multipoint.geojson')
     src = self.CheckOpen(filepath)
     self.assertEqual(src.GetLayerCount(), 1)
-    layer = src.GetLayerByName(DEFAULT_LAYER_NAME)
-    self.CheckLayer(layer, DEFAULT_LAYER_NAME, 1, ogr.wkbMultiPoint, 0,
+    layer = src.GetLayerByName('multipoint')
+    self.CheckLayer(layer, 'multipoint', 1, ogr.wkbMultiPoint, 0,
                     (100.0, 101.0, 0.0, 1.0))
 
   def test07MultiLineString(self):
     filepath = ogr_util.GetTestFilePath('multilinestring.geojson')
     src = self.CheckOpen(filepath)
     self.assertEqual(src.GetLayerCount(), 1)
-    layer = src.GetLayerByName(DEFAULT_LAYER_NAME)
-    self.CheckLayer(layer, DEFAULT_LAYER_NAME, 1, ogr.wkbMultiLineString, 0,
+    layer = src.GetLayerByName('multilinestring')
+    self.CheckLayer(layer, 'multilinestring', 1, ogr.wkbMultiLineString, 0,
                     (100.0, 103.0, 0.0, 3.0))
 
   def test08MultiPolygon(self):
     filepath = ogr_util.GetTestFilePath('multipolygon.geojson')
     src = self.CheckOpen(filepath)
     self.assertEqual(src.GetLayerCount(), 1)
-    layer = src.GetLayerByName(DEFAULT_LAYER_NAME)
-    self.CheckLayer(layer, DEFAULT_LAYER_NAME, 1, ogr.wkbMultiPolygon, 0,
+    layer = src.GetLayerByName('multipolygon')
+    self.CheckLayer(layer, 'multipolygon', 1, ogr.wkbMultiPolygon, 0,
                     (100.0, 103.0, 0.0, 3.0))
 
   # TODO(schwehr): Implement test 9.
@@ -143,8 +143,8 @@ class OgrGeoJsonTest(ogr_util.DriverTestCase):
     filepath = ogr_util.GetTestFilePath('srs_name.geojson')
     src = self.CheckOpen(filepath)
     self.assertEqual(src.GetLayerCount(), 1)
-    layer = src.GetLayerByName(DEFAULT_LAYER_NAME)
-    self.CheckLayer(layer, DEFAULT_LAYER_NAME, 1, ogr.wkbGeometryCollection, 0,
+    layer = src.GetLayerByName('srs_name')
+    self.CheckLayer(layer, 'srs_name', 1, ogr.wkbGeometryCollection, 0,
                     (100.0, 102.0, 0.0, 1.0))
 
     srs = layer.GetSpatialRef()

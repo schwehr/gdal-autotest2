@@ -98,7 +98,7 @@ class VsiFileTest(unittest.TestCase):
     self.GenericVerify('/vsimem/vsifile_1.bin')
 
   def testRealFile(self):
-    with does_not_exist.TemporaryDirectory(base_path=somewhere) as temp_dir:
+    with file_util.TemporaryDirectory(base_path=FLAGS.test_tmpdir) as temp_dir:
       self.GenericVerify(os.path.join(temp_dir, 'vsifile_2.bin'))
 
   # TODO(schwehr): Implement the equivalent of test vsifile_4 to vsifile_8.

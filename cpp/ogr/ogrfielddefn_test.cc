@@ -1,3 +1,5 @@
+// Tests ogrfielddefn.cpp.
+//
 // Copyright 2017 Google Inc. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,6 +19,7 @@
 #include "port/cpl_port.h"
 
 #include <memory>   // NOLINT(build/include_order)
+#include <string>   // NOLINT(build/include_order)
 #include <utility>  // NOLINT(build/include_order)
 #include <vector>   // NOLINT(build/include_order)
 
@@ -27,10 +30,11 @@
 namespace autotest2 {
 namespace {
 
-const auto& kAllTypes = {
-    OFTInteger,    OFTIntegerList,    OFTRealList,     OFTString, OFTStringList,
-    OFTWideString, OFTWideStringList, OFTBinary,       OFTDate,   OFTTime,
-    OFTDateTime,   OFTInteger64,      OFTInteger64List};
+const auto& kAllTypes = {OFTInteger,    OFTIntegerList,    OFTReal,
+                         OFTRealList,   OFTString,         OFTStringList,
+                         OFTWideString, OFTWideStringList, OFTBinary,
+                         OFTDate,       OFTTime,           OFTDateTime,
+                         OFTInteger64,  OFTInteger64List};
 
 TEST(OgrFieldDefnTest, NullptrAndIntCheckDefaults) {
   const auto fd = gtl::MakeUnique<OGRFieldDefn>(nullptr, OFTInteger);

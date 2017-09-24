@@ -18,6 +18,8 @@
 
 #include "gunit.h"
 #include "ogr/ogrsf_frmts/geojson/libjson/json.h"
+#include "ogr/ogrsf_frmts/geojson/libjson/json_object.h"
+#include "ogr/ogrsf_frmts/geojson/libjson/symbol_renames.h"
 
 // #include <json.h>
 

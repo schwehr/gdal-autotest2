@@ -14,10 +14,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <string>
 #include <unordered_set>
 
 #include "gunit.h"
 #include "autotest2/cpp/util/error_handler.h"
+#include "gcore/gdal.h"
+#include "gcore/gdal_frmts.h"
 #include "gcore/gdal_priv.h"
 
 namespace {
@@ -49,8 +52,7 @@ class GDALDriverManagerTest : public ::testing::Test {
 };
 
 // This test checks loading all gives a reasonable number of drivers.
-// TODO(schwehr): Make this test more general.
-TEST_F(GDALDriverManagerTest, DISABLED_DriverCount) {
+TEST_F(GDALDriverManagerTest, DriverCount) {
   // Never expect this to happen, but good to check at least once.
   ASSERT_NE(nullptr, manager_);
 
@@ -68,7 +70,7 @@ TEST_F(GDALDriverManagerTest, DISABLED_DriverCount) {
   // If you enable more drivers, set this number to the new total number of
   // drivers and make sure that there are C++ and Python tests for
   // every active driver.
-  EXPECT_EQ(31, manager_->GetDriverCount());
+  EXPECT_EQ(28, manager_->GetDriverCount());
 }
 
 // This test verifies that a single driver config works.

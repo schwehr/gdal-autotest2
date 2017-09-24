@@ -17,7 +17,7 @@
 # This is a complete rewrite of a file licensed as follows:
 #
 # Copyright (c) 2007, Frank Warmerdam <warmerdam@pobox.com>
-# Copyright (c) 2008-2014, Even Rouault <even dot rouault at mines-paris dot org>
+# Copyright (c) 2008-2014, Even Rouault <even dot rouault at mines-paris.org>
 #
 # Permission is hereby granted, free of charge, to any person obtaining a
 # copy of this software and associated documentation files (the "Software"),
@@ -54,20 +54,25 @@ import os
 
 from osgeo import gdal
 import unittest
+from autotest2.gcore import gcore_util
 from autotest2.gdrivers import gdrivers_util
 
+DRIVER = gdrivers_util.JPEG_DRIVER
 EXT = '.jpg'
 
 
-@gdrivers_util.SkipIfDriverMissing(gdrivers_util.JPEG_DRIVER)
+@gdrivers_util.SkipIfDriverMissing(DRIVER)
 class JpegTest(gdrivers_util.DriverTestCase):
 
   def setUp(self):
-    super(JpegTest, self).setUp(gdrivers_util.JPEG_DRIVER, EXT)
+    super(JpegTest, self).setUp(DRIVER, EXT)
+
+  def getTestFilePath(self, filename):
+    return gdrivers_util.GetTestFilePath(os.path.join(DRIVER, filename))
 
   def testJpegSimpleRead1(self):
     self.CheckDriver()
-    filepath = gdrivers_util.GetTestFilePath('albania.jpg')
+    filepath = self.getTestFilePath('albania.jpg')
     self.CheckOpen(filepath)
     self.CheckGeoTransform((0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
     prj_expected = ''  # No projection.
@@ -77,7 +82,7 @@ class JpegTest(gdrivers_util.DriverTestCase):
     self.CheckBand(3, 20715, gdal.GDT_Byte, None)
 
   def testMetadataExifFilelist2(self):
-    filepath = gdrivers_util.GetTestFilePath('albania.jpg')
+    filepath = self.getTestFilePath('albania.jpg')
     self.CheckOpen(filepath)
 
     expected_metadata = {
@@ -113,6 +118,21 @@ class JpegTest(gdrivers_util.DriverTestCase):
     self.assertEqual(os.path.basename(file_list[0]), 'albania.jpg')
 
   # TODO(schwehr): Port tests 3-25.
+
+  def testFailCreateCopyOnEmpty26(self):
+    src = gdal.GetDriverByName('Mem').Create('', 70000, 1)
+    with gcore_util.ErrorHandler('CPLQuietErrorHandler'):
+      dst = self.driver.CreateCopy('/vsimem/jpeg_26.jpg', src)
+      self.assertIsNone(dst)
+
+  def testInfo(self):
+    with gcore_util.ErrorHandler('CPLQuietErrorHandler'):
+      for base in ('albania', 'black_with_white_exif_ovr', 'byte_with_xmp',
+                   'masked', 'rgb_ntf_cmyk', 'rgbsmall_rgb', 'small_world',
+                   'vophead'):
+        filepath = self.getTestFilePath(base + EXT)
+        self.CheckOpen(filepath)
+        self.CheckInfo()
 
 if __name__ == '__main__':
   unittest.main()

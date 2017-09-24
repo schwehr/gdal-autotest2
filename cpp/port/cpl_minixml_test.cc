@@ -19,15 +19,12 @@
 
 #include "port/cpl_minixml.h"
 
-#include <limits>
-#include <cstdio>
-#include <memory>
 #include <set>
 #include <string>
 
 #include "gunit.h"
+#include "autotest2/cpp/util/cpl_memory_closer.h"
 #include "port/cpl_conv.h"
-#include "cpp/util/cpl_memory_closer.h"
 
 namespace autotest2 {
 namespace {
@@ -36,26 +33,16 @@ namespace {
 // out of scope.  Only the top level node should be in a CPLXMLTreeCloser.
 class CPLXMLTreeCloser {
  public:
-  explicit CPLXMLTreeCloser(CPLXMLNode *data) {
-    the_data_ = data;
-  }
-
-  ~CPLXMLTreeCloser() {
-    if (the_data_)
-      CPLDestroyXMLNode(the_data_);
-  }
+  explicit CPLXMLTreeCloser(CPLXMLNode *tree) : tree_(tree) {}
+  // CPLDestroyXMLNode handles nullptr.
+  ~CPLXMLTreeCloser() { CPLDestroyXMLNode(tree_); }
 
   // Modifying the contents pointed to by the return is allowed.
-  CPLXMLNode* get() const {
-    return the_data_;
-  }
-
-  CPLXMLNode* operator->() const {
-    return get();
-  }
+  CPLXMLNode *get() const { return tree_; }
+  CPLXMLNode *operator->() const { return get(); }
 
  private:
-  CPLXMLNode* the_data_;
+  CPLXMLNode *tree_;
 };
 
 

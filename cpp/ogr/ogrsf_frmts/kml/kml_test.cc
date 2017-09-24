@@ -21,12 +21,20 @@
 //   https://trac.osgeo.org/gdal/browser/trunk/autotest/ogr/ogr_kml.py
 
 #include <memory>
+#include <string>
 
+#include "file/base/path.h"
+#include "googletest.h"
 #include "gunit.h"
 #include "autotest2/cpp/util/cpl_memory.h"
+#include "gcore/gdal.h"
 #include "gcore/gdal_priv.h"
 #include "ogr/ogr_api.h"
 #include "ogr/ogrsf_frmts/ogrsf_frmts.h"
+#include "ogr/ogr_core.h"
+#include "ogr/ogr_feature.h"
+#include "ogr/ogr_geometry.h"
+#include "port/cpl_error.h"
 
 using std::unique_ptr;
 

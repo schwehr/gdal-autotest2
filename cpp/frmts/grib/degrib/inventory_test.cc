@@ -33,39 +33,7 @@
 namespace autotest2 {
 namespace {
 
-// using gdal::grib::InventoryWrapper;
-
-// Thin layer to manage allocation and deallocation.
-class InventoryWrapper {
- public:
-  explicit InventoryWrapper(const string &filepath)
-      : inv_(nullptr), inv_len_(0), num_messages_(0) {
-    FileDataSource grib(filepath.c_str());
-    GRIB2Inventory(grib, &inv_, &inv_len_, 0 /* all messages */,
-                   &num_messages_);
-  }
-  ~InventoryWrapper() {
-    if (inv_ == nullptr) return;
-    for (int i = 0; i < inv_len_; i++) {
-      GRIB2InventoryFree(inv_ + i);
-    }
-    free(inv_);
-  }
-
-  // Modifying the contents pointed to by the return is allowed.
-  inventoryType *const get(int i) const {
-    if (i < 0 || i >= inv_len_) return nullptr;
-    return inv_ + i;
-  }
-
-  size_t length() const { return inv_len_; }
-  size_t num_messages() const { return num_messages_; }
-
- private:
-  inventoryType *inv_;
-  uInt4 inv_len_;
-  int num_messages_;
-};
+using gdal::grib::InventoryWrapper;
 
 const char kTestData[] =
     "autotest2/cpp/frmts/grib/degrib/testdata/";
@@ -112,7 +80,7 @@ TEST(InventoryTest, RequestOnlyOneMessage) {
   free(inv);
 }
 
-TEST(InventorTest, AllWithOnlyOne) {
+TEST(InventoryTest, AllWithOnlyOne) {
   const string filepath =
       file::JoinPath(FLAGS_test_srcdir, kTestData, "constant_field.grib2");
   InventoryWrapper inventories(filepath);
@@ -120,7 +88,7 @@ TEST(InventorTest, AllWithOnlyOne) {
   ASSERT_EQ(1, inventories.num_messages());
 }
 
-TEST(InventorTest, AllWith2By2) {
+TEST(InventoryTest, AllWith2By2) {
   const string filepath =
       file::JoinPath(FLAGS_test_srcdir, kTestData, "test_uuid.grib2");
   InventoryWrapper inventories(filepath);
@@ -128,7 +96,7 @@ TEST(InventorTest, AllWith2By2) {
   ASSERT_EQ(2, inventories.num_messages());
 }
 
-TEST(InventorTest, AllWith21By1) {
+TEST(InventoryTest, AllWith21By1) {
   const string filepath =
       file::JoinPath(FLAGS_test_srcdir, kTestData, "multi_created.grib2");
   InventoryWrapper inventories(filepath);

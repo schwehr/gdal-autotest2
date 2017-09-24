@@ -26,10 +26,13 @@
 #include <string>
 
 #include "gunit.h"
-
+#include "gcore/gdal.h"
 #include "gcore/gdal_frmts.h"
 #include "gcore/gdal_priv.h"
+#include "ogr/ogr_core.h"
 #include "ogr/ogr_spatialref.h"
+#include "port/cpl_conv.h"
+#include "port/cpl_error.h"
 
 using std::unique_ptr;
 

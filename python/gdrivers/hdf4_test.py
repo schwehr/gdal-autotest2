@@ -21,7 +21,7 @@ from osgeo import gdal
 import unittest
 from autotest2.gdrivers import gdrivers_util
 
-
+DRIVER_BASE = gdrivers_util.HDF4_DRIVER
 DRIVER = gdrivers_util.HDF4IMAGE_DRIVER
 EXT = '.hdf'
 
@@ -31,6 +31,9 @@ class Hdf4Test(gdrivers_util.DriverTestCase):
 
   def setUp(self):
     super(Hdf4Test, self).setUp(DRIVER, EXT)
+
+  def getTestFilePath(self, filename):
+    return gdrivers_util.GetTestFilePath(os.path.join(DRIVER_BASE, filename))
 
   def testReadSimple(self):
     filename_info = [
@@ -51,7 +54,7 @@ class Hdf4Test(gdrivers_util.DriverTestCase):
 
     for filename, gdal_type in filename_info:
       self.CheckDriver()
-      filepath = gdrivers_util.GetTestFilePath(os.path.join('hdf4', filename))
+      filepath = self.getTestFilePath(filename)
       self.CheckOpen(filepath)
       self.CheckGeoTransform((440720.0, 60.0, 0, 3751320.0, 0, -60.0))
       prj_expected = """PROJCS["UTM",
@@ -75,7 +78,7 @@ class Hdf4Test(gdrivers_util.DriverTestCase):
 
     for filename in filename_info:
       self.CheckDriver()
-      filepath = gdrivers_util.GetTestFilePath(os.path.join('hdf4', filename))
+      filepath = self.getTestFilePath(filename)
       self.CheckOpen(filepath)
       self.CheckGeoTransform((440720.0, 60.0, 0, 3751320.0, 0, -60.0))
       prj_expected = """PROJCS["NAD27 / UTM zone 11N",

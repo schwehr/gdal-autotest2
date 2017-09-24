@@ -20,6 +20,7 @@
 #include <utility>
 #include <vector>
 
+#include "logging.h"
 #include "third_party/absl/memory/memory.h"
 #include "ogr/ogr_api.h"
 #include "ogr/ogr_core.h"
@@ -30,18 +31,15 @@ namespace autotest2 {
 
 // Constructs instances of OGRFeatureDefn.
 //
-// Assumes that there is only one geometry column and that the defaults for
-// other Field and Feature attributes are okay or will be overridden after the
-// instance is returned.
+// Does not follow GDAL's internal default of having an initial geometry column.
+// You must add all geometry columns.
 //
 // Use wkbUnknown for features that can have any type of geometry.
 //
-// OGRFeatureDefn always starts with one geometry that defaults to being named
-// "geo".
-//
 // Example:
 //
-//   OGRFeatureDefnBuilder builder("schema", wkbPoint);
+//   OGRFeatureDefnBuilder builder("schema");
+//   builder.AddGeom("geo", wkbPoint);
 //   builder.AddField("bool", OFTInteger, OFSTBoolean);
 //   builder.AddField("real", OFTReal, OFSTNone);
 //   OGRFeatureDefnReleaser fd(builder.Build());
@@ -50,29 +48,26 @@ namespace autotest2 {
 
 class OGRFeatureDefnBuilder {
  public:
-  OGRFeatureDefnBuilder(const char* name, OGRwkbGeometryType geom_type)
-      : has_first_geometry_(false), feature_defn_(new OGRFeatureDefn(name)) {
+  OGRFeatureDefnBuilder(const char* name)
+      : feature_defn_(new OGRFeatureDefn(name)) {
     feature_defn_->Reference();
-    feature_defn_->SetGeomType(geom_type);
+    feature_defn_->SetGeomType(wkbNone);
   }
   ~OGRFeatureDefnBuilder() {
     if (feature_defn_ != nullptr) feature_defn_->Release();
   }
 
   void AddGeom(const char* name, OGRwkbGeometryType geom_type) {
-    // A FeatureDefn starts with one geometry that an empty string as the name.
-    if (!has_first_geometry_) {
-      has_first_geometry_ = true;
-      feature_defn_->GetGeomFieldDefn(0)->SetName(name);
-      feature_defn_->SetGeomType(geom_type);
-      return;
-    }
+    CHECK(feature_defn_ != nullptr) << "No changes allowed after build";
+    CHECK(geom_type != wkbNone) << "wkbNone is not allowed";
 
     OGRGeomFieldDefn field_defn(name, geom_type);
     feature_defn_->AddGeomFieldDefn(&field_defn);
   }
 
   void AddField(const char* name, OGRFieldType type, OGRFieldSubType subtype) {
+    CHECK(feature_defn_ != nullptr) << "No changes allowed after build";
+
     OGRFieldDefn field_defn(name, type);
     field_defn.SetSubType(subtype);
     feature_defn_->AddFieldDefn(&field_defn);
@@ -86,11 +81,6 @@ class OGRFeatureDefnBuilder {
       return nullptr;
     }
 
-    if (!has_first_geometry_) {
-      // Give the default geometry a name other than the empty string.
-      feature_defn_->GetGeomFieldDefn(0)->SetName("geo");
-    }
-
     // Set feature_defn_ to nullptr to block reuse of the builder.
     auto feature_defn = feature_defn_;
     feature_defn_ = nullptr;
@@ -98,7 +88,6 @@ class OGRFeatureDefnBuilder {
   }
 
  private:
-  bool has_first_geometry_;
   OGRFeatureDefn* feature_defn_;
 };
 

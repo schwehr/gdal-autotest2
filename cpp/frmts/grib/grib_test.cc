@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests Kakadu GRIB raster driver.
+// Tests GRIB raster driver.
 //
 // See also:
 //   http://www.gdal.org/frmt_grib.html
@@ -50,7 +50,7 @@ TEST_F(GribTest, Basics) {
   const string filepath = file::JoinPath(
       FLAGS_test_srcdir, string(kTestData),
       "regular_latlon_surface_constant.grib2");
-  auto src = gtl::WrapUnique(static_cast<GDALDataset *>(
+  auto src = absl::WrapUnique(static_cast<GDALDataset *>(
       GDALOpenEx(filepath.c_str(), GDAL_OF_READONLY | GDAL_OF_RASTER, nullptr,
                  nullptr, nullptr)));
   ASSERT_NE(nullptr, src);

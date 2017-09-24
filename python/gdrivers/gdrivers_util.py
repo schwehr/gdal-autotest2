@@ -169,6 +169,54 @@ XPM_DRIVER = 'xpm'
 XYZ_DRIVER = 'xyz'
 ZMAP_DRIVER = 'zmap'
 
+# A string copy of byte.tif so that tests do not need to depend on all of the
+# tiff data to get a simple tiff for basic tests.
+TIFF_BYTE_FILE = (
+    '\x49\x49\x2a\x00\x98\x01\x00\x00\x6b\x7b\x84\x73\x84\x84\x8c\x84\x84'
+    '\x84\x6b\x84\x6b\x84\x84\x6b\x7b\x73\x9c\x94\x73\x84\x6b\x7b\x94\x73'
+    '\xa5\x73\x8c\x6b\x7b\x7b\x63\x84\x7b\x84\x84\x84\x63\x9c\x73\x84\x8c'
+    '\x84\x7b\x73\x8c\x6b\x8c\x73\x84\x7b\x6b\x84\x84\x73\x73\x6b\x73\x6b'
+    '\x94\x84\x7b\x7b\x73\x84\x84\x7b\x73\x7b\x73\x7b\x6b\x73\x94\x6b\x73'
+    '\x8c\x73\x84\x84\x9c\x84\x8c\x84\x84\x73\x73\x73\x7b\x94\x7b\xa5\x7b'
+    '\x84\x6b\x6b\x84\x9c\x7b\xbd\xad\xad\x94\x94\x73\x94\x7b\x6b\x84\x73'
+    '\x84\x9c\x63\x7b\x73\x84\x84\xce\x6b\xc5\xad\x94\x8c\x8c\x84\x63\x84'
+    '\x7b\x73\x8c\x84\x84\x63\x84\x7b\x84\xad\x7b\x73\x94\x7b\x94\x73\x94'
+    '\x7b\x8c\x7b\x6b\x73\x84\x73\x6b\x73\x63\x7b\x63\xb5\x63\x6b\x7b\x73'
+    '\x84\x73\x7b\x84\x73\x84\x84\x7b\x7b\x84\x63\x73\x63\x7b\x84\x73\x73'
+    '\x6b\x8c\x8c\x63\x8c\x63\x73\x7b\x6b\x84\x6b\x73\x6b\x73\x7b\x84\x7b'
+    '\x6b\x7b\x84\x84\x84\x84\x84\x7b\x63\x84\x7b\x6b\x94\x63\x73\x7b\x8c'
+    '\xad\x7b\x6b\x7b\x7b\x7b\x6b\x7b\x7b\x7b\x6b\x8c\x7b\x7b\x73\x73\x5a'
+    '\x6b\xad\x6b\x6b\x6b\x6b\x63\x84\x7b\x73\xad\x94\x63\x7b\x7b\x6b\x7b'
+    '\x63\x6b\xbd\xad\x6b\x73\x73\x6b\x63\x8c\x6b\xad\x8c\x94\x84\x84\x6b'
+    '\x7b\x63\x63\x73\x63\x84\x63\x8c\x73\x94\x7b\x63\x84\x7b\x94\x8c\x8c'
+    '\x6b\x8c\x5a\x6b\x73\x6b\x5a\x63\x7b\x73\x73\x73\x7b\x7b\x94\x73\x94'
+    '\x63\x84\xa5\x94\x9c\x7b\x6b\x6b\x6b\x73\x8c\x63\x73\x63\x63\x6b\x73'
+    '\x84\x73\x5a\x7b\x73\xbd\xad\x8c\x8c\xa5\x73\x84\x5a\x63\x73\x5a\x63'
+    '\x63\x6b\x63\x84\x63\x6b\x84\x84\x9c\xb5\x8c\xad\x7b\x84\x63\x73\x7b'
+    '\x4a\x73\x63\x7b\x8c\x9c\x84\xa5\x8c\x8c\x63\xad\xf7\xff\xce\x84\x6b'
+    '\x8c\x7b\x94\x84\xa5\xa5\x94\x8c\x84\x7b\x6b\x7b\x6b\x7b\xb5\xb5\x9c'
+    '\x94\x9c\x9c\x9c\xb5\x84\x94\x73\x84\x6b\x6b\x6b\x6b\x6b\x73\x63\x6b'
+    '\x0f\x00\x00\x01\x03\x00\x01\x00\x00\x00\x14\x00\x00\x00\x01\x01\x03'
+    '\x00\x01\x00\x00\x00\x14\x00\x00\x00\x02\x01\x03\x00\x01\x00\x00\x00'
+    '\x08\x00\x00\x00\x03\x01\x03\x00\x01\x00\x00\x00\x01\x00\x00\x00\x06'
+    '\x01\x03\x00\x01\x00\x00\x00\x01\x00\x00\x00\x11\x01\x04\x00\x01\x00'
+    '\x00\x00\x08\x00\x00\x00\x15\x01\x03\x00\x01\x00\x00\x00\x01\x00\x00'
+    '\x00\x16\x01\x03\x00\x01\x00\x00\x00\x14\x00\x00\x00\x17\x01\x04\x00'
+    '\x01\x00\x00\x00\x90\x01\x00\x00\x1c\x01\x03\x00\x01\x00\x00\x00\x01'
+    '\x00\x00\x00\x53\x01\x03\x00\x01\x00\x00\x00\x01\x00\x00\x00\x0e\x83'
+    '\x0c\x00\x03\x00\x00\x00\x52\x02\x00\x00\x82\x84\x0c\x00\x06\x00\x00'
+    '\x00\x6a\x02\x00\x00\xaf\x87\x03\x00\x18\x00\x00\x00\x9a\x02\x00\x00'
+    '\xb1\x87\x02\x00\x16\x00\x00\x00\xca\x02\x00\x00\x00\x00\x00\x00\x00'
+    '\x00\x00\x00\x00\x00\x4e\x40\x00\x00\x00\x00\x00\x00\x4e\x40\x00\x00'
+    '\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+    '\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+    '\x40\xe6\x1a\x41\x00\x00\x00\x00\xcc\x9e\x4c\x41\x00\x00\x00\x00\x00'
+    '\x00\x00\x00\x01\x00\x01\x00\x00\x00\x05\x00\x00\x04\x00\x00\x01\x00'
+    '\x01\x00\x01\x04\x00\x00\x01\x00\x01\x00\x02\x04\xb1\x87\x15\x00\x00'
+    '\x00\x00\x0c\x00\x00\x01\x00\x57\x68\x04\x0c\x00\x00\x01\x00\x29\x23'
+    '\x4e\x41\x44\x32\x37\x20\x2f\x20\x55\x54\x4d\x20\x7a\x6f\x6e\x65\x20'
+    '\x31\x31\x4e\x7c\x00')
+
 
 def SkipIfDriverMissing(driver_name):
   """Decorator that only runs a test if a required driver is found.
@@ -196,8 +244,10 @@ def SkipIfDriverMissing(driver_name):
 
 def GetTestFilePath(filename):
   return os.path.join(
-      os.path.split(os.path.abspath(__file__))[0],
-      'testdata',
+      FLAGS.test_srcdir,
+      'autotest2/gdrivers/testdata',
+             os.path.split(os.path.abspath(__file__))[0],
+             'testdata',
       filename
       )
 
@@ -462,6 +512,22 @@ class DriverTestCase(unittest.TestCase):
 
     return self.dst
 
+  def CheckCreateCopySimple(self, data):
+    """Try to make a copy from vsimem to the format under test in vsimem.
+
+    Args:
+      data: Contents of the source tif file to write to vsimem.
+    """
+    filepath = '/vsimem/create_copy_simple.tif'
+
+    with gcore_util.GdalUnlinkWhenDone(filepath):
+      dst = gdal.VSIFOpenL(filepath, 'wb')
+      gdal.VSIFWriteL(data, 1, len(data), dst)
+      gdal.VSIFCloseL(dst)
+
+      self.CheckOpen(filepath, check_driver=GTIFF_DRIVER)
+      self.CheckCreateCopy(vsimem=True, remove_result=True)
+
   def CheckInfo(self):
     """Use a golden json dump to see if the current read matches.
 
@@ -473,6 +539,14 @@ class DriverTestCase(unittest.TestCase):
     options = gdal.InfoOptions(
         format='json', computeMinMax=True, stats=True, computeChecksum=True)
     result = gdal.Info(self.src, options=options)
+    # Save in case of failure.
+    result_json = json.dumps(result)
+    basename_json = os.path.basename(self.filepath) + '.json'
+
+    # Some drivers include the version number and a difference is okay as long
+    # as the driverShortName is the same, it's okay.
+    expect.pop('driverLongName')
+    result.pop('driverLongName')
 
     description_expect = expect.pop('description')
     description_result = result.pop('description')
@@ -480,25 +554,65 @@ class DriverTestCase(unittest.TestCase):
 
     files_expect = expect.pop('files')
     files_result = result.pop('files')
-    self.assertEqual(len(files_result), len(files_expect))
+    self.assertEqual(len(files_result), len(files_expect),
+                     '%s versus %s' % (files_result, files_expect))
     for filepath_result, filepath_expect in zip(files_result, files_expect):
       self.assertEqual(os.path.basename(filepath_result), filepath_expect)
 
-    extent_expect = expect.pop('wgs84Extent')['coordinates'][0]
-    extent_result = result.pop('wgs84Extent')['coordinates'][0]
+    extent_expect_field = _GetExtentField(expect)
+    extent_result_field = _GetExtentField(result)
+
+    if not extent_expect_field or extent_expect_field != extent_result_field:
+      MaybeWriteOutputFile(basename_json, result_json)
+      self.assertEqual(extent_expect_field, extent_result_field, self.filepath)
+
+    extent_expect = expect.pop(extent_expect_field)['coordinates'][0]
+    extent_result = result.pop(extent_result_field)['coordinates'][0]
+
     self.assertEqual(len(extent_result), len(extent_expect))
     for a, b in zip(extent_result, extent_expect):
       self.assertAlmostEqual(a[0], b[0], places=2, msg=self.filepath)
 
     bands_expect = expect.pop('bands')
     bands_result = result.pop('bands')
-    self.assertEqual(bands_result, bands_expect, self.filepath)
+    if bands_result != bands_expect:
+      MaybeWriteOutputFile(basename_json, result_json)
+      self.assertEqual(bands_result, bands_expect, self.filepath)
 
     srs_wkt_expect = expect.pop('coordinateSystem')['wkt']
     srs_wkt_result = result.pop('coordinateSystem')['wkt']
     if srs_wkt_expect:
       srs_expect = osr.SpatialReference(wkt=str(srs_wkt_expect))
       srs_result = osr.SpatialReference(wkt=str(srs_wkt_result))
-      self.assertTrue(srs_expect.IsSame(srs_result), self.filepath)
+      if not srs_expect.IsSame(srs_result):
+        MaybeWriteOutputFile(basename_json, result_json)
+        self.assertTrue(srs_expect.IsSame(srs_result), self.filepath)
 
-    self.assertEqual(result, expect, self.filepath)
+    if result != expect:
+      MaybeWriteOutputFile(basename_json, result_json)
+      self.assertEqual(result, expect, self.filepath)
+
+
+def _GetExtentField(json_info):
+  """The extent field must be only one of extent or wgs84Extent."""
+  has_extent = 'extent' in json_info
+  has_wgs84 = 'wgs84Extent' in json_info
+
+  if has_extent and not has_wgs84:
+    return 'extent'
+  if not has_extent and has_wgs84:
+    return 'wgs84Extent'
+
+  return None
+
+
+def MaybeWriteOutputFile(filename, data):
+  """Write a file from a test if allowed."""
+
+  if 'TEST_UNDECLARED_OUTPUTS_DIR' not in os.environ:
+    logging.error('Not allowed to write from the test.')
+    return
+
+  output_dir = os.environ['TEST_UNDECLARED_OUTPUTS_DIR']
+  filepath = os.path.join(output_dir, os.path.basename(filename))
+  open(filepath, 'w').write(data)

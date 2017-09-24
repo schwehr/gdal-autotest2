@@ -25,6 +25,7 @@
 #include "file/base/path.h"
 #include "gmock.h"
 #include "gunit.h"
+#include "autotest2/cpp/util/vsimem.h"
 #include "port/cpl_vsi.h"
 
 namespace {
@@ -79,7 +80,50 @@ TEST(CplVsiGzipTest, Read) {
     // Look for some text in the original file.
     EXPECT_THAT(buf, testing::ContainsRegex("end"));
   }
+
+  // Read from vsimem.
+  const char kCountGz[] =
+      "\x1f\x8b\x08\x08\x27\x82\xda\x58\x02\x03\x63\x6f\x75\x6e\x74\x00\x4d\xc6"
+      "\xab\x01\x00\x20\x08\x40\xc1\xce\x34\x80\xfc\xdc\x47\xab\xfb\x47\xeb\xbb"
+      "\x74\xaa\xe6\x2b\xb2\x7a\xb6\x18\xee\xf8\xc2\x03\x4f\xbc\xf0\xc6\x07\xdf"
+      "\xf8\x7d\x47\xe4\x03\x9c\xa1\xb4\x30\x7d\x00\x00\x00";
+
+  const char kFilename[] = "/vsimem/a";
+  const string data(reinterpret_cast<const char *>(kCountGz),
+                    CPL_ARRAYSIZE(kCountGz) - 1);
+  autotest2::VsiMemTempWrapper wrapper(kFilename, data);
+
+  // Read raw.
+  {
+    char buf[kBufSize] = {};
+    VSILFILE *file = VSIFOpenL(kFilename, "r");
+    ASSERT_NE(nullptr, file);
+    CplVsiLFileCloser closer(file);
+    EXPECT_EQ(kCompressedSize, VSIFReadL(buf, 1, kBufSize - 1, file));
+
+    // The gzip file contains the original filename.
+    EXPECT_THAT(buf, testing::ContainsRegex("count"));
+  }
+
+  // Read uncompressed.
+  {
+    // Note the double slash: //
+    // A single slash between the two vsi paths does not work:
+    //   /vsigzip/vsimem/a
+    char buf[kBufSize] = {};
+    VSILFILE *file = VSIFOpenL("/vsigzip//vsimem/a", "r");
+    ASSERT_NE(nullptr, file);
+    CplVsiLFileCloser closer(file);
+    EXPECT_EQ(kUncompressedSize, VSIFReadL(buf, 1, kBufSize - 1, file));
+
+    // Look for some text in the original file.
+    EXPECT_THAT(buf, testing::ContainsRegex("end"));
+  }
 }
+
+// TODO(schwehr): Test opening an empty file that claims to be a gzip.
+// TODO(schwehr): Test non-empty files that claims to be a gzip, but is not.
+// TODO(schwehr): Test corrupt gzip file(s).
 
 // Test how stat behaves outside and inside of gzipped file.
 TEST(CplVsiGzipTest, Stat) {

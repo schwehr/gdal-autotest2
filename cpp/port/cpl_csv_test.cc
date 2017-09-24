@@ -27,6 +27,8 @@
 
 #include "gmock.h"
 #include "gunit.h"
+#include "autotest2/cpp/util/cpl_cstringlist.h"
+#include "autotest2/cpp/util/vsimem.h"
 #include "port/cpl_string.h"
 #include "port/cpl_vsi.h"
 
@@ -38,40 +40,6 @@ using testing::StartsWith;
 
 namespace autotest2 {
 namespace {
-
-// Writes a buffer to an in-memory filesystem and deletes the file when the
-// instance goes out of scope.
-//
-// For testing only.  Terminates the process if there are any errors.
-//
-// TODO(schwehr): Move to util.
-class VsiMemTempWrapper {
- public:
-  VsiMemTempWrapper(const string &filename, const string &data)
-      : filename_(filename) {
-    VSILFILE *file = VSIFOpenL(filename.c_str(), "wb");
-    CHECK_NE(nullptr, file);
-    CHECK_EQ(1, VSIFWriteL(data.c_str(), data.length(), 1, file));
-    CHECK_EQ(0, VSIFCloseL(file));
-  }
-  ~VsiMemTempWrapper() { CHECK_EQ(0, VSIUnlink(filename_.c_str())); }
-
- private:
-  string filename_;
-};
-
-// TODO(schwehr): Move to util.  Also in shape_test.cc.
-typedef unique_ptr<char *, std::function<void(char **)>> StringListPtr;
-
-// TODO(schwehr): Move to util.  Also in shape_test.cc.
-std::vector<string> CslToVector(const char *const *string_list) {
-  if (string_list == nullptr) return {};
-  std::vector<string> result;
-  for (; *string_list != NULL; ++string_list) {
-    result.push_back(*string_list);
-  }
-  return result;
-}
 
 // TODO(schwehr): Test CSVDeaccess.
 // TODO(schwehr): Test CSVDetectSeperator.

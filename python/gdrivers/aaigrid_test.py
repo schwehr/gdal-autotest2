@@ -53,19 +53,22 @@ import unittest
 from osgeo import gdal
 from autotest2.gdrivers import gdrivers_util
 
+DRIVER = gdrivers_util.AAIGRID_DRIVER
 EXT = '.asc'
-TEST_FILE = 'pixel_per_line.asc'
 
 
-@gdrivers_util.SkipIfDriverMissing(gdrivers_util.AAIGRID_DRIVER)
+@gdrivers_util.SkipIfDriverMissing(DRIVER)
 class AaigridTest(gdrivers_util.DriverTestCase):
 
   def setUp(self):
-    super(AaigridTest, self).setUp(gdrivers_util.AAIGRID_DRIVER, EXT)
+    super(AaigridTest, self).setUp(DRIVER, EXT)
+
+  def getTestFilePath(self, filename):
+    return gdrivers_util.GetTestFilePath(os.path.join(DRIVER, filename))
 
   def testSimpleRead(self):
     self.CheckDriver()
-    filepath = gdrivers_util.GetTestFilePath(TEST_FILE)
+    filepath = self.getTestFilePath('pixel_per_line.asc')
     self.CheckOpen(filepath)
     self.CheckGeoTransform((100000.0, 50, 0, 650600.0, 0, -50))
     prj_expected = """PROJCS["unnamed",
@@ -92,20 +95,20 @@ class AaigridTest(gdrivers_util.DriverTestCase):
     self.CheckBand(1, 1123, gdal.GDT_Float32, -99999)
 
   def testComma(self):
-    filepath = gdrivers_util.GetTestFilePath('pixel_per_line_comma.asc')
+    filepath = self.getTestFilePath('pixel_per_line_comma.asc')
     self.CheckOpen(filepath)
     self.CheckGeoTransform((100000, 50, 0, 650600, 0, -50))
     self.CheckBand(1, 1123, gdal.GDT_Float32, -99999)
 
   @gdrivers_util.SkipIfDriverMissing(gdrivers_util.GTIFF_DRIVER)
   def testCreateCopy(self):
-    filepath = gdrivers_util.GetTestFilePath('byte.tif')
+    filepath = gdrivers_util.GetTestFilePath('gtiff/byte.tif')
     self.CheckOpen(filepath, check_driver=False)
     self.CheckBand(1, 4672, gdal.GDT_Byte)
     self.CheckCreateCopy()
 
   def testCaseSensitive(self):
-    filepath = gdrivers_util.GetTestFilePath('case_sensitive.ASC')
+    filepath = self.getTestFilePath('case_sensitive.ASC')
     self.CheckOpen(filepath)
     self.CheckBand(1, 1123)
     self.CheckBandSubRegion(1, 187, 5, 5, 5, 5)
@@ -133,12 +136,12 @@ class AaigridTest(gdrivers_util.DriverTestCase):
     self.CheckProjection(prj_expected)
 
   def testNoDataFloat(self):
-    filepath = gdrivers_util.GetTestFilePath('nodata_float.asc')
+    filepath = self.getTestFilePath('nodata_float.asc')
     self.CheckOpen(filepath)
     self.CheckBand(1, 278, gdal.GDT_Float32, -99999)
 
   def testAai06Int(self):
-    filepath = gdrivers_util.GetTestFilePath('nodata_int.asc')
+    filepath = self.getTestFilePath('nodata_int.asc')
     self.CheckOpen(filepath)
     self.CheckBand(1, 278, gdal.GDT_Int32, -99999)
 
@@ -150,7 +153,7 @@ class AaigridTest(gdrivers_util.DriverTestCase):
     self.CheckCreateCopy()
 
   def testAai08MemoryCopy(self):
-    filepath = gdrivers_util.GetTestFilePath('byte.tif')
+    filepath = gdrivers_util.GetTestFilePath('gtiff/byte.tif')
     self.CheckOpen(filepath, check_driver=False)
     self.CheckBand(1, 4672)
     self.CheckCreateCopy(vsimem=True)
@@ -168,7 +171,7 @@ class AaigridTest(gdrivers_util.DriverTestCase):
   def testAai10DatatypeConfig(self):
     with gdrivers_util.ConfigOption('AAIGRID_DATATYPE', 'Float64'):
       self.assertEqual(gdal.GetConfigOption('AAIGRID_DATATYPE'), 'Float64')
-      filepath = gdrivers_util.GetTestFilePath('float64.asc')
+      filepath = self.getTestFilePath('float64.asc')
       xml_file = filepath + '.xml'
       if os.path.exists(xml_file):
         os.remove(xml_file)
@@ -177,6 +180,19 @@ class AaigridTest(gdrivers_util.DriverTestCase):
     band = self.src.GetRasterBand(1)
     self.assertEqual(band.DataType, gdal.GDT_Float64)
 
+  # TODO(schwehr): Rewrite test 11.
+  # TODO(schwehr): Rewrite test 12.
+  # TODO(schwehr): Rewrite test 13.
+  # TODO(schwehr): Rewrite test 14.
+  # TODO(schwehr): Rewrite test 15.
+
+  def testInfo(self):
+    for base in ('case_sensitive.ASC', 'float64.asc', 'nodata_float.asc',
+                 'nodata_int.asc', 'pixel_per_line.asc',
+                 'pixel_per_line_comma.asc'):
+      filepath = self.getTestFilePath(base)
+      self.CheckOpen(filepath)
+      self.CheckInfo()
 
 if __name__ == '__main__':
   unittest.main()
