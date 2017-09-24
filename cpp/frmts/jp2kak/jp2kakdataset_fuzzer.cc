@@ -19,6 +19,9 @@
 #include <memory>
 #include <string>
 
+#include "logging.h"
+#include "third_party/absl/memory/memory.h"
+#include "autotest2/cpp/fuzzers/gdal.h"
 #include "autotest2/cpp/util/vsimem.h"
 #include "gcore/gdal.h"
 #include "gcore/gdal_priv.h"
@@ -34,9 +37,13 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   int result = JP2KAKDataset::Identify(open_info.get());
   CHECK_LE(-1, result);
   CHECK_GE(1, result);
-  GDALDataset *dataset = JP2KAKDataset::Open(open_info.get());
-  if (dataset == nullptr)
-      return 0;
-  delete dataset;
+
+  auto dataset = absl::WrapUnique(JP2KAKDataset::Open(open_info.get()));
+
+  if (dataset == nullptr) return 0;
+
+  autotest2::GDALFuzzOneInput(dataset.get());
+
   return 0;
 }
+

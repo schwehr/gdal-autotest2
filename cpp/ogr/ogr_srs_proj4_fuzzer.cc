@@ -16,6 +16,8 @@
 #include <stdint.h>
 #include <string>
 
+#include "third_party/absl/strings/internal/str_split_internal.h"
+#include "third_party/absl/strings/str_split.h"
 #include "autotest2/cpp/util/cpl_cstringlist.h"
 #include "autotest2/cpp/util/error_handler.h"
 #include "ogr/ogr_spatialref.h"

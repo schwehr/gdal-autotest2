@@ -19,14 +19,16 @@
 
 #include "logging.h"
 #include "third_party/absl/memory/memory.h"
+#include "autotest2/cpp/fuzzers/ogr.h"
 #include "autotest2/cpp/util/error_handler.h"
 #include "autotest2/cpp/util/vsimem.h"
 #include "gcore/gdal.h"
 #include "gcore/gdal_priv.h"
+#include "ogr/ogrsf_frmts/geojson/libjson/json_object.h"
 #include "ogr/ogrsf_frmts/geojson/ogr_geojson.h"
 #include "ogr/ogrsf_frmts/geojson/ogrgeojsonutils.h"
-#include "port/cpl_port.h"
 #include "port/cpl_error.h"
+#include "port/cpl_port.h"
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   WithQuietHandler handler;
@@ -35,10 +37,14 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   const string data2(reinterpret_cast<const char *>(data), size);
   autotest2::VsiMemTempWrapper wrapper(kFilename, data2);
   auto open_info =
-        gtl::MakeUnique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
+      gtl::MakeUnique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
   std::unique_ptr<OGRGeoJSONDataSource> dataset(new OGRGeoJSONDataSource);
   const int result = dataset->Open(open_info.get(), eGeoJSONSourceFile);
   CHECK(result == FALSE || result == TRUE);
-  // TODO(schwehr): Try to go through the rows.
+
+  if (result == FALSE) return 0;
+
+  autotest2::OGRFuzzOneInput(dataset.get());
+
   return 0;
 }

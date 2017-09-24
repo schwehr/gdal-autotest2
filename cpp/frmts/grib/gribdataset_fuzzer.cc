@@ -19,6 +19,8 @@
 
 #include "logging.h"
 #include "third_party/absl/memory/memory.h"
+#include "autotest2/cpp/fuzzers/gdal.h"
+#include "autotest2/cpp/util/error_handler.h"
 #include "autotest2/cpp/util/vsimem.h"
 #include "frmts/grib/gribdataset.h"
 #include "gcore/gdal.h"
@@ -28,12 +30,18 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   const char kFilename[] = "/vsimem/a.grib";
   const string data2(reinterpret_cast<const char *>(data), size);
   autotest2::VsiMemTempWrapper wrapper(kFilename, data2);
+
+  WithQuietHandler error_handler;
   auto open_info =
       gtl::MakeUnique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
   int result = GRIBDataset::Identify(open_info.get());
   CHECK_LE(-1, result);
   CHECK_GE(1, result);
-  auto dataset = gtl::WrapUnique(GRIBDataset::Open(open_info.get()));
+  auto dataset = absl::WrapUnique(GRIBDataset::Open(open_info.get()));
+
+  if (dataset == nullptr) return 0;
+
+  autotest2::GDALFuzzOneInput(dataset.get());
 
   return 0;
 }
