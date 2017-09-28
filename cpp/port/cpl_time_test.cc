@@ -16,8 +16,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// The GDAL progress handler setup does not expose the scaled progress data
-// cleanly, so it is difficult to test.
+// See also:
+//
+//   https://tools.ietf.org/html/rfc822
+//   https://tools.ietf.org/html/rfc2445
+//   https://tools.ietf.org/html/rfc3339
+
 
 #include <time.h>
 #include <cstdlib>
@@ -130,4 +134,111 @@ TEST(TimeTest, FuzzRandomTime) {
     time_result = CPLUnixTimeToYMDHMS(test_seconds, &time);
     ASSERT_EQ(test_seconds, CPLYMDHMSToUnixTime(&time));
   }
+}
+
+TEST(DirectRfc822Test, NullPointers) {
+  EXPECT_FALSE(CPLParseRFC822DateTime(nullptr, nullptr, nullptr, nullptr,
+                                      nullptr, nullptr, nullptr, nullptr,
+                                      nullptr));
+}
+
+constexpr int kUndefined = -9999;
+
+class Rfc822Test : public ::testing::Test {
+ protected:
+  bool Check(const char* rfc822datetime) {
+    int result = CPLParseRFC822DateTime(rfc822datetime, &year_, &month_, &day_,
+                                     &hour_, &minute_, &second_, &tzflag_,
+                                     &weekday_);
+    CHECK(result == FALSE || result == TRUE);
+    return CPL_TO_BOOL(result);
+  }
+
+  int year_ = kUndefined;
+  int month_ = kUndefined;
+  int day_ = kUndefined;
+  int hour_ = kUndefined;
+  int minute_ = kUndefined;
+  int second_ = kUndefined;
+  int tzflag_ = kUndefined;
+  int weekday_ = kUndefined;
+};
+
+TEST_F(Rfc822Test, BasicFails) {
+  EXPECT_FALSE(Check(""));
+  EXPECT_EQ(kUndefined, year_);
+  EXPECT_EQ(kUndefined, month_);
+  EXPECT_EQ(kUndefined, day_);
+  EXPECT_EQ(kUndefined, hour_);
+  EXPECT_EQ(kUndefined, minute_);
+  EXPECT_EQ(kUndefined, second_);
+  EXPECT_EQ(kUndefined, tzflag_);
+  EXPECT_EQ(kUndefined, weekday_);
+
+  day_ = kUndefined;
+  EXPECT_FALSE(Check("0 Dec 1 05:24:17"));
+  EXPECT_EQ(kUndefined, day_);
+  EXPECT_FALSE(Check("32 Dec 301 05:24:17"));
+  EXPECT_EQ(kUndefined, day_);
+  EXPECT_FALSE(Check("100 Dec 301 05:24:17"));
+  EXPECT_EQ(kUndefined, day_);
+
+  // Out of range day
+  EXPECT_FALSE(Check("-1 Dec 1 05:24:17"));
+  EXPECT_EQ(kUndefined, day_);
+}
+
+TEST_F(Rfc822Test, Basic) {
+  EXPECT_TRUE(Check("28 Dec 2007 05:24:17"));
+  EXPECT_EQ(2007, year_);
+  EXPECT_EQ(12, month_);
+  EXPECT_EQ(28, day_);
+  EXPECT_EQ(5, hour_);
+  EXPECT_EQ(24, minute_);
+  EXPECT_EQ(17, second_);
+  EXPECT_EQ(0, tzflag_);
+  EXPECT_EQ(0, weekday_);
+}
+
+TEST_F(Rfc822Test, NoSeconds) {
+  EXPECT_TRUE(Check("28 Dec 2007 05:24"));
+  EXPECT_EQ(2007, year_);
+  EXPECT_EQ(12, month_);
+  EXPECT_EQ(28, day_);
+  EXPECT_EQ(5, hour_);
+  EXPECT_EQ(24, minute_);
+  EXPECT_EQ(-1, second_);
+  EXPECT_EQ(0, tzflag_);
+  EXPECT_EQ(0, weekday_);
+}
+
+TEST_F(Rfc822Test, NoDayOrTimeZone) {
+  EXPECT_TRUE(Check("28 Dec 2007 05:24:17"));
+  EXPECT_EQ(2007, year_);
+  EXPECT_EQ(12, month_);
+  EXPECT_EQ(28, day_);
+  EXPECT_EQ(5, hour_);
+  EXPECT_EQ(24, minute_);
+  EXPECT_EQ(17, second_);
+  EXPECT_EQ(0, tzflag_);
+  EXPECT_EQ(0, weekday_);
+}
+
+TEST_F(Rfc822Test, SmallYear) {
+  EXPECT_TRUE(Check("28 Dec 1 05:24:17"));
+  EXPECT_EQ(2001, year_);
+  EXPECT_TRUE(Check("28 Dec 301 05:24:17"));
+  EXPECT_EQ(301, year_);
+}
+
+TEST_F(Rfc822Test, DayAndTimeZone) {
+  EXPECT_TRUE(Check("Fri 28 Dec 2007 05:24:17 GMT"));
+  EXPECT_EQ(2007, year_);
+  EXPECT_EQ(12, month_);
+  EXPECT_EQ(28, day_);
+  EXPECT_EQ(5, hour_);
+  EXPECT_EQ(24, minute_);
+  EXPECT_EQ(17, second_);
+  EXPECT_EQ(100, tzflag_);
+  EXPECT_EQ(5, weekday_);
 }
