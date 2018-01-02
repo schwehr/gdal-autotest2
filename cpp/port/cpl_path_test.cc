@@ -16,7 +16,11 @@
 
 #include "port/cpl_conv.h"
 
+#include <cstdlib>
+#include <string>
+
 #include "gunit.h"
+#include "third_party/absl/types/optional.h"
 #include "gcore/gdal_priv.h"
 
 namespace {
@@ -162,7 +166,32 @@ TEST(CplPathTest, CPLCleanTrailingSlash) {
   EXPECT_STREQ("abc", CPLCleanTrailingSlash("abc"));
 }
 
-// TODO(schwehr): Write tests for CPLCorrespondingPaths and
-// CPLGenerateTempFilename.
+// TODO(schwehr): Test CPLCorrespondingPaths
+// TODO(schwehr): Test CPLGenerateTempFilename
+// TODO(schwehr): Test CPLExpandTilde
+
+class CPLSaveEnv {
+ public:
+  CPLSaveEnv(const char *key) : key_(key) {
+    const char *value = getenv(key);
+    if (value != nullptr) value_ = value;
+  }
+  ~CPLSaveEnv() {
+    if (value_.has_value())
+      setenv(key_.c_str(), value_.value().c_str(), 1 /* overwrite*/);
+  }
+
+ private:
+  const string key_;
+  absl::optional<string> value_;
+};
+
+TEST(CplPathTest, CPLGetHomeDir) {
+  CPLSaveEnv saved_home("HOME");
+  unsetenv("HOME");
+  EXPECT_EQ(nullptr, CPLGetHomeDir());
+  setenv("HOME", "/home/someone", 1);
+  EXPECT_STREQ("/home/someone", CPLGetHomeDir());
+}
 
 }  // namespace
