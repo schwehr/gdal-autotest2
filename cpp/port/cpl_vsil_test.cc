@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "gunit.h"
+#include "cpp/util/error_handler.h"
 #include "gcore/gdal.h"
 #include "gcore/gdal_priv.h"
 #include "port/cpl_vsi.h"
@@ -82,10 +83,15 @@ TEST(CplVsiFileManagerTest, FailToOpenExistingFile) {
 
   const string path("/dummy/foo.tif");
 
-  GDALDataset *foo =
-      reinterpret_cast<GDALDataset*>(GDALOpen(path.c_str(), GA_ReadOnly));
+  {
+    // Suppress '`/dummy/foo.tif' not recognized as a supported file format.'
+    WithQuietHandler error_handler;
 
-  ASSERT_EQ(nullptr, foo);
+    GDALDataset *foo =
+      reinterpret_cast<GDALDataset*>(GDALOpen(path.c_str(), GA_ReadOnly));
+    ASSERT_EQ(nullptr, foo);
+  }
+
   // Also searches for /dummy/foo.tif.xml in GDAL 2.*.
   ASSERT_TRUE(dummy_handler->stat_last_path_.find(path) != std::string::npos);
   ASSERT_TRUE(dummy_handler->open_last_path_.find(path) != std::string::npos);
