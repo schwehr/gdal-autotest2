@@ -20,9 +20,11 @@
 #include <vector>
 
 #include "logging.h"
+#include "file/base/path.h"
 #include "gmock.h"
 #include "gunit.h"
 #include "third_party/absl/memory/memory.h"
+#include "autotest2/cpp/util/cpl_cstringlist.h"
 #include "autotest2/cpp/util/error_handler.h"
 #include "autotest2/cpp/util/vsimem.h"
 #include "gcore/gdal.h"
@@ -35,13 +37,16 @@
 namespace autotest2 {
 namespace {
 
+constexpr char kTestData[] =
+    "autotest2/cpp/frmts/gtiff/testdata/";
+
 constexpr char kDriverName[] = "GTiff";
 
 class GTiffTest : public ::testing::Test {
  public:
   std::unique_ptr<GDALDataset> OpenReadOnly(const string& filename) {
-    auto open_info = gtl::MakeUnique<GDALOpenInfo>(filename.c_str(),
-                                                   GDAL_OF_READONLY, nullptr);
+    auto open_info = absl::make_unique<GDALOpenInfo>(filename.c_str(),
+                                                     GDAL_OF_READONLY, nullptr);
     auto dataset = absl::WrapUnique(driver_->pfnOpen(open_info.get()));
     return dataset;
   }
@@ -105,7 +110,7 @@ TEST_F(GTiffTest, CreateSimplest) {
   GDALDataType data_type = GDT_Byte;
   {
     char** options = nullptr;
-    auto dataset = gtl::WrapUnique<GDALDataset>(driver_->Create(
+    auto dataset = absl::WrapUnique<GDALDataset>(driver_->Create(
         kFilename, width, height, num_bands, data_type, options));
     ASSERT_NE(nullptr, dataset);
 
@@ -138,6 +143,55 @@ TEST_F(GTiffTest, CreateSimplest) {
   EXPECT_EQ(0, buf[1]);
 }
 
+TEST_F(GTiffTest, Overviews) {
+  const string filepath =
+      file::JoinPath(FLAGS_test_srcdir, kTestData, "with-overviews.tif");
+  const auto dataset = OpenReadOnly(filepath);
+  ASSERT_NE(nullptr, dataset);
+
+  EXPECT_EQ(1, dataset->GetRasterCount());
+
+  const auto band = dataset->GetRasterBand(1);
+  EXPECT_EQ(3, band->GetOverviewCount());
+
+  // Note that bands are indexed starting at 1, but overviews start at 0.
+  const auto overview0 = band->GetOverview(0);
+  ASSERT_NE(nullptr, overview0);
+  EXPECT_EQ(250, overview0->GetXSize());
+  EXPECT_EQ(125, overview0->GetYSize());
+  const auto overview2 = band->GetOverview(2);
+  ASSERT_NE(nullptr, overview2);
+  EXPECT_EQ(63, overview2->GetXSize());
+  EXPECT_EQ(32, overview2->GetYSize());
+  EXPECT_EQ(nullptr, band->GetOverview(3));
+}
+
+TEST_F(GTiffTest, OverviewFile) {
+  // Tiff file plus a separate overview sidecar.
+  const string filepath =
+      file::JoinPath(FLAGS_test_srcdir, kTestData, "with-overview-file.tif");
+  const auto dataset = OpenReadOnly(filepath);
+  ASSERT_NE(nullptr, dataset);
+
+  char** filelist_tmp = dataset->GetFileList();
+  auto filelist = autotest2::CslToVector(filelist_tmp);
+  CSLDestroy(filelist_tmp);
+  EXPECT_THAT(filelist, testing::ElementsAre(
+                            testing::EndsWith("with-overview-file.tif"),
+                            testing::EndsWith("with-overview-file.tif.ovr")));
+
+  EXPECT_EQ(1, dataset->GetRasterCount());
+
+  const auto band = dataset->GetRasterBand(1);
+  EXPECT_EQ(1, band->GetOverviewCount());
+
+  const auto overview0 = band->GetOverview(0);
+  ASSERT_NE(nullptr, overview0);
+  EXPECT_EQ(63, overview0->GetXSize());
+  EXPECT_EQ(32, overview0->GetYSize());
+  EXPECT_EQ(nullptr, band->GetOverview(1));
+}
+
 TEST(GTiffBad, TooManyBlocks) {
   // Image with more than 2G blocks in a single band.
   // Based on tiff_read_toomanyblocks().
@@ -155,8 +209,8 @@ TEST(GTiffBad, TooManyBlocks) {
       "\x03\x00\x01\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00";
   const string data2(reinterpret_cast<const char*>(data), CPL_ARRAYSIZE(data));
   autotest2::VsiMemTempWrapper wrapper(kFilename, data2);
-  auto open_info = gtl::MakeUnique<GDALOpenInfo>(kFilename,
-                                                 GDAL_OF_READONLY, nullptr);
+  auto open_info =
+      absl::make_unique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
 
   GDALDriver *driver_ = GetGDALDriverManager()->GetDriverByName(kDriverName);
 
@@ -183,8 +237,8 @@ TEST(GTiffBad, TooManyBlocksSeparate) {
       "\x00\x00\x00\x00\x00\x73\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
   const string data2(reinterpret_cast<const char*>(data), CPL_ARRAYSIZE(data));
   autotest2::VsiMemTempWrapper wrapper(kFilename, data2);
-  auto open_info = gtl::MakeUnique<GDALOpenInfo>(kFilename,
-                                                 GDAL_OF_READONLY, nullptr);
+  auto open_info =
+      absl::make_unique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
 
   GDALDriver *driver_ = GetGDALDriverManager()->GetDriverByName(kDriverName);
 
