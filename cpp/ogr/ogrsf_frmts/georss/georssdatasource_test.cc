@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Tests OGRGeoRSSDataSource.
+//
+// See also:
+//   http://www.gdal.org/drv_georss.html
+//   https://trac.osgeo.org/gdal/browser/trunk/autotest/ogr/ogr_georss.py
+
 #include <memory>
 
 #include "file/base/path.h"

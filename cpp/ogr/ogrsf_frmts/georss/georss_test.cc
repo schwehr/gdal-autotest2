@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests MITAB OGR driver.
+// Tests GeoRSS OGR driver.
 //
 // See also:
-//   http://www.gdal.org/drv_mitab.html
-//   https://trac.osgeo.org/gdal/browser/trunk/autotest/ogr/ogr_mitab.py
+//   http://www.gdal.org/drv_georss.html
+//   https://trac.osgeo.org/gdal/browser/trunk/autotest/ogr/ogr_georss.py
 
 #include <memory>
 #include <string>
