@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<rss xmlns:georss="http://www.georss.org/georss" version="2.0">
+<channel>
+<title>Test Dummy GeoRSS Feed</title>
+<link>http://www.google.com/link</link>
+<description>http://www.google.com/description</description>
+<pubDate>11 Jan 2018 18:58:05 EST</pubDate>
+<lastBuildDate>11 Jan 2018 18:58:05 EST</lastBuildDate>
+<generator>Some Generator Version</generator>
+<item>
+<title>Title 1</title>
+<link>http://www.google.com/link1</link>
+<description>description 1</description>
+<guid>1</guid>
+<pubDate>11 Jan 2018 18:58:05 EST</pubDate>
+<georss:point>37.4219999 -122.08405749999997</georss:point>
+</item>
+<item>
+<title>Title 2</title>
+<link>http://www.google.com/link2</link>
+<description>description 2</description>
+<guid>2</guid>
+<pubDate>11 Jan 2018 18:58:05 EST</pubDate>
+<georss:point>37.4228694 -122.08806070000003</georss:point>
+</item>
+</channel>
+</rss>
