@@ -226,7 +226,27 @@ TEST(CPLString, replaceAllChaining) {
   EXPECT_EQ("-123!@#-", str.replaceAll("abc", '$').replaceAll("$", "-"));
 }
 
-// Tests parsing of URL key-value pairs.
+/
+TEST(CPLString, EndsWithEmpty) {
+  CPLString str("");
+  EXPECT_TRUE(str.endsWith(str));
+  EXPECT_TRUE(str.endsWith(""));
+  EXPECT_FALSE(str.endsWith("a"));
+  EXPECT_FALSE(str.endsWith(" "));
+}
+
+TEST(CPLString, EndsWith) {
+  CPLString str("abc123");
+  EXPECT_TRUE(str.endsWith(str));
+  EXPECT_TRUE(str.endsWith(""));
+  EXPECT_TRUE(str.endsWith("abc123"));
+  EXPECT_TRUE(str.endsWith("3"));
+  EXPECT_FALSE(str.endsWith("a"));
+  EXPECT_FALSE(str.endsWith("abc12"));
+  EXPECT_FALSE(str.endsWith(" abc123"));
+}
+
+/ Tests parsing of URL key-value pairs.
 TEST(CPLString, UrlGetValue) {
   CPLString str = CPLURLGetValue("", "");
   EXPECT_EQ("", str);
