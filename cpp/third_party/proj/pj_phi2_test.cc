@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "third_party/proj4/proj/src/projects.h"
-
 #include <cmath>
 #include <limits>
 
 #include "gunit.h"
+#include "src/projects.h"
 
 namespace {
 
