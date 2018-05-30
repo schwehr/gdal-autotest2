@@ -17,10 +17,10 @@ import contextlib
 import glob
 import os
 import subprocess
+import unittest
 
 from pyglib import flags
 from pyglib import resources
-import unittest
 
 FLAGS = flags.FLAGS
 
@@ -34,21 +34,28 @@ def TempSetEnv(key, value):
 
   If there was no prior environment variable with that name, it removes that
   variable from the environment when exiting the context.
+
+  Args:
+    key: (str) The name of the environment variable to set.
+    value: (str) What string value to set the variable to.
+
+  Yields:
+    None.  The goal is to provide the side effect in os.environ.
   """
-  if key not in os.environ:
+  if key in os.environ:
+    # pylint: disable=lost-exception
+    original = os.environ[key]
+    try:
+      os.environ[key] = value
+      yield
+    finally:
+      os.environ[key] = original
+  else:
     try:
       os.environ[key] = value
       yield
     finally:
       del os.environ[key]
-      return
-
-  original = os.environ[key]
-  try:
-    os.environ[key] = value
-    yield
-  finally:
-    os.environ[key] = original
 
 
 @contextlib.contextmanager
@@ -60,19 +67,26 @@ def TempUnSetEnv(key):
 
   If there was no prior environment variable with that name, it does nothing
   when exiting the context.
+
+  Args:
+    key: Name of the environment variable.
+
+  Yields:
+    None.  Goal is the side effect.
   """
-  if key not in os.environ:
+  if key in os.environ:
+    # pylint: disable=lost-exception
+    original = os.environ[key]
+    try:
+      del os.environ[key]
+      yield
+    finally:
+      os.environ[key] = original
+  else:
     try:
       yield
     finally:
-      return
-
-  original = os.environ[key]
-  try:
-    os.environ[key] = value
-    yield
-  finally:
-    del os.environ[key]
+      pass
 
 
 class GieTest(unittest.TestCase):
