@@ -69,9 +69,9 @@ TEST(CPLString, Trim) {
 // Tests case insensitive searching.
 TEST(CPLString, ifind) {
   CPLString str("abc123 Foo BAR");
-  EXPECT_EQ(string::npos, str.ifind("", 0));
-  EXPECT_EQ(string::npos, str.ifind("z", 0));
-  EXPECT_EQ(string::npos, str.ifind("3", 10));
+  EXPECT_EQ(std::string::npos, str.ifind("", 0));
+  EXPECT_EQ(std::string::npos, str.ifind("z", 0));
+  EXPECT_EQ(std::string::npos, str.ifind("3", 10));
   EXPECT_EQ(6, str.ifind(" ", 0));
 
   EXPECT_EQ(5, str.ifind("3", 2));
@@ -85,9 +85,9 @@ TEST(CPLString, ifind) {
   EXPECT_EQ(7, str.ifind("Foo", 0));
   EXPECT_EQ(7, str.ifind("FOO", 0));
 
-  EXPECT_EQ(11, str.ifind(string("bar"), 1));
-  EXPECT_EQ(11, str.ifind(string("Bar"), 2));
-  EXPECT_EQ(11, str.ifind(string("BAR"), 3));
+  EXPECT_EQ(11, str.ifind(std::string("bar"), 1));
+  EXPECT_EQ(11, str.ifind(std::string("Bar"), 2));
+  EXPECT_EQ(11, str.ifind(std::string("BAR"), 3));
 }
 
 // Tests converting a string to upper case.
@@ -226,7 +226,6 @@ TEST(CPLString, replaceAllChaining) {
   EXPECT_EQ("-123!@#-", str.replaceAll("abc", '$').replaceAll("$", "-"));
 }
 
-/
 TEST(CPLString, EndsWithEmpty) {
   CPLString str("");
   EXPECT_TRUE(str.endsWith(str));
@@ -246,13 +245,14 @@ TEST(CPLString, EndsWith) {
   EXPECT_FALSE(str.endsWith(" abc123"));
 }
 
-/ Tests parsing of URL key-value pairs.
+// Tests parsing of URL key-value pairs.
 TEST(CPLString, UrlGetValue) {
   CPLString str = CPLURLGetValue("", "");
   EXPECT_EQ("", str);
   str = CPLURLGetValue("", "foo");
   EXPECT_EQ("", str);
-  string url("https://user:pass@example.com/key?foo=narwal&bar=0&baz=1.23#end");
+  std::string url(
+      "https://user:pass@example.com/key?foo=narwal&bar=0&baz=1.23#end");
   str = CPLURLGetValue(url.c_str(), "foo");
   EXPECT_EQ("narwal", str);
   str = CPLURLGetValue(url.c_str(), "bar");
@@ -261,7 +261,7 @@ TEST(CPLString, UrlGetValue) {
   str = CPLURLGetValue(url.c_str(), "baz");
   EXPECT_EQ("1.23#end", str);
 
-  string url2("/vsizip//vsicurl/ftp://example.com/key?a=b&1=2#tail");
+  std::string url2("/vsizip//vsicurl/ftp://example.com/key?a=b&1=2#tail");
   str = CPLURLGetValue(url2.c_str(), "a");
   EXPECT_EQ("b", str);
   str = CPLURLGetValue(url2.c_str(), "1");

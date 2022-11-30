@@ -30,7 +30,7 @@ TEST(CPLKeywordParser, BasicData) {
   const char filename[] = "/vsimem/cplkeywordparser_test.txt";
 
   VSILFILE *file = VSIFOpenL(filename, "wb");
-  string data(
+  std::string data(
       "numTiles = 1\n"
       "TILE_1.filename = \"byte.tif\"\n"
       "TILE_1.ULColOffset = 0\n"
@@ -75,7 +75,7 @@ TEST(CPLKeywordParser, DataWithGroups) {
   const char filename[] = "/vsimem/cplkeywordparser_test2.txt";
 
   VSILFILE *file = VSIFOpenL(filename, "wb");
-  string data(
+  std::string data(
       "version = \"AA\";\n"
       "generationTime = 2014-07-09T10:11:12.001Z;\n"
       "BEGIN_GROUP = BAND_P\n"
@@ -121,7 +121,7 @@ TEST(CPLKeywordParser, BadData) {
   const char filename[] = "/vsimem/cplkeywordparser_test3.txt";
 
   VSILFILE *file = VSIFOpenL(filename, "wb");
-  string data("junk\n");
+  std::string data("junk\n");
   VSIFWriteL(data.c_str(), data.length(), 1, file);
   VSIFCloseL(file);
   file = VSIFOpenL(filename, "rb");

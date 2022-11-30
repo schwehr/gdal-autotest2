@@ -22,9 +22,8 @@
 //
 // TODO(schwehr): Create multiple thread tests.
 
-#include "port/cpl_multiproc.h"
-
 #include "gunit.h"
+#include "port/cpl_multiproc.h"
 
 namespace autotest2 {
 namespace {

@@ -56,7 +56,7 @@ TEST(CslStringTest, BasicCsl) {
   ASSERT_NE(string_list, nullptr);
   ASSERT_EQ(1, CSLCount(string_list));
 
-  // Passing a nullptr guarentees that realloc is not called and the
+  // Passing a nullptr guarantees that realloc is not called and the
   // pointer returned will be the same as passed in by the caller.
   char **string_list2 = CSLAddString(string_list, nullptr);
   ASSERT_EQ(string_list, string_list2);

@@ -26,8 +26,14 @@
 namespace autotest2 {
 namespace {
 
-// TODO(schwehr): Test CPLAtofDelim
-// TODO(schwehr): Test CPLAtof
+
+TEST(CplStrtodTest, CPLAtofDelim) {
+  EXPECT_DOUBLE_EQ(-1.2, CPLAtofDelim("-1=2", '='));
+}
+
+TEST(CplStrtodTest, CPLAtof) {
+  EXPECT_DOUBLE_EQ(-1.2, CPLAtof("-1.2"));
+}
 
 TEST(CplStrtodTest, AtofM) {
   // Test conversion to double using multi-lingual / locale processing.

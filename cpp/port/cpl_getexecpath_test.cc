@@ -16,6 +16,7 @@
 
 #include "gmock.h"
 #include "gunit.h"
+#include "third_party/absl/strings/match.h"
 #include "third_party/absl/strings/string_view_utils.h"
 #include "port/cpl_conv.h"
 
@@ -32,8 +33,8 @@ TEST(CPLGetExecPathTest, Basic) {
   char buf[PATH_MAX + 1] = {};
   EXPECT_TRUE(CPLGetExecPath(buf, PATH_MAX));
   // On a CAS filesystem, the result will look like:
-  // /build/cas/668/6681...
-  if (!strings::StartsWith(buf, "/build/cas")) {
+  // /build/cas/668/66816bbffceb8b1de618d84f436ff590
+  if (!absl::StartsWith(buf, "/build/cas")) {
     EXPECT_THAT(buf, testing::EndsWith(kTestName));
   }
 }

@@ -90,19 +90,20 @@ TEST(CplMiniXmlTest, CleanXMLElementName) {
     ASSERT_STREQ(expected_char_str, single_char_str);
   }
 
-  string unchanged(".0123456789"
-                   "abcdefghijklmnopqrstuvwxyz"
-                   "_"
-                   "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+  std::string unchanged(
+      ".0123456789"
+      "abcdefghijklmnopqrstuvwxyz"
+      "_"
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
   CPLMemoryCloser<char> result(CPLStrdup(unchanged.c_str()));
   CPLCleanXMLElementName(result.get());
   ASSERT_STREQ(unchanged.c_str(), result.get());
 
-
-  string changed("\a\b\f\r\n\t\v !\"#$%&'()*+,-/"
-                ":;<=>?@"
-                "[\\]^`"
-                "{|}~");
+  std::string changed(
+      "\a\b\f\r\n\t\v !\"#$%&'()*+,-/"
+      ":;<=>?@"
+      "[\\]^`"
+      "{|}~");
   CPLMemoryCloser<char> result_changed(CPLStrdup(changed.c_str()));
   CPLCleanXMLElementName(result_changed.get());
   ASSERT_STREQ("______________________________________", result_changed.get());
@@ -258,7 +259,8 @@ TEST(CplMiniXmlTest, Search) {
   CPLXMLTreeCloser root(CPLParseXMLString(
       "<a b='c'> <d e='f'> <g h='i'/> </d> <j/> </a>"));
 
-  EXPECT_EQ(nullptr, CPLSearchXMLNode(nullptr, "z"));
+  const CPLXMLNode *root_const = nullptr;
+  EXPECT_EQ(nullptr, CPLSearchXMLNode(root_const, "z"));
   EXPECT_EQ(nullptr, CPLSearchXMLNode(root.get(), "zz"));
 
   EXPECT_STREQ("a", CPLSearchXMLNode(root.get(), "a")->pszValue);

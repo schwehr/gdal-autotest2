@@ -18,13 +18,15 @@
 
 #include <stddef.h>
 #include <unistd.h>
+
 #include <string>
 #include <vector>
 
-#include "logging.h"
+#include "base/logging.h"
 #include "file/base/path.h"
 #include "googletest.h"
 #include "gunit.h"
+#include "third_party/absl/flags/flag.h"
 #include "autotest2/cpp/util/cpl_cstringlist.h"
 #include "autotest2/cpp/util/vsimem.h"
 #include "port/cpl_port.h"
@@ -40,20 +42,21 @@ constexpr int kFailure = -1;
 // TODO(schwehr): Move CplVsiLFileCloser to utils.
 class CplVsiLFileCloser {
  public:
-  CplVsiLFileCloser(VSILFILE *file) : file_(CHECK_NOTNULL(file)) {}
+  CplVsiLFileCloser(VSILFILE *file) : file_(ABSL_DIE_IF_NULL(file)) {}
   ~CplVsiLFileCloser() { CHECK_EQ(kSuccess, VSIFCloseL(file_)); }
 
  private:
   VSILFILE *file_;
 };
 
-constexpr char kTestData[] = "cpp/port/testdata/tar";
+constexpr char kTestData[] =
+    "/google3/third_party/gdal/autotest2/cpp/port/testdata/tar";
 
 TEST(CplVsiTarTest, ReadEmpty) {
   constexpr char kFilename[] = "empty.tar";
-  const string filepath =
-      file::JoinPath(FLAGS_test_srcdir, kTestData, kFilename);
-  const string vsi_path = "/vsitar/" + filepath;
+  const std::string filepath =
+      file::JoinPath(absl::GetFlag(FLAGS_test_srcdir), kTestData, kFilename);
+  const std::string vsi_path = "/vsitar/" + filepath;
 
   EXPECT_EQ(kSuccess, access(filepath.c_str(), F_OK));
   char **string_list = VSIReadDir(vsi_path.c_str());
@@ -64,9 +67,9 @@ TEST(CplVsiTarTest, ReadEmpty) {
 
 TEST(CplVsiTarTest, ReadVariety) {
   constexpr char kFilename[] = "variety.tar";
-  const string filepath =
-      file::JoinPath(FLAGS_test_srcdir, kTestData, kFilename);
-  const string vsi_path = "/vsitar/" + filepath;
+  const std::string filepath =
+      file::JoinPath(absl::GetFlag(FLAGS_test_srcdir), kTestData, kFilename);
+  const std::string vsi_path = "/vsitar/" + filepath;
 
   EXPECT_EQ(kSuccess, access(filepath.c_str(), F_OK));
   char **string_list = VSIReadDir(vsi_path.c_str());
@@ -97,7 +100,7 @@ TEST(CplVsiTarTest, ReadVariety) {
   EXPECT_EQ("z", entries[19]);
   EXPECT_EQ(".dotfile", entries[20]);
 
-  const string long_path =
+  const std::string long_path =
       vsi_path + "/1/2/3/4/5/6/7/8/9/10/11/12/13/14/15/16/17/18/19/20";
   string_list = VSIReadDir(long_path.c_str());
   entries = CslToVector(string_list);
@@ -108,9 +111,9 @@ TEST(CplVsiTarTest, ReadVariety) {
 
 TEST(CplVsiTarTest, ReadVarietyFileContents) {
   constexpr char kFilename[] = "variety.tar";
-  const string filepath =
-      file::JoinPath(FLAGS_test_srcdir, kTestData, kFilename);
-  const string vsi_path = "/vsitar/" + filepath + "/z";
+  const std::string filepath =
+      file::JoinPath(absl::GetFlag(FLAGS_test_srcdir), kTestData, kFilename);
+  const std::string vsi_path = "/vsitar/" + filepath + "/z";
 
   constexpr size_t kBufSize = 10;
   constexpr size_t kFileSize = 4;
@@ -126,10 +129,10 @@ TEST(CplVsiTarTest, ReadVarietyFileContents) {
 
 TEST(CplVsiTarTest, ReadTarGz) {
   constexpr char kFilename[] = "bar.tar.gz";
-  const string filepath =
-      file::JoinPath(FLAGS_test_srcdir, kTestData, kFilename);
+  const std::string filepath =
+      file::JoinPath(absl::GetFlag(FLAGS_test_srcdir), kTestData, kFilename);
   // No need to tell it about the gzip compression.
-  const string vsi_path = "/vsitar/" + filepath;
+  const std::string vsi_path = "/vsitar/" + filepath;
 
   EXPECT_EQ(kSuccess, access(filepath.c_str(), F_OK));
   char **string_list = VSIReadDir(vsi_path.c_str());
@@ -138,7 +141,7 @@ TEST(CplVsiTarTest, ReadTarGz) {
   ASSERT_EQ(1, entries.size());
   EXPECT_EQ("bar", entries[0]);
 
-  const string bar_path = "/vsitar/" + filepath + "/bar";
+  const std::string bar_path = "/vsitar/" + filepath + "/bar";
 
   constexpr size_t kBufSize = 10;
   constexpr size_t kFileSize = 4;

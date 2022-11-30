@@ -16,16 +16,18 @@
 //
 //   http://trac.osgeo.org/gdal/browser/trunk/gdal/port/cpl_vsil_gzip.cpp
 
-#include "port/cpl_port.h"
-
 #include <sys/types.h>
+
 #include <string>
 
-#include "logging.h"
+#include "base/logging.h"
 #include "file/base/path.h"
 #include "gmock.h"
+#include "googletest.h"
 #include "gunit.h"
+#include "third_party/absl/flags/flag.h"
 #include "autotest2/cpp/util/vsimem.h"
+#include "port/cpl_port.h"
 #include "port/cpl_vsi.h"
 
 namespace {
@@ -36,7 +38,7 @@ constexpr int kFailure = -1;
 // TODO(schwehr): Move CplVsiLFileCloser to utils.
 class CplVsiLFileCloser {
  public:
-  CplVsiLFileCloser(VSILFILE *file) : file_(CHECK_NOTNULL(file)) {}
+  CplVsiLFileCloser(VSILFILE *file) : file_(ABSL_DIE_IF_NULL(file)) {}
   ~CplVsiLFileCloser() { CHECK_EQ(kSuccess, VSIFCloseL(file_)); }
 
  private:
@@ -44,15 +46,15 @@ class CplVsiLFileCloser {
 };
 
 constexpr char kTestData[] =
-    "autotest2/cpp/port/testdata/gzip";
+    "/google3/third_party/gdal/autotest2/cpp/port/testdata/gzip";
 constexpr char kFilename[] = "count.gz";
 
 constexpr off_t kCompressedSize = 67;
 constexpr off_t kUncompressedSize = 125;
 
 TEST(CplVsiGzipTest, Read) {
-  const string filepath =
-      file::JoinPath(FLAGS_test_srcdir, kTestData, kFilename);
+  const std::string filepath =
+      file::JoinPath(absl::GetFlag(FLAGS_test_srcdir), kTestData, kFilename);
 
   constexpr int kBufSize = 256;
 
@@ -70,7 +72,7 @@ TEST(CplVsiGzipTest, Read) {
 
   // Read uncompressed.
   {
-    const string vsipath = "/vsigzip/" + filepath;
+    const std::string vsipath = "/vsigzip/" + filepath;
     char buf[kBufSize] = {};
     VSILFILE *file = VSIFOpenL(vsipath.c_str(), "r");
     ASSERT_NE(nullptr, file) << vsipath;
@@ -89,8 +91,8 @@ TEST(CplVsiGzipTest, Read) {
       "\xf8\x7d\x47\xe4\x03\x9c\xa1\xb4\x30\x7d\x00\x00\x00";
 
   const char kFilename[] = "/vsimem/a";
-  const string data(reinterpret_cast<const char *>(kCountGz),
-                    CPL_ARRAYSIZE(kCountGz) - 1);
+  const std::string data(reinterpret_cast<const char *>(kCountGz),
+                         CPL_ARRAYSIZE(kCountGz) - 1);
   autotest2::VsiMemTempWrapper wrapper(kFilename, data);
 
   // Read raw.
@@ -127,14 +129,14 @@ TEST(CplVsiGzipTest, Read) {
 
 // Test how stat behaves outside and inside of gzipped file.
 TEST(CplVsiGzipTest, Stat) {
-  const string filepath =
-      file::JoinPath(FLAGS_test_srcdir, kTestData, kFilename);
+  const std::string filepath =
+      file::JoinPath(absl::GetFlag(FLAGS_test_srcdir), kTestData, kFilename);
 
   VSIStatBufL stat;
   ASSERT_EQ(kSuccess, VSIStatExL(filepath.c_str(), &stat, VSI_STAT_SIZE_FLAG));
   EXPECT_EQ(kCompressedSize, stat.st_size);
 
-  const string vsipath = "/vsigzip/" + filepath;
+  const std::string vsipath = "/vsigzip/" + filepath;
   ASSERT_EQ(kSuccess, VSIStatExL(vsipath.c_str(), &stat, VSI_STAT_SIZE_FLAG))
       << vsipath;
   EXPECT_EQ(kUncompressedSize, stat.st_size) << vsipath;

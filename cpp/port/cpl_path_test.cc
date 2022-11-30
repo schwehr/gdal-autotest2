@@ -14,14 +14,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "port/cpl_conv.h"
-
 #include <cstdlib>
 #include <string>
 
 #include "gunit.h"
 #include "third_party/absl/types/optional.h"
 #include "gcore/gdal_priv.h"
+#include "port/cpl_conv.h"
 
 namespace {
 
@@ -142,6 +141,18 @@ TEST(CplPathTest, CPLFormFilename) {
   EXPECT_STREQ("./a", CPLFormFilename("./", "a", ""));
   EXPECT_STREQ("./b/a", CPLFormFilename("./b", "a", ""));
   EXPECT_STREQ("./b/a", CPLFormFilename("./b/", "a", ""));
+
+  EXPECT_STREQ("/a", CPLFormFilename("/a/b", "..", ""));
+  EXPECT_STREQ("/a", CPLFormFilename("/a/b/", "..", ""));
+  EXPECT_STREQ("/a/b", CPLFormFilename("/a/b//", "..", ""));
+
+  EXPECT_STREQ("/a/b/.", CPLFormFilename("/a/b", ".", ""));
+  EXPECT_STREQ("/a/b/.", CPLFormFilename("/a/b/", ".", ""));
+  EXPECT_STREQ("/a/b//.", CPLFormFilename("/a/b//", ".", ""));
+
+  EXPECT_STREQ("/a/b//", CPLFormFilename("/a/b", "/", ""));
+  EXPECT_STREQ("/a/b//", CPLFormFilename("/a/b/", "/", ""));
+  EXPECT_STREQ("/a/b///", CPLFormFilename("/a/b//", "/", ""));
 }
 
 // TODO(schwehr): Write tests for CPLFormCIFilename, CPLProjectRelativeFilename,
@@ -182,8 +193,8 @@ class CPLSaveEnv {
   }
 
  private:
-  const string key_;
-  absl::optional<string> value_;
+  const std::string key_;
+  absl::optional<std::string> value_;
 };
 
 TEST(CplPathTest, CPLGetHomeDir) {

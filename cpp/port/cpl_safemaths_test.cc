@@ -38,7 +38,7 @@
 //
 // See also:
 //   Test 25 and 26:
-//     https://trac.osgeo.org/gdal/browser/trunk/autotest/cpp/test_cpl.cpp
+//     https://github.com/OSGeo/gdal/blob/master/autotest/cpp/test_cpl.cpp
 
 #include "port/cpl_port.h"
 #include "port/cpl_safemaths.hpp"

@@ -20,10 +20,13 @@
 #include <features.h>
 #include <stddef.h>
 #include <string.h>
+
 #include <cstdio>
+#include <limits>
 #include <memory>
 #include <string>
 
+#include "gmock.h"
 #include "gunit.h"
 #include "autotest2/cpp/util/cpl_memory.h"
 #include "autotest2/cpp/util/error_handler.h"
@@ -34,14 +37,22 @@
 namespace autotest2 {
 namespace {
 
-TEST(CplConvTest, VerifyConfiguration) {
+class CplConvTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    // Prevent prior tests from impacting the current test.
+    CPLErrorReset();
+  }
+};
+
+TEST_F(CplConvTest, VerifyConfiguration) {
   CPLVerifyConfiguration();
   EXPECT_EQ(0, CPLGetLastErrorNo());
 }
 
 // Tests accessing and setting the GDAL runtime configuration system.
-TEST(CplConvTest, GetSetConfigOption) {
-  // Check that 2nd argument default is returned for a non-existant key.
+TEST_F(CplConvTest, GetSetConfigOption) {
+  // Check that 2nd argument default is returned for a non-existent key.
   // Try with a nullptr default.
   EXPECT_EQ(nullptr, CPLGetConfigOption("Does not exist", nullptr));
   // Try with a string default.
@@ -71,7 +82,7 @@ TEST(CplConvTest, GetSetConfigOption) {
 //     Also tests an error status.
 // * nNewSize is >0:  Memory is allocated and data pointer contents are copied.
 //     The original memory is freed.
-TEST(CplConvTest, Memory) {
+TEST_F(CplConvTest, Memory) {
   WithQuietHandler error_handler;
 
   EXPECT_EQ(nullptr, CPLMalloc(0));
@@ -93,8 +104,7 @@ TEST(CplConvTest, Memory) {
   EXPECT_EQ(nullptr, CPLCalloc(10, 0));
   EXPECT_EQ(nullptr, CPLCalloc(0, 10));
   char *char_ptr = static_cast<char *>(CPLCalloc(10, 1));
-  for (int i = 0; i < 10; i++)
-    EXPECT_EQ(0, char_ptr[i]);
+  for (int i = 0; i < 10; i++) EXPECT_EQ(0, char_ptr[i]);
   CPLFree(char_ptr);
 
   ASSERT_EQ(nullptr, CPLRealloc(nullptr, 0));
@@ -120,7 +130,7 @@ TEST(CplConvTest, Memory) {
 
   // Demonstrate leak potential.
   ptr = CPLRealloc(nullptr, 10);
-  ptr2 = ptr;  // Backup the pointer.
+  ptr2 = ptr;                 // Backup the pointer.
   ptr = CPLRealloc(ptr, -1);  // Leak by design.
   ASSERT_EQ(nullptr, ptr);
   CPLFree(ptr2);
@@ -138,7 +148,7 @@ TEST(CplConvTest, Memory) {
 }
 
 // Tests using the portable version of strdup and inplace lowercase of a string.
-TEST(CplConvTest, Strings) {
+TEST_F(CplConvTest, Strings) {
   // Unlike strdup, CPLStrdup of a nullptr returns the empty string
   // per documentation.
   char *ptr = CPLStrdup(nullptr);
@@ -156,16 +166,17 @@ TEST(CplConvTest, Strings) {
 }
 
 // Tests the fgets wrapper.
-TEST(CplConvTest, CplFGets) {
+TEST_F(CplConvTest, CplFGets) {
   EXPECT_EQ(nullptr, CPLFGets(nullptr, 0, nullptr));
-  EXPECT_EQ(nullptr, CPLFGets(nullptr, 1, reinterpret_cast<FILE*>(1)));
-  EXPECT_EQ(nullptr, CPLFGets(reinterpret_cast<char*>(1), 0,
-                              reinterpret_cast<FILE*>(1)));
-  EXPECT_EQ(nullptr, CPLFGets(reinterpret_cast<char*>(1), 1, nullptr));
+  EXPECT_EQ(nullptr, CPLFGets(nullptr, 1, reinterpret_cast<FILE *>(1)));
+  EXPECT_EQ(nullptr, CPLFGets(reinterpret_cast<char *>(1), 0,
+                              reinterpret_cast<FILE *>(1)));
+  EXPECT_EQ(nullptr, CPLFGets(reinterpret_cast<char *>(1), 1, nullptr));
 
 #if _XOPEN_SOURCE >= 700 || _POSIX_C_SOURCE >= 200809L  // fmemopen.
-  string src_buf("\nfoo\rbar\r\nmuch longer line\n \n\n");
-  FILE *src = fmemopen(const_cast<char*>(src_buf.c_str()), src_buf.size(), "r");
+  std::string src_buf("\nfoo\rbar\r\nmuch longer line\n \n\n");
+  FILE *src =
+      fmemopen(const_cast<char *>(src_buf.c_str()), src_buf.size(), "r");
   const size_t kBufSize = 10;
   char buf[kBufSize];
 
@@ -182,10 +193,11 @@ TEST(CplConvTest, CplFGets) {
 
 // Tests replacement for CPLFGets that has an internal line buffer.
 // CPLReadLine is not thread safe.
-TEST(CplConvTest, CplReadLine) {
+TEST_F(CplConvTest, CplReadLine) {
 #if _XOPEN_SOURCE >= 700 || _POSIX_C_SOURCE >= 200809L  // fmemopen.
-  string src_buf("\na\rb\r\nc\n \n");
-  FILE *src = fmemopen(const_cast<char*>(src_buf.c_str()), src_buf.size(), "r");
+  std::string src_buf("\na\rb\r\nc\n \n");
+  FILE *src =
+      fmemopen(const_cast<char *>(src_buf.c_str()), src_buf.size(), "r");
 
   EXPECT_STREQ("", CPLReadLine(src));
   EXPECT_STREQ("a", CPLReadLine(src));
@@ -202,7 +214,7 @@ TEST(CplConvTest, CplReadLine) {
 // Tests returning a length limited copy of a string with optional
 // removal of trailing white space and optional replacement of colons
 // with under bars.  The last 2 integer parameters are treated as booleans.
-TEST(CplConvTest, CplScanString) {
+TEST_F(CplConvTest, CplScanString) {
   EXPECT_EQ(nullptr, CPLScanString(nullptr, 0, 0, 0));
   char *ptr = CPLScanString("", 0, 0, 0);
   EXPECT_STREQ("", ptr);
@@ -236,7 +248,7 @@ TEST(CplConvTest, CplScanString) {
 
 // Tests converting a string to an integer.  CplScanLong is a wrapper
 // around atoi that adds setting a maximum number of characters.
-TEST(CplConvTest, CplScanLong) {
+TEST_F(CplConvTest, CplScanLong) {
   // A maximum length of 0 might be undefined based on the definitions
   // atoi and strtol.
   EXPECT_EQ(0, CPLScanLong("", 0));
@@ -282,7 +294,7 @@ TEST(CplConvTest, CplScanLong) {
 // Tests converting string to unsigned long.  CplScanULong is a
 // wrapper around strtoul that adds setting a maximum number of
 // characters.
-TEST(CplConvTest, CplScanULong) {
+TEST_F(CplConvTest, CplScanULong) {
   EXPECT_EQ(0, CPLScanULong("", 0));
   EXPECT_EQ(0, CPLScanULong("9", 0));
   EXPECT_EQ(0, CPLScanULong("a", 1));
@@ -313,16 +325,16 @@ TEST(CplConvTest, CplScanULong) {
   EXPECT_EQ(8, CPLScanULong(" 8a", 3));
   EXPECT_EQ(9, CPLScanULong(" 9.1", 4));
 
-  if (sizeof(unsigned long) > 4) { // NOLINT
+  if (sizeof(unsigned long) > 4) {  // NOLINT
     EXPECT_EQ(1234567890123, CPLScanULong("1234567890123", 9999));
-    EXPECT_EQ(static_cast<unsigned long>(-1234567890123), // NOLINT
+    EXPECT_EQ(static_cast<unsigned long>(-1234567890123),  // NOLINT
               CPLScanULong("-1234567890123", 9999));
   }
 }
 
 // Tests converting strings to GUIntBig.  CPLScanUIntBig is a wrapper
 // around _atooi64, atoll or atol depending on platform.
-TEST(CplConvTest, CPLScanUIntBig) {
+TEST_F(CplConvTest, CPLScanUIntBig) {
   EXPECT_EQ(0, CPLScanUIntBig(nullptr, 0));
   EXPECT_EQ(0, CPLScanUIntBig("", 0));
   EXPECT_EQ(0, CPLScanUIntBig("", 1));
@@ -355,14 +367,14 @@ TEST(CplConvTest, CPLScanUIntBig) {
 // TODO(schwehr): CPLSetThreadLocalConfigOption
 // TODO(schwehr): CPLFreeConfig
 
-TEST(CplConvTest, CPLStat) {
+TEST_F(CplConvTest, CPLStat) {
   constexpr int kFailure = -1;
 
   VSIStatBuf buf = {};
   EXPECT_EQ(kFailure, CPLStat("c:", &buf));
 }
 
-TEST(CplConvTest, CPLDMSToDec) {
+TEST_F(CplConvTest, CPLDMSToDec) {
   // nullptr crashes.
   EXPECT_DOUBLE_EQ(0, CPLDMSToDec(""));
   EXPECT_DOUBLE_EQ(0, CPLDMSToDec(" "));
@@ -403,7 +415,7 @@ TEST(CplConvTest, CPLDMSToDec) {
   EXPECT_DOUBLE_EQ(0, CPLDMSToDec(" R "));
 }
 
-TEST(CplConvTest, CPLDecToDMS) {
+TEST_F(CplConvTest, CPLDecToDMS) {
   EXPECT_STREQ("Invalid angle",
                CPLDecToDMS(std::numeric_limits<double>::quiet_NaN(), "", 0));
   EXPECT_STREQ("Invalid angle",
@@ -440,7 +452,7 @@ TEST(CplConvTest, CPLDecToDMS) {
   EXPECT_STREQ("  0d 0' 0.9720\"S", CPLDecToDMS(-0.00027, "", 4));
 }
 
-TEST(CplConvTest, CPLPackedDMSToDec) {
+TEST_F(CplConvTest, CPLPackedDMSToDec) {
   EXPECT_DOUBLE_EQ(720.0, CPLPackedDMSToDec(720000000.0));
   EXPECT_DOUBLE_EQ(1.0, CPLPackedDMSToDec(1000000.0));
   EXPECT_DOUBLE_EQ(0.1, CPLPackedDMSToDec(6000.0));
@@ -450,7 +462,7 @@ TEST(CplConvTest, CPLPackedDMSToDec) {
   EXPECT_DOUBLE_EQ(-1.0, CPLPackedDMSToDec(-1000000.0));
 }
 
-TEST(CplConvTest, CPLDecToPackedDMS) {
+TEST_F(CplConvTest, CPLDecToPackedDMS) {
   EXPECT_DOUBLE_EQ(0.0, CPLDecToPackedDMS(0.0));
   EXPECT_DOUBLE_EQ(720000000.0, CPLDecToPackedDMS(720.0));
   EXPECT_DOUBLE_EQ(360000000.0, CPLDecToPackedDMS(360.0));
@@ -473,7 +485,46 @@ TEST(CplConvTest, CPLDecToPackedDMS) {
 // TODO(schwehr): CPLDumpSharedList
 // TODO(schwehr): CPLUnlinkTree
 // TODO(schwehr): CPLCopyFile
-// TODO(schwehr): CPLCopyTree
+
+constexpr int kFailure = -1;
+constexpr int kSuccess = 0;
+
+TEST_F(CplConvTest, CPLCopyTreeSourceDoesNotExist) {
+  WithQuietHandler error_handler;
+  EXPECT_EQ(kFailure, CPLCopyTree("/vsimem/does/not/exist", "/vsimem/nowhere"));
+  EXPECT_THAT(CPLGetLastErrorMsg(),
+              testing::HasSubstr("no file system object"));
+}
+
+TEST_F(CplConvTest, CPLCopyTree) {
+  constexpr char kDirpath[] = "/vsimem/cplcopytree";
+  const std::string subdir = CPLFormFilename(kDirpath, "subdir", nullptr);
+  ASSERT_EQ(kSuccess, VSIMkdir(subdir.c_str(), 0755));
+  const std::string subfile =
+      CPLFormFilename(subdir.c_str(), "subfile", nullptr);
+  const std::string data = "abc";
+  VSILFILE *file = VSIFOpenL(subfile.c_str(), "wb");
+  ASSERT_NE(nullptr, file);
+  EXPECT_EQ(1, VSIFWriteL(data.c_str(), data.length(), 1, file));
+  ASSERT_EQ(kSuccess, VSIFCloseL(file));
+
+  const std::string destdir = CPLFormFilename(kDirpath, "dest", nullptr);
+  EXPECT_EQ(kSuccess, CPLCopyTree(destdir.c_str(), subdir.c_str()));
+  const std::string dest_subfile =
+      CPLFormFilename(destdir.c_str(), "subfile", nullptr);
+
+  file = VSIFOpenL(dest_subfile.c_str(), "r");
+  constexpr int kMaxSize = 5;
+  char buf[kMaxSize] = {};
+  EXPECT_EQ(data.length(), VSIFReadL(buf, 1, kMaxSize - 1, file));
+  ASSERT_EQ(kSuccess, VSIFCloseL(file));
+
+  // Does not allow writing over self.
+  WithQuietHandler error_handler;
+  EXPECT_EQ(kFailure, CPLCopyTree(subdir.c_str(), subdir.c_str()));
+  EXPECT_THAT(CPLGetLastErrorMsg(), testing::HasSubstr("already exists"));
+}
+
 // TODO(schwehr): CPLMoveFile
 // TODO(schwehr): CPLSymlink
 // TODO(schwehr): CPLLocaleC
@@ -481,9 +532,9 @@ TEST(CplConvTest, CPLDecToPackedDMS) {
 // TODO(schwehr): CPLsetlocale
 
 // Tests looking for files with a list.
-TEST(CplConvTest, CPLCheckForFileWithFileList) {
+TEST_F(CplConvTest, CPLCheckForFileWithFileList) {
   char kFilename[] = "Aa";
-  char * files[2] = {kFilename, nullptr};
+  char *files[2] = {kFilename, nullptr};
 
   const char kDoesNotExist[] = "does-not-exist";
   std::unique_ptr<char, CplFreeDeleter> filename(strdup(kDoesNotExist));
@@ -507,7 +558,7 @@ TEST(CplConvTest, CPLCheckForFileWithFileList) {
 
 // Tests looking for files without a filelist.
 // Probes for the actual file.
-TEST(CplConvTest, CPLCheckForFileVsimemFiles) {
+TEST_F(CplConvTest, CPLCheckForFileVsimemFiles) {
   const char kFilename[] = "/vsimem/CheckForFile";
   const char kLower[] = "/vsimem/checkforfile";
   const char kUpper[] = "/vsimem/CHECKFORFILE";
@@ -533,6 +584,21 @@ TEST(CplConvTest, CPLCheckForFileVsimemFiles) {
   filename.reset(strdup(kUpper));
   EXPECT_FALSE(CPLCheckForFile((filename.get()), nullptr));
   EXPECT_STREQ(kUpper, filename.get());
+}
+
+TEST_F(CplConvTest, CPLIsPowerOfTwo) {
+  EXPECT_FALSE(CPLIsPowerOfTwo(0));
+  EXPECT_TRUE(CPLIsPowerOfTwo(1));
+  EXPECT_TRUE(CPLIsPowerOfTwo(2));
+  EXPECT_FALSE(CPLIsPowerOfTwo(3));
+  EXPECT_TRUE(CPLIsPowerOfTwo(8));
+  EXPECT_FALSE(CPLIsPowerOfTwo(18));
+
+  EXPECT_TRUE(CPLIsPowerOfTwo(1U << 31));
+  EXPECT_FALSE(CPLIsPowerOfTwo((1U << 31) + 1));
+
+  EXPECT_FALSE(CPLIsPowerOfTwo(std::numeric_limits<unsigned int>::max() - 1));
+  EXPECT_FALSE(CPLIsPowerOfTwo(std::numeric_limits<unsigned int>::max()));
 }
 
 }  // namespace

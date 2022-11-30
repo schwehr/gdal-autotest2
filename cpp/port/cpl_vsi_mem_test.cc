@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "port/cpl_port.h"
-#include "port/cpl_vsi.h"
-
 #include <stddef.h>
+
 #include <memory>
 #include <vector>
 
 #include "gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
 #include "port/cpl_conv.h"
-#include "util/gtl/cleanup.h"
+#include "port/cpl_port.h"
+#include "port/cpl_vsi.h"
 
 namespace autotest2 {
 namespace {
@@ -35,7 +35,7 @@ TEST(VSIBufferTest, NoTake) {
   // Do not take ownership.
   VSILFILE *f = VSIFileFromMemBuffer(kFilename, &src[0], src.size(), false);
   ASSERT_NE(nullptr, f);
-  auto closer = gtl::MakeCleanup([f] { VSIFCloseL(f); });
+  auto closer = absl::MakeCleanup([f] { VSIFCloseL(f); });
 
   VSIStatBufL stat_buf;
   ASSERT_EQ(kSuccess, VSIStatL(kFilename, &stat_buf));
@@ -59,7 +59,7 @@ TEST(VSIBufferTest, TakeOwnershipWriting) {
 
   VSILFILE *f = VSIFileFromMemBuffer(kFilename, src.get(), size, true);
   ASSERT_NE(nullptr, f);
-  auto closer = gtl::MakeCleanup([f] { VSIFCloseL(f); });
+  auto closer = absl::MakeCleanup([f] { VSIFCloseL(f); });
 
   vsi_l_offset data_length;
   char *tmp = reinterpret_cast<char *>(

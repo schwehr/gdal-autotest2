@@ -20,6 +20,7 @@
 
 #include "googletest.h"
 #include "gunit.h"
+#include "third_party/absl/flags/flag.h"
 #include "gcore/gdal_priv.h"
 #include "port/cpl_conv.h"
 #include "port/cpl_vsi.h"
@@ -38,10 +39,11 @@ TEST(CplFindFileTest, CPLDefaultFileFind) {
   EXPECT_EQ(nullptr, CPLDefaultFindFile("", ""));
   EXPECT_EQ(nullptr, CPLDefaultFindFile("a", "b"));
 
-  const string temp_dir("/vsimem");
+  // TODO(schwehr): Allow this to work outside of google3.
+  const std::string temp_dir(absl::GetFlag(FLAGS_test_tmpdir));
   CPLPushFinderLocation(temp_dir.c_str());
 
-  const string filename(temp_dir + "/baz.txt");
+  const std::string filename(temp_dir + "/baz.txt");
   VSILFILE *file = VSIFOpenL(filename.c_str(), "w");
   ASSERT_NE(nullptr, file);
   ASSERT_EQ(3, VSIFWriteL("012", 1, 3, file));

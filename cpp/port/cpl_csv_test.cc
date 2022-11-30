@@ -19,7 +19,6 @@
 
 // Both of these includes define functions in cpl_csv.cpp.
 #include "port/cpl_csv.h"
-#include "port/gdal_csv.h"
 
 #include <memory>
 #include <string>
@@ -31,8 +30,8 @@
 #include "autotest2/cpp/util/vsimem.h"
 #include "port/cpl_string.h"
 #include "port/cpl_vsi.h"
+#include "port/gdal_csv.h"
 
-using std::unique_ptr;
 using testing::EndsWith;
 using testing::IsNull;
 using testing::NotNull;
@@ -198,12 +197,17 @@ TEST(CplCsvTest, GDALDefaultCSVFilename) {
   EXPECT_STREQ("../baz.csv", GDALDefaultCSVFilename("../baz.csv"));
 
   // Try a file that GDAL does have.
-  EXPECT_STREQ("/vsimem/gdal_data/gcs.csv", GDALDefaultCSVFilename("gcs.csv"));
+  EXPECT_STREQ("/vsimem/gdal_data/ozi_datum.csv",
+               GDALDefaultCSVFilename("ozi_datum.csv"));
+  EXPECT_STREQ("/vsimem/gdal_data/ozi_datum.csv",
+               GDALDefaultCSVFilename("/vsimem/gdal_data/ozi_datum.csv"));
+  // Malformed attempt to find an existing file.
+  // Does not find the file.
+  EXPECT_STREQ("gdal_data/ozi_datum.csv",
+               GDALDefaultCSVFilename("gdal_data/ozi_datum.csv"));
 
-  // GDAL specifically searches for these two files that can cause trouble.
+  // GDAL specifically searches for this file that can cause trouble.
   EXPECT_STREQ("datum.csv", GDALDefaultCSVFilename("datum.csv"));
-  EXPECT_STREQ("/vsimem/gdal_data/gdal_datum.csv",
-               GDALDefaultCSVFilename("gdal_datum.csv"));
 
   // Use full path in the memory filesystem.
   const char filename[] = "/vsimem/somefilename.txt";

@@ -19,13 +19,17 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+
 #include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "file/base/path.h"
+#include "googletest.h"
 #include "gunit.h"
-#include "cpp/util/error_handler.h"
+#include "third_party/absl/flags/flag.h"
+#include "autotest2/cpp/util/error_handler.h"
 #include "gcore/gdal.h"
 #include "gcore/gdal_priv.h"
 #include "port/cpl_vsi.h"
@@ -45,9 +49,9 @@ class DummyFilesystem : public VSIFilesystemHandler {
   virtual int Stat(const char *path, VSIStatBufL *stat, int nFlags);
 
   // Record what happened during the test.
-  string open_last_path_;
-  string open_last_access_;
-  string stat_last_path_;
+  std::string open_last_path_;
+  std::string open_last_access_;
+  std::string stat_last_path_;
 };
 
 
@@ -81,7 +85,7 @@ TEST(CplVsiFileManagerTest, FailToOpenExistingFile) {
   DummyFilesystem *dummy_handler(new DummyFilesystem);
   VSIFileManager::InstallHandler("/dummy/", dummy_handler);
 
-  const string path("/dummy/foo.tif");
+  const std::string path("/dummy/foo.tif");
 
   {
     // Suppress '`/dummy/foo.tif' not recognized as a supported file format.'
@@ -121,7 +125,8 @@ TEST(CplVSIFunctions, VSIFilesAndPathLocalDoesNotExist) {
 
 // Tests most of the file operations by creating a directory and a file.
 TEST(CplVSIFunctions, VSIFileAndDirOpsLocal) {
-  const string temp_dir(FLAGS_test_tmpdir);
+  // TODO(schwehr): Let temp_dir also work outside of google3.
+  const std::string temp_dir(absl::GetFlag(FLAGS_test_tmpdir));
 
   constexpr int kSuccess = 0;
   constexpr int kFailure = -1;
@@ -130,19 +135,20 @@ TEST(CplVSIFunctions, VSIFileAndDirOpsLocal) {
   memset(stat_buf.get(), 0, sizeof(VSIStatBufL));
   ASSERT_EQ(kSuccess, VSIStatL(temp_dir.c_str(), stat_buf.get()));
 
-  const string src_dir(temp_dir + "/foo");
-  const string dst_dir(temp_dir + "/bar");
+  const std::string src_dir(temp_dir + "/foo");
+  const std::string dst_dir(temp_dir + "/bar");
   ASSERT_EQ(kSuccess, VSIMkdir(src_dir.c_str(), 0755));
   ASSERT_EQ(kSuccess, VSIRename(src_dir.c_str(), dst_dir.c_str()));
 
   memset(stat_buf.get(), 0, sizeof(VSIStatBufL));
   ASSERT_EQ(kSuccess, VSIStatL(dst_dir.c_str(), stat_buf.get()));
-  ASSERT_EQ(stat_buf->st_mode, 040755);
+  // TODO(schwehr): Flaky.  Depends on user env: 040750
+  // ASSERT_EQ(stat_buf->st_mode, 040755);
 
   const int case_sensitive = VSIIsCaseSensitiveFS(temp_dir.c_str());
   ASSERT_TRUE((0 == case_sensitive || 1 == case_sensitive));
 
-  const string filename(dst_dir + "/baz.txt");
+  const std::string filename(dst_dir + "/baz.txt");
 
   VSILFILE *file = VSIFOpenL(filename.c_str(), "w");
   ASSERT_NE(nullptr, file);
@@ -265,9 +271,10 @@ TEST(CplVSIFunctions, VSIFileAndDirOpsLocal) {
 // Test reading more than is available in a file on a normal filesystem.
 // Most likely uses Read from cpl_vsil_unix_stdio_64.cpp.
 TEST(CplVSIFunctions, VSIReadTooMuchLocalFileSystem) {
-  const string temp_dir(FLAGS_test_tmpdir);
-  const string filename(temp_dir + "/short.txt");
-  const string contents("012\n\n");
+  // TODO(schwehr): Non-google3 specific replacement for FLAGS.
+  const std::string temp_dir(absl::GetFlag(FLAGS_test_tmpdir));
+  const std::string filename(temp_dir + "/short.txt");
+  const std::string contents("012\n\n");
   const int length = contents.length();
 
   // Write a small amount of data.
@@ -312,8 +319,8 @@ TEST(CplVSIFunctions, VSIReadTooMuchLocalFileSystem) {
 
 // Test reading more than is available in a memory filesystem.
 TEST(CplVSIFunctions, VSIFReadLTooMuchVsimem) {
-  const string filename("/vsimem/short.txt");
-  const string contents("\n\nabc");
+  const std::string filename("/vsimem/short.txt");
+  const std::string contents("\n\nabc");
   const int length = contents.length();
 
   // Write a small amount of data.
@@ -333,6 +340,35 @@ TEST(CplVSIFunctions, VSIFReadLTooMuchVsimem) {
   EXPECT_EQ(length, VSIFReadL(buf, 1, buf_size, file));
   EXPECT_STREQ(contents.c_str(), buf);
   ASSERT_EQ(0, VSIFCloseL(file));
+}
+
+TEST(CplVSIFunctions, VSIMkdirRecursive) {
+  constexpr int kSuccess = 0;
+  constexpr int kFailure = -1;
+
+  EXPECT_EQ(kFailure, VSIMkdirRecursive("/", 0));
+  EXPECT_EQ(kFailure, VSIMkdirRecursive("", 0));
+  EXPECT_EQ(kFailure, VSIMkdirRecursive("/does/not/exist", 0));
+  EXPECT_EQ(kFailure, VSIRmdirRecursive("/also/does/not/exist"));
+
+  constexpr char kBasePath[] = "/vsimem/a";
+  constexpr char kPath[] = "/vsimem/a/b/c";
+
+  EXPECT_EQ(kSuccess, VSIMkdirRecursive(kPath, 0777));
+  std::unique_ptr<VSIStatBufL> stat_buf(new VSIStatBufL);
+  memset(stat_buf.get(), 0, sizeof(VSIStatBufL));
+  ASSERT_EQ(kSuccess, VSIStatL(kPath, stat_buf.get()));
+
+  // Add a file.
+  const std::string filepath = file::JoinPath(kPath, "d");
+  VSILFILE *file = VSIFOpenL(filepath.c_str(), "wb");
+  ASSERT_NE(nullptr, file);
+  constexpr char kData[] = "abc";
+  EXPECT_EQ(1, VSIFWriteL(kData, CPL_ARRAYSIZE(kData), 1, file));
+  EXPECT_EQ(kSuccess, VSIFCloseL(file));
+
+  EXPECT_EQ(kSuccess, VSIRmdirRecursive(kBasePath));
+  ASSERT_EQ(kFailure, VSIStatL(kPath, stat_buf.get()));
 }
 
 // TODO(schwehr): Test the rest of cpl_vsil.cpp.

@@ -20,10 +20,13 @@
 
 #include "port/cpl_conv.h"
 #include "autotest2/cpp/util/cpl_memory_closer.h"
+#include "autotest2/cpp/util/error_handler.h"
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   // Ensure there is a NUL at the end of the data passed to CPLParseXMLString.
-  const string s(reinterpret_cast<const char *>(data), size);
+  const std::string s(reinterpret_cast<const char *>(data), size);
+
+  WithQuietHandler error_handler;
 
   CPLXMLTreeCloser r(CPLParseXMLString(s.c_str()));
   autotest2::CPLMemoryCloser<char> tree(CPLSerializeXMLTree(r.get()));

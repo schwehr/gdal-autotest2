@@ -16,7 +16,7 @@
 #include <stdint.h>
 #include <string>
 
-#include "logging.h"
+#include "base/logging.h"
 #include "autotest2/cpp/util/error_handler.h"
 #include "autotest2/cpp/util/vsimem.h"
 #include "gcore/gdal.h"
@@ -28,7 +28,7 @@ constexpr int kFailure = -1;
 
 class CplVsiLFileCloser {
  public:
-  CplVsiLFileCloser(VSILFILE *file) : file_(CHECK_NOTNULL(file)) {}
+  CplVsiLFileCloser(VSILFILE *file) : file_(ABSL_DIE_IF_NULL(file)) {}
   ~CplVsiLFileCloser() { CHECK_EQ(kSuccess, VSIFCloseL(file_)); }
 
  private:
@@ -41,7 +41,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   // A single slash between the two vsi paths does not work:
   //   /vsigzip/vsimem/a
   const char kFilenameGzip[] = "/vsigzip//vsimem/a";
-  const string data2(reinterpret_cast<const char *>(data), size);
+  const std::string data2(reinterpret_cast<const char *>(data), size);
   autotest2::VsiMemTempWrapper wrapper(kFilename, data2);
 
   WithQuietHandler error_handler;

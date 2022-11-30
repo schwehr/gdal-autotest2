@@ -16,8 +16,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "port/cpl_string.h"
-
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,6 +23,7 @@
 #include <string>
 
 #include "gunit.h"
+#include "port/cpl_string.h"
 
 namespace {
 
@@ -45,7 +44,7 @@ TEST(CplStringList, Basic) {
   list.AddStringDirectly(strdup("two"));
 
   // Use a locally managed string to check for double free.
-  std::unique_ptr<string> unique_str(new string("three"));
+  std::unique_ptr<std::string> unique_str(new std::string("three"));
   list.AddString(unique_str->c_str());
   ASSERT_EQ(2, list.FindString("three"));
   ASSERT_EQ(2, list.PartialFindString("re"));
@@ -60,7 +59,7 @@ TEST(CplStringList, Basic) {
   ASSERT_EQ(1, list.FindString("new one"));
 
   // This test must me last.
-  // Make sure memeory is not double freed.
+  // Make sure memory is not double freed.
   char *str = strdup("check free");
   list.AddString(str);
   free(str);
