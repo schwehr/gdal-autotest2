@@ -16,7 +16,7 @@
 //
 // See also:
 //   http://www.gdal.org/frmt_r.html
-//   https://trac.osgeo.org/gdal/browser/trunk/autotest/gdrivers/r.py
+//   https://github.com/OSGeo/gdal/blob/master/autotest/gdrivers/r.py
 
 #include "frmts/r/rdataset.h"
 
@@ -30,8 +30,8 @@ namespace autotest2 {
 namespace {
 
 TEST(RDatasetTest, IdentifyDoesNotExist) {
-  auto open_info = gtl::MakeUnique<GDALOpenInfo>("/does_not_exist",
-                                                 GDAL_OF_READONLY, nullptr);
+  auto open_info = absl::make_unique<GDALOpenInfo>("/does_not_exist",
+                                                   GDAL_OF_READONLY, nullptr);
   EXPECT_EQ(FALSE, RDataset::Identify(open_info.get()));
 }
 

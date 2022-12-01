@@ -35,14 +35,14 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   const char kFilenameHdr[] = "/vsimem/a.hdr";
   const char kFilenameDat[] = "/vsimem/a.dat";
   const size_t half = size / 2;
-  const string data_hdr(reinterpret_cast<const char *>(data), half);
-  const string data_dat(reinterpret_cast<const char *>(data + half),
-                        size - half);
+  const std::string data_hdr(reinterpret_cast<const char *>(data), half);
+  const std::string data_dat(reinterpret_cast<const char *>(data + half),
+                             size - half);
   autotest2::VsiMemTempWrapper hdr(kFilenameHdr, data_hdr);
   autotest2::VsiMemTempWrapper dat(kFilenameDat, data_dat);
   auto open_info =
-      gtl::MakeUnique<GDALOpenInfo>(kFilenameDat, GDAL_OF_READONLY, nullptr);
-  auto dataset = gtl::WrapUnique(ENVIDataset::Open(open_info.get()));
+      absl::make_unique<GDALOpenInfo>(kFilenameDat, GDAL_OF_READONLY, nullptr);
+  auto dataset = absl::WrapUnique(ENVIDataset::Open(open_info.get()));
 
   if (dataset == nullptr) return 0;
 

@@ -16,18 +16,19 @@
 //
 // See also:
 //   http://www.gdal.org/frmt_grib.html
-//   https://trac.osgeo.org/gdal/browser/trunk/autotest/gdrivers/grib.py
-//   https://trac.osgeo.org/gdal/browser/trunk/gdal/frmts/grib/degrib18/degrib
-
-#include "frmts/grib/degrib18/degrib/inventory.h"
+//   https://github.com/OSGeo/gdal/blob/master/autotest/gdrivers/grib.py
+//   https://github.com/OSGeo/gdal/tree/master/gdal/frmts/grib/degrib/degrib
+#include "port/cpl_vsi.h"
+#include "frmts/grib/degrib/degrib/inventory.h"
 
 #include <string>
 
 #include "logging.h"
 #include "file/base/path.h"
 #include "gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/absl/flags/flag.h"
 #include "third_party/absl/memory/memory.h"
-#include "frmts/grib/degrib18/degrib/filedatasource.h"
 #include "frmts/grib/gribdataset.h"
 
 namespace autotest2 {
@@ -36,7 +37,7 @@ namespace {
 using gdal::grib::InventoryWrapper;
 
 const char kTestData[] =
-    "autotest2/cpp/frmts/grib/degrib/testdata/";
+    "/google3/third_party/gdal/autotest2/cpp/frmts/grib/degrib/testdata/";
 
 // TODO(schwehr): Try nullptr for file.
 // TODO(schwehr): Try an empty file.
@@ -45,9 +46,10 @@ const char kTestData[] =
 // TODO(schwehr): Request fewer messages.  Does 2 or more work?
 
 TEST(InventoryTest, RequestOnlyOneMessage) {
-  const string filepath =
-      file::JoinPath(FLAGS_test_srcdir, kTestData, "constant_field.grib2");
-  FileDataSource grib(filepath.c_str());
+  const std::string filepath = file::JoinPath(
+      absl::GetFlag(FLAGS_test_srcdir), kTestData, "constant_field.grib2");
+  auto grib = VSIFOpenL(filepath.c_str(), "r");
+  auto done = absl::MakeCleanup([grib] { VSIFCloseL(grib); });
 
   inventoryType *inv = nullptr;
   uInt4 inv_len = 0;
@@ -60,6 +62,11 @@ TEST(InventoryTest, RequestOnlyOneMessage) {
   if (inv) GRIB2InventoryPrint(inv, inv_len);
 
   ASSERT_NE(nullptr, inv);
+  auto done2 = absl::MakeCleanup([inv] {
+    GRIB2InventoryFree(inv);
+    free(inv);
+  });
+
   ASSERT_EQ(1, inv_len);
   ASSERT_EQ(1, num_messages);
 
@@ -75,38 +82,41 @@ TEST(InventoryTest, RequestOnlyOneMessage) {
   EXPECT_DOUBLE_EQ(21600.0, inv->foreSec);
   EXPECT_STREQ("1-HYBL", inv->shortFstLevel);
   EXPECT_STREQ("1[-] HYBL=\"Hybrid level\"", inv->longFstLevel);
-
-  GRIB2InventoryFree(inv);
-  free(inv);
 }
 
 TEST(InventoryTest, AllWithOnlyOne) {
-  const string filepath =
-      file::JoinPath(FLAGS_test_srcdir, kTestData, "constant_field.grib2");
-  InventoryWrapper inventories(filepath);
+  const std::string filepath = file::JoinPath(
+      absl::GetFlag(FLAGS_test_srcdir), kTestData, "constant_field.grib2");
+  auto file = VSIFOpenL(filepath.c_str(), "r");
+  auto done = absl::MakeCleanup([file] { VSIFCloseL(file); });
+  InventoryWrapper inventories(file);
   ASSERT_EQ(1, inventories.length());
   ASSERT_EQ(1, inventories.num_messages());
 }
 
 TEST(InventoryTest, AllWith2By2) {
-  const string filepath =
-      file::JoinPath(FLAGS_test_srcdir, kTestData, "test_uuid.grib2");
-  InventoryWrapper inventories(filepath);
+  const std::string filepath = file::JoinPath(absl::GetFlag(FLAGS_test_srcdir),
+                                              kTestData, "test_uuid.grib2");
+  auto file = VSIFOpenL(filepath.c_str(), "r");
+  auto done = absl::MakeCleanup([file] { VSIFCloseL(file); });
+  InventoryWrapper inventories(file);
   ASSERT_EQ(2, inventories.length());
   ASSERT_EQ(2, inventories.num_messages());
 }
 
 TEST(InventoryTest, AllWith21By1) {
-  const string filepath =
-      file::JoinPath(FLAGS_test_srcdir, kTestData, "multi_created.grib2");
-  InventoryWrapper inventories(filepath);
+  const std::string filepath = file::JoinPath(absl::GetFlag(FLAGS_test_srcdir),
+                                              kTestData, "multi_created.grib2");
+  auto file = VSIFOpenL(filepath.c_str(), "r");
+  auto done = absl::MakeCleanup([file] { VSIFCloseL(file); });
+  InventoryWrapper inventories(file);
   ASSERT_EQ(21, inventories.length());
   ASSERT_EQ(1, inventories.num_messages());
 }
 
 TEST(InventoryTest, RefTime) {
-  const string filepath =
-      file::JoinPath(FLAGS_test_srcdir, kTestData, "constant_field.grib2");
+  const std::string filepath = file::JoinPath(
+      absl::GetFlag(FLAGS_test_srcdir), kTestData, "constant_field.grib2");
 
   double ref_time = 0.0;
   EXPECT_EQ(0, GRIB2RefTime(filepath.c_str(), &ref_time));
@@ -114,10 +124,12 @@ TEST(InventoryTest, RefTime) {
 }
 
 TEST(GRIB2SectToBuffer, BadLargeSectionLength) {
-  const string filepath =
-      file::JoinPath(FLAGS_test_srcdir, kTestData,
+  const std::string filepath =
+      file::JoinPath(absl::GetFlag(FLAGS_test_srcdir), kTestData,
                      "oom-95dd3e1fee6828f1eb40a8b15c178b7fb7e769ca");
-  InventoryWrapper inventories(filepath);
+  auto file = VSIFOpenL(filepath.c_str(), "r");
+  auto done = absl::MakeCleanup([file] { VSIFCloseL(file); });
+  InventoryWrapper inventories(file);
   // TODO(schwehr): Add symbols upstream for the error codes.
   EXPECT_EQ(-4, inventories.result());
 }

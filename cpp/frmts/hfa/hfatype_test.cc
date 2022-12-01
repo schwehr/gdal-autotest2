@@ -17,10 +17,8 @@
 // See:
 //   https://trac.osgeo.org/gdal/browser/trunk/gdal/frmts/hfa/hfatype.cpp
 
-#include "port/cpl_port.h"
-#include "frmts/hfa/hfa_p.h"
-
 #include <unistd.h>
+
 #include <cstdio>
 #include <string>
 
@@ -30,6 +28,9 @@
 #include "gmock.h"
 #include "googletest.h"
 #include "gunit.h"
+#include "third_party/absl/flags/flag.h"
+#include "frmts/hfa/hfa_p.h"
+#include "port/cpl_port.h"
 
 namespace {
 
@@ -49,7 +50,8 @@ TEST(HfatypeTest, Dump) {
       "lSkipFactorX,1:lSkipFactorY,1:*oEdsc_BinFunction,BinFunction,}Eimg_"
       "StatisticsParameters830,.";
 
-  const string filename = file::JoinPath(FLAGS_test_tmpdir, "dump");
+  const std::string filename =
+      file::JoinPath(absl::GetFlag(FLAGS_test_tmpdir), "dump");
   FILE *dump = fopen(filename.c_str(), "w+");
   ASSERT_NE(nullptr, dump);
 
@@ -59,7 +61,7 @@ TEST(HfatypeTest, Dump) {
 
   EXPECT_EQ(0, fclose(dump));
 
-  string contents;
+  std::string contents;
   ASSERT_OK(file::GetContents(filename, &contents, file::Defaults()));
   EXPECT_THAT(contents, testing::ContainsRegex(R"RE(Emif_String\s+AOIname)RE"));
 

@@ -16,7 +16,7 @@
 //
 // See also:
 //   http://www.gdal.org/frmt_hdf5.html
-//   https://trac.osgeo.org/gdal/browser/trunk/autotest/gdrivers/hdf5.py
+//   https://github.com/OSGeo/gdal/blob/master/autotest/gdrivers/hdf5.py
 
 #define H5_USE_16_API
 
@@ -32,8 +32,8 @@ namespace autotest2 {
 namespace {
 
 TEST(IdentifyTest, DoesNotExist) {
-  auto open_info = gtl::MakeUnique<GDALOpenInfo>("/does_not_exist",
-                                                 GDAL_OF_READONLY, nullptr);
+  auto open_info = absl::make_unique<GDALOpenInfo>("/does_not_exist",
+                                                   GDAL_OF_READONLY, nullptr);
   EXPECT_EQ(FALSE, HDF5Dataset::Identify(open_info.get()));
 }
 

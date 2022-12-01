@@ -15,6 +15,7 @@
 // Tests geotiff raster driver.
 
 #include <stddef.h>
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -23,6 +24,7 @@
 #include "file/base/path.h"
 #include "gmock.h"
 #include "gunit.h"
+#include "third_party/absl/flags/flag.h"
 #include "third_party/absl/memory/memory.h"
 #include "autotest2/cpp/util/cpl_cstringlist.h"
 #include "autotest2/cpp/util/error_handler.h"
@@ -38,13 +40,13 @@ namespace autotest2 {
 namespace {
 
 constexpr char kTestData[] =
-    "autotest2/cpp/frmts/gtiff/testdata/";
+    "/google3/third_party/gdal/autotest2/cpp/frmts/gtiff/testdata/";
 
 constexpr char kDriverName[] = "GTiff";
 
 class GTiffTest : public ::testing::Test {
  public:
-  std::unique_ptr<GDALDataset> OpenReadOnly(const string& filename) {
+  std::unique_ptr<GDALDataset> OpenReadOnly(const std::string& filename) {
     auto open_info = absl::make_unique<GDALOpenInfo>(filename.c_str(),
                                                      GDAL_OF_READONLY, nullptr);
     auto dataset = absl::WrapUnique(driver_->pfnOpen(open_info.get()));
@@ -55,7 +57,7 @@ class GTiffTest : public ::testing::Test {
   void SetUp() override {
     GDALRegister_GTiff();
     driver_ = GetGDALDriverManager()->GetDriverByName(kDriverName);
-    CHECK_NOTNULL(driver_);
+    CHECK(driver_ != nullptr);
   }
 
   GDALDriver* driver_;
@@ -75,7 +77,8 @@ TEST_F(GTiffTest, ReadSimplest) {
       "\x04\x00\x01\x00\x00\x00\x01\x00\x00\x00\x1c\x01\x03\x00\x01\x00\x00\x00"
       "\x01\x00\x00\x00\x53\x01\x03\x00\x01\x00\x00\x00\x01\x00\x00\x00\x00\x00"
       "\x00\x00\x00";
-  const string data2(reinterpret_cast<const char*>(data), CPL_ARRAYSIZE(data));
+  const std::string data2(reinterpret_cast<const char*>(data),
+                          CPL_ARRAYSIZE(data));
   autotest2::VsiMemTempWrapper wrapper(kFilename, data2);
 
   auto dataset = OpenReadOnly(kFilename);
@@ -144,8 +147,8 @@ TEST_F(GTiffTest, CreateSimplest) {
 }
 
 TEST_F(GTiffTest, Overviews) {
-  const string filepath =
-      file::JoinPath(FLAGS_test_srcdir, kTestData, "with-overviews.tif");
+  const std::string filepath = file::JoinPath(absl::GetFlag(FLAGS_test_srcdir),
+                                              kTestData, "with-overviews.tif");
   const auto dataset = OpenReadOnly(filepath);
   ASSERT_NE(nullptr, dataset);
 
@@ -168,8 +171,8 @@ TEST_F(GTiffTest, Overviews) {
 
 TEST_F(GTiffTest, OverviewFile) {
   // Tiff file plus a separate overview sidecar.
-  const string filepath =
-      file::JoinPath(FLAGS_test_srcdir, kTestData, "with-overview-file.tif");
+  const std::string filepath = file::JoinPath(
+      absl::GetFlag(FLAGS_test_srcdir), kTestData, "with-overview-file.tif");
   const auto dataset = OpenReadOnly(filepath);
   ASSERT_NE(nullptr, dataset);
 
@@ -207,7 +210,8 @@ TEST(GTiffBad, TooManyBlocks) {
       "\x03\x00\x01\x00\x00\x00\x01\x00\x00\x00\x44\x01\x04\x00\x01\x00\x00\x00"
       "\x00\x00\x00\x00\x45\x01\x04\x00\x01\x00\x00\x00\x00\x00\x00\x00\x53\x01"
       "\x03\x00\x01\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00";
-  const string data2(reinterpret_cast<const char*>(data), CPL_ARRAYSIZE(data));
+  const std::string data2(reinterpret_cast<const char*>(data),
+                          CPL_ARRAYSIZE(data));
   autotest2::VsiMemTempWrapper wrapper(kFilename, data2);
   auto open_info =
       absl::make_unique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
@@ -235,7 +239,8 @@ TEST(GTiffBad, TooManyBlocksSeparate) {
       "\x01\x04\x00\x01\x00\x00\x00\x9e\x00\x00\x00\x45\x01\x04\x00\x01\x00"
       "\x00\x00\x00\x01\x00\x00\x53\x01\x03\x00\x01\x00\x00\x00\x01\x00\x00"
       "\x00\x00\x00\x00\x00\x73\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
-  const string data2(reinterpret_cast<const char*>(data), CPL_ARRAYSIZE(data));
+  const std::string data2(reinterpret_cast<const char*>(data),
+                          CPL_ARRAYSIZE(data));
   autotest2::VsiMemTempWrapper wrapper(kFilename, data2);
   auto open_info =
       absl::make_unique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);

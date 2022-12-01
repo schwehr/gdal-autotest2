@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests the Kakadu JPEG 2000 raster driver.
+// Tests Kakadu JPEG2000 raster driver.
 //
 // See also:
 //   http://www.gdal.org/frmt_jp2kak.html
-//   https://trac.osgeo.org/gdal/browser/trunk/autotest/gdrivers/jp2kak.py
+//   https://github.com/OSGeo/gdal/blob/master/autotest/gdrivers/jpipkak.py
 
 // TODO(schwehr): Try these:
 //   CPLSetConfigOption("JP2KAK_THREADS", "0");
@@ -25,13 +25,17 @@
 //   CPLSetConfigOption("JP2KAK_THREADS", "-1");
 
 #include <stddef.h>
+
 #include <memory>
 #include <string>
 
 #include "commandlineflags_declare.h"
 #include "file/base/path.h"
 #include "gmock.h"
+#include "googletest.h"
 #include "gunit.h"
+#include "third_party/absl/flags/flag.h"
+#include "autotest2/cpp/util/matchers.h"
 #include "gcore/gdal.h"
 #include "gcore/gdal_frmts.h"
 #include "gcore/gdal_priv.h"
@@ -43,25 +47,17 @@
 namespace autotest2 {
 namespace {
 
-const char kTestData[] = "cpp/frmts/jp2kak/testdata/";
+const char kTestData[] =
+    "/google3/third_party/gdal/autotest2/cpp/frmts/jp2kak/testdata/";
 
 class Jp2kakTest : public ::testing::Test {
  protected:
   void SetUp() override { GDALRegister_JP2KAK(); }
 };
 
-// Hide the ugliness of exportToPrettyWkt.
-string SrsToString(const OGRSpatialReference &src_srs) {
-  char *pszPrettyWkt = NULL;
-  src_srs.exportToPrettyWkt(&pszPrettyWkt, false);
-  string result(pszPrettyWkt);
-  CPLFree(pszPrettyWkt);
-  return result;
-}
-
 TEST_F(Jp2kakTest, Srs) {
-  const string filepath =
-      FLAGS_test_srcdir + string(kTestData) + "byte_point.jp2";
+  const std::string filepath = absl::GetFlag(FLAGS_test_srcdir) +
+                               std::string(kTestData) + "byte_point.jp2";
   std::unique_ptr<GDALDataset> src(static_cast<GDALDataset *>(
       GDALOpenEx(filepath.c_str(), GDAL_OF_READONLY | GDAL_OF_RASTER, nullptr,
                  nullptr, nullptr)));
@@ -69,23 +65,22 @@ TEST_F(Jp2kakTest, Srs) {
   EXPECT_EQ(CPLE_None, CPLGetLastErrorType());
   ASSERT_NE(nullptr, src);
 
-  const string projection(src->GetProjectionRef());
+  const std::string projection(src->GetProjectionRef());
 
   OGRSpatialReference src_srs(projection.c_str());
   OGRSpatialReference expected_srs;
   const int epsg = 32611;
   ASSERT_EQ(OGRERR_NONE, expected_srs.importFromEPSG(epsg))
       << "Failed to load epsg: " << epsg;
-  EXPECT_TRUE(expected_srs.IsSame(&src_srs))
+  EXPECT_THAT(src_srs, IsSameAs(expected_srs))
       << "Failed for EPSG: " << epsg << "\n"
-      << "See http://spatialreference.org/ref/epsg/" << epsg << "\n"
-      << SrsToString(src_srs) << "\n\n!=\n\n"
-      << SrsToString(expected_srs);
+      << "See http://spatialreference.org/ref/epsg/" << epsg;
 }
 
 TEST_F(Jp2kakTest, Basics) {
-  const string filepath = file::JoinPath(
-      FLAGS_test_srcdir, string(kTestData), "byte_point.jp2");
+  const std::string filepath =
+      file::JoinPath(absl::GetFlag(FLAGS_test_srcdir), std::string(kTestData),
+                     "byte_point.jp2");
   std::unique_ptr<GDALDataset> src(static_cast<GDALDataset *>(
       GDALOpenEx(filepath.c_str(), GDAL_OF_READONLY | GDAL_OF_RASTER, nullptr,
                  nullptr, nullptr)));

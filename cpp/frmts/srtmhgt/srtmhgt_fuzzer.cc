@@ -1,4 +1,4 @@
-// Copyright 2017 Google Inc. All Rights Reserved.
+// Copyright 2020 Google Inc. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,18 +11,10 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//
-// Fuzz AAIGrid and GRASS grid format raster grids.
-//
-// TODO(schwehr): Create something that can be reused for all raster fuzzers.
-// TODO(schwehr): Try with and without PAM and an optional xml sidecar.
-// TODO(schwehr): Switch this fuzzer to proto fuzzer to allow for a PRJ file.
-//
-// See also:
-//   https://trac.osgeo.org/gdal/browser/trunk/gdal/fuzzers/gdal_fuzzer.cpp
 
 #include <stddef.h>
 #include <stdint.h>
+
 #include <memory>
 #include <string>
 
@@ -31,28 +23,33 @@
 #include "autotest2/cpp/fuzzers/gdal.h"
 #include "autotest2/cpp/util/error_handler.h"
 #include "autotest2/cpp/util/vsimem.h"
-#include "frmts/aaigrid/aaigriddataset.h"
 #include "gcore/gdal.h"
+#include "gcore/gdal_frmts.h"
 #include "gcore/gdal_priv.h"
-#include "port/cpl_string.h"
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-  const char kFilename[] = "/vsimem/a.asc";
   const std::string data2(reinterpret_cast<const char *>(data), size);
-  autotest2::VsiMemTempWrapper wrapper(kFilename, data2);
 
   WithQuietHandler error_handler;
-  auto open_info =
-      std::make_unique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
-  int result = AAIGDataset::Identify(open_info.get());
-  CHECK_LE(-1, result);
-  CHECK_GE(1, result);
-  auto dataset = absl::WrapUnique(AAIGDataset::Open(open_info.get()));
+  GDALRegister_SRTMHGT();
 
-  // If the fuzzer data can't be opened, do not go any further.
-  if (dataset == nullptr) return 0;
-
-  autotest2::GDALFuzzOneInput(dataset.get());
-
+  // Filenames taken from special cases in the driver and the checks for
+  // north/south and east/west
+  for (const auto &filename :
+       {"/vsimem/n00e006.raw",
+        "/vsimem/a.hgt",
+        "/vsimem/n00e006.hgt",
+        "/vsimem/n00w006.hgt",
+        "/vsimem/s00e006.hgt",
+        "/vsimem/s00w006.hgt",
+        "/vsimem/n00e006.hgt.gz"
+        "/vsimem/n00e006.hgt.zip"
+        "/vsimem/n00e006.srtmswbd.raw.zip"}) {
+    autotest2::VsiMemTempWrapper wrapper(filename, data2);
+    auto dataset = GDALOpen(filename, GA_ReadOnly);
+    if (dataset == nullptr) continue;
+    autotest2::GDALFuzzOneInput(static_cast<GDALDataset *>(dataset));
+    GDALClose(dataset);
+  }
   return 0;
 }

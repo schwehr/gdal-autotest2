@@ -16,13 +16,12 @@
 //
 // See also:
 //   http://www.gdal.org/frmt_hfa.html
-//   https://trac.osgeo.org/gdal/browser/trunk/autotest/gcore/hfa_read.py
-//   https://trac.osgeo.org/gdal/browser/trunk/autotest/gcore/hfa_rfc40.py
-//   https://trac.osgeo.org/gdal/browser/trunk/autotest/gcore/hfa_srs.py
-//   https://trac.osgeo.org/gdal/browser/trunk/autotest/gcore/hfa_write.py
-//   https://trac.osgeo.org/gdal/browser/trunk/autotest/gdrivers/hfa.py
+//   https://github.com/OSGeo/gdal/blob/master/autotest/gcore/hfa_read.py
+//   https://github.com/OSGeo/gdal/blob/master/autotest/gcore/hfa_rfc40.py
+//   https://github.com/OSGeo/gdal/blob/master/autotest/gcore/hfa_srs.py
+//   https://github.com/OSGeo/gdal/blob/master/autotest/gcore/hfa_write.py
+//   https://github.com/OSGeo/gdal/blob/master/autotest/gdrivers/hfa.py
 
-#include "port/cpl_port.h"
 #include "frmts/hfa/hfadataset.h"
 
 #include <map>
@@ -32,22 +31,25 @@
 #include "file/base/path.h"
 #include "gmock.h"
 #include "gunit.h"
+#include "third_party/absl/flags/flag.h"
 #include "third_party/absl/memory/memory.h"
 #include "third_party/absl/strings/str_split.h"
 #include "autotest2/cpp/util/vsimem.h"
 #include "gcore/gdal.h"
 #include "gcore/gdal_priv.h"
+#include "port/cpl_port.h"
 
 namespace autotest2 {
 namespace {
 
 using ::testing::Pair;
 
-constexpr char kTestData[] = "cpp/frmts/hfa/testdata/";
+constexpr char kTestData[] =
+    "/google3/third_party/gdal/autotest2/cpp/frmts/hfa/testdata/";
 
 TEST(IdentifyTest, DoesNotExist) {
-  auto open_info = gtl::MakeUnique<GDALOpenInfo>("/does_not_exist",
-                                                 GDAL_OF_READONLY, nullptr);
+  auto open_info = absl::make_unique<GDALOpenInfo>("/does_not_exist",
+                                                   GDAL_OF_READONLY, nullptr);
   EXPECT_EQ(FALSE, HFADataset::Identify(open_info.get()));
 }
 
@@ -56,16 +58,16 @@ TEST(IdentifyTest, MinimumSuccess) {
   constexpr char kData[] = "EHFA_HEADER_TAG";
   autotest2::VsiMemTempWrapper wrapper(kFilename, kData);
   auto open_info =
-      gtl::MakeUnique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
+      absl::make_unique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
   EXPECT_EQ(TRUE, HFADataset::Identify(open_info.get()));
 }
 
 // Convert a C string list of "key=value" to a std::map<k, v>.
-std::map<string, string> ParseMetadata(const char *const *csl) {
-  std::map<string, string> result;
+std::map<std::string, std::string> ParseMetadata(const char *const *csl) {
+  std::map<std::string, std::string> result;
   if (csl == nullptr) return result;
   for (; *csl != nullptr; csl++) {
-    std::vector<string> v = strings::Split(*csl, '=');
+    std::vector<std::string> v = absl::StrSplit(*csl, '=');
     CHECK_EQ(v.size(), 2);
     result[v[0]] = v[1];
   }
@@ -73,10 +75,10 @@ std::map<string, string> ParseMetadata(const char *const *csl) {
 }
 
 TEST(OpenTest, Byte) {
-  const string filepath =
-      file::JoinPath(FLAGS_test_srcdir, kTestData, "byte.img");
-  auto open_info = gtl::MakeUnique<GDALOpenInfo>(filepath.c_str(),
-                                                 GDAL_OF_READONLY, nullptr);
+  const std::string filepath =
+      file::JoinPath(absl::GetFlag(FLAGS_test_srcdir), kTestData, "byte.img");
+  auto open_info = absl::make_unique<GDALOpenInfo>(filepath.c_str(),
+                                                   GDAL_OF_READONLY, nullptr);
   auto src = absl::WrapUnique(HFADataset::Open(open_info.get()));
   ASSERT_NE(nullptr, src);
   double geo_transform[6] = {};
@@ -151,10 +153,10 @@ TEST(OpenTest, Byte) {
 }
 
 TEST(OpenTest, Compresses1x1) {
-  const string filepath =
-      file::JoinPath(FLAGS_test_srcdir, kTestData, "compressed-1x1.img");
-  auto open_info = gtl::MakeUnique<GDALOpenInfo>(filepath.c_str(),
-                                                 GDAL_OF_READONLY, nullptr);
+  const std::string filepath = file::JoinPath(absl::GetFlag(FLAGS_test_srcdir),
+                                              kTestData, "compressed-1x1.img");
+  auto open_info = absl::make_unique<GDALOpenInfo>(filepath.c_str(),
+                                                   GDAL_OF_READONLY, nullptr);
   auto src = absl::WrapUnique(HFADataset::Open(open_info.get()));
   ASSERT_NE(nullptr, src);
   double geo_transform[6] = {};

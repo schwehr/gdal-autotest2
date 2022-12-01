@@ -28,16 +28,16 @@
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   const char kFilename[] = "/vsimem/a.png";
-  const string data2(reinterpret_cast<const char *>(data), size);
+  const std::string data2(reinterpret_cast<const char *>(data), size);
   autotest2::VsiMemTempWrapper wrapper(kFilename, data2);
 
   WithQuietHandler error_handler;
   auto open_info =
-      gtl::MakeUnique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
+      absl::make_unique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
   int result = PNGDataset::Identify(open_info.get());
   CHECK_LE(-1, result);
   CHECK_GE(1, result);
-  auto dataset = gtl::WrapUnique(PNGDataset::Open(open_info.get()));
+  auto dataset = absl::WrapUnique(PNGDataset::Open(open_info.get()));
 
   if (dataset == nullptr) return 0;
 

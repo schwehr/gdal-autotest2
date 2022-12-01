@@ -20,104 +20,76 @@
 // See also:
 //   https://trac.osgeo.org/gdal/browser/trunk/gdal/fuzzers/gdal_fuzzer.cpp
 
-#include <math.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <string.h>
-#include <algorithm>
 #include <memory>
-#include <string>
 
 #include "logging.h"
+#include "security/fuzzing/blaze/proto_message_mutator.h"
 #include "third_party/absl/memory/memory.h"
-#include "alg/gdal_alg.h"
+#include "autotest2/cpp/frmts/gtiff/gtiff_fuzzer.pb.h"
+#include "autotest2/cpp/frmts/gtiff/gtiff_fuzzer.proto.h"
+#include "autotest2/cpp/fuzzers/gdal.h"
 #include "autotest2/cpp/util/error_handler.h"
 #include "autotest2/cpp/util/vsimem.h"
 #include "gcore/gdal.h"
 #include "gcore/gdal_frmts.h"
 #include "gcore/gdal_priv.h"
+#include "port/cpl_error.h"
 #include "port/cpl_string.h"
 
-typedef std::unique_ptr<char *, std::function<void(char **)>> StringListPtr;
-
 constexpr char kDriverName[] = "GTiff";
-constexpr size_t kMaxStrLen = 100000;
 
-extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-  const char kFilename[] = "/vsimem/a.tif";
-  const string data2(reinterpret_cast<const char *>(data), size);
-  autotest2::VsiMemTempWrapper wrapper(kFilename, data2);
+using third_party::gdal::autotest2::cpp::frmts::gtiff::Gtiff;
 
-  GDALRegister_GTiff();
-  GDALDriverManager *drv_manager = GetGDALDriverManager();
-  GDALDriver *driver = drv_manager->GetDriverByName(kDriverName);
-  CHECK_NOTNULL(driver);
+DEFINE_PROTO_FUZZER(const Gtiff &s) {
+  const char kFilenameAux[] = "/vsimem/a.aux";
+  const char kFilenameImd[] = "/vsimem/a.imd";
+  const char kFilenameOvr[] = "/vsimem/a.ovr";
+  const char kFilenamePrj[] = "/vsimem/a.prj";
+  const char kFilenameRpb[] = "/vsimem/a.rpb";
+  const char kFilenameRpc[] = "/vsimem/a.rpc";
+  const char kFilenameRrd[] = "/vsimem/a.rrd";
+  const char kFilenameTif[] = "/vsimem/a.tif";
+  const char kFilenameVrt[] = "/vsimem/a.vrt";
+  const char kFilenameXml[] = "/vsimem/a.aux.xml";
+
+  autotest2::VsiMemMaybeTempWrapper aux(kFilenameAux, s.aux(), s.has_aux());
+  autotest2::VsiMemMaybeTempWrapper imd(kFilenameImd, s.imd(), s.has_imd());
+  autotest2::VsiMemMaybeTempWrapper ovr(kFilenameOvr, s.ovr(), s.has_ovr());
+  autotest2::VsiMemMaybeTempWrapper prj(kFilenamePrj, s.prj(), s.has_prj());
+  autotest2::VsiMemMaybeTempWrapper rpb(kFilenameRpb, s.rpb(), s.has_rpb());
+  autotest2::VsiMemMaybeTempWrapper rpc(kFilenameRpc, s.rpc(), s.has_rpc());
+  autotest2::VsiMemMaybeTempWrapper rrd(kFilenameRrd, s.rrd(), s.has_rrd());
+  // tif is required.
+  autotest2::VsiMemMaybeTempWrapper tif(kFilenameTif, s.tif(), true);
+  autotest2::VsiMemMaybeTempWrapper vrt(kFilenameVrt, s.vrt(), s.has_vrt());
+  autotest2::VsiMemMaybeTempWrapper xml(kFilenameXml, s.xml(), s.has_xml());
 
   WithQuietHandler error_handler;
-  auto open_info =
-      gtl::MakeUnique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
 
-  auto dataset = absl::WrapUnique(driver->pfnOpen(open_info.get()));
-
-  // If the fuzzer data can't be opened, do not go any further.
-  if (dataset == nullptr) return 0;
-
-  // String owned by dataset.
-  CHECK_GT(kMaxStrLen, strnlen(dataset->GetProjectionRef(), kMaxStrLen + 1));
-
+  // Directly test the driver class, but because of the header situation,
+  // this pulls the open function out of the driver's setup.
+  GDALRegister_GTiff();
   {
-    double geotransform[6] = {};
-    dataset->GetGeoTransform(geotransform);
+    GDALDriverManager *drv_manager = GetGDALDriverManager();
+    GDALDriver *driver = drv_manager->GetDriverByName(kDriverName);
+    CHECK(driver != nullptr);
+    auto open_info = absl::make_unique<GDALOpenInfo>(kFilenameTif,
+                                                     GDAL_OF_READONLY, nullptr);
+
+    auto dataset = absl::WrapUnique(driver->pfnOpen(open_info.get()));
+
+    if (dataset != nullptr) autotest2::GDALFuzzOneInput(dataset.get());
   }
 
-  {
-    StringListPtr files(dataset->GetFileList(), CSLDestroy);
-    CHECK_EQ(CSLCount(files.get()), 1);
-  }
+  // Testing opening via the GDAL lookup infrastructure, but via the VRT
+  // driver.  With only the GTiff and VRT drivers, this should focus in on
+  // more interesting cases such as a GeoTiff used as a band in a VRT and
+  // transformations like external color tables, warps, and masks.
+  if (!s.has_vrt()) return;
 
-  CHECK_LE(0, dataset->GetGCPCount());
-
-  // GCP pointer owned by dataset.
-  dataset->GetGCPs();
-  // TODO(schwehr): If gcps != nullptr, check more.
-
-  CHECK_GT(kMaxStrLen, strnlen(dataset->GetGCPProjection(), kMaxStrLen + 1));
-
-  const int num_bands = dataset->GetRasterCount();
-  if (num_bands == 0) return 0;
-  CHECK_GE(num_bands, 0);
-
-  for (int band_num = 1; band_num < num_bands + 1; band_num++) {
-    GDALRasterBand *band = dataset->GetRasterBand(band_num);
-    CHECK(band);
-    int block_xsize = 0;
-    int block_ysize = 0;
-    band->GetBlockSize(&block_xsize, &block_ysize);
-    GDALDataType type = band->GetRasterDataType();
-    CHECK_GE(static_cast<int>(type), 0);
-    CHECK_LE(static_cast<int>(type), GDT_TypeCount);
-    if (block_xsize == 0 || block_ysize == 0 ||
-        block_xsize > std::numeric_limits<int>::max() / block_ysize) {
-      // Not safe to do anything more with this band.
-      continue;
-    }
-    const int xsize = band->GetXSize();
-    const int ysize = band->GetYSize();
-    const int64 num_pixels = static_cast<int64>(xsize) * ysize;
-    constexpr int kMaxPixels = 1024 * 1024 * 16;
-    if (num_pixels > kMaxPixels) {
-      // Do not checksum massive rasters.
-      continue;
-    }
-
-    // Computing the checksum can take a long time, so do only one band.
-    if (band_num > 1) continue;
-    GDALChecksumImage(band, 0, 0, xsize, ysize);
-  }
-
-  // TODO(schwehr): Enable after fixing EXIFPrintData.
-  // CSLDestroy(dataset->GetMetadataDomainList());
-
-  return 0;
+  GDALRegister_VRT();
+  auto vrt_dataset = GDALOpen(kFilenameVrt, GA_ReadOnly);
+  if (vrt_dataset == nullptr) return;
+  autotest2::GDALFuzzOneInput(static_cast<GDALDataset *>(vrt_dataset));
+  GDALClose(vrt_dataset);
 }
-

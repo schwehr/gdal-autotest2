@@ -12,38 +12,74 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <stddef.h>
-#include <stdint.h>
 #include <memory>
-#include <string>
 
+#include "logging.h"
+#include "security/fuzzing/blaze/proto_message_mutator.h"
 #include "third_party/absl/memory/memory.h"
+#include "autotest2/cpp/frmts/raw/ehdr/ehdrdataset_fuzzer.pb.h"
+#include "autotest2/cpp/frmts/raw/ehdr/ehdrdataset_fuzzer.proto.h"
 #include "autotest2/cpp/fuzzers/gdal.h"
 #include "autotest2/cpp/util/error_handler.h"
 #include "autotest2/cpp/util/vsimem.h"
 #include "frmts/raw/ehdrdataset.h"
 #include "gcore/gdal.h"
+#include "gcore/gdal_frmts.h"
 #include "gcore/gdal_priv.h"
+#include "port/cpl_conv.h"
+#include "port/cpl_error.h"
+#include "port/cpl_port.h"
+#include "port/cpl_string.h"
 
-// TODO(schwehr): Make this a proto fuzzer.
+using third_party::gdal::autotest2::cpp::frmts::raw::ehdr::Ehdr;
 
-extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-  const char kFilename[] = "/vsimem/a.bil";
-  const string data2(reinterpret_cast<const char *>(data), size);
-  autotest2::VsiMemTempWrapper wrapper(kFilename, data2);
-
-  // Not the best, but just shove the same payload into the header.
+DEFINE_PROTO_FUZZER(const Ehdr &s) {
+  const char kFilenameBil[] = "/vsimem/a.bil";
   const char kFilenameHdr[] = "/vsimem/a.hdr";
-  autotest2::VsiMemTempWrapper wrapper_hedr(kFilenameHdr, data2);
+  const char kFilenamePrj[] = "/vsimem/a.prj";
+  const char kFilenameVrt[] = "/vsimem/a.vrt";
+  const char kFilenameXml[] = "/vsimem/a.aux.xml";
+
+  autotest2::VsiMemMaybeTempWrapper bil(kFilenameBil, s.bil(), true);
+  autotest2::VsiMemMaybeTempWrapper hdr(kFilenameHdr, s.hdr(), true);
+  autotest2::VsiMemMaybeTempWrapper prj(kFilenamePrj, s.prj(), s.has_prj());
+  autotest2::VsiMemMaybeTempWrapper vrt(kFilenameVrt, s.vrt(), s.has_vrt());
+  autotest2::VsiMemMaybeTempWrapper xml(kFilenameXml, s.xml(), s.has_xml());
 
   WithQuietHandler error_handler;
-  auto open_info =
-      gtl::MakeUnique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
-  auto dataset = gtl::WrapUnique(EHdrDataset::Open(open_info.get()));
 
-  if (dataset == nullptr) return 0;
+  // Directly test the driver class.
+  {
+    auto open_info =
+        std::make_unique<GDALOpenInfo>(kFilenameBil, GDAL_OF_READONLY, nullptr);
+    auto dataset = absl::WrapUnique(EHdrDataset::Open(open_info.get()));
 
-  autotest2::GDALFuzzOneInput(dataset.get());
+    if (dataset != nullptr) autotest2::GDALFuzzOneInput(dataset.get());
+  }
 
-  return 0;
+  // Test opening via the GDAL lookup infrastructure with only the EHDR driver
+  // active.
+  GDALRegister_EHdr();
+  {
+    auto dataset = GDALOpen(kFilenameBil, GA_ReadOnly);
+    if (dataset != nullptr) {
+      autotest2::GDALFuzzOneInput(static_cast<GDALDataset *>(dataset));
+      GDALClose(dataset);
+    }
+  }
+
+  // Testing opening via the GDAL lookup infrastructure, but via the VRT
+  // driver.  With only the EHDR and VRT drivers, this should focus in on
+  // more interesting cases such as an EHDR used as a band in a VRT and
+  // transformations like external color tables, warps, and masks.
+  {
+    if (!s.has_vrt()) return;
+
+    GDALRegister_VRT();
+
+    auto vrt_dataset = GDALOpen(kFilenameVrt, GA_ReadOnly);
+    if (vrt_dataset == nullptr) return;
+    autotest2::GDALFuzzOneInput(static_cast<GDALDataset *>(vrt_dataset));
+    GDALClose(vrt_dataset);
+  }
 }

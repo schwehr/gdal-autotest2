@@ -14,14 +14,14 @@
 //
 // Tests degrib myerror.c.
 //
-// https://trac.osgeo.org/gdal/browser/trunk/gdal/frmts/grib/degrib18/degrib/myerror.c
+// https://trac.osgeo.org/gdal/browser/trunk/gdal/frmts/grib/degrib/degrib/myerror.c
 //
 // See also:
 //   https://www.weather.gov/mdl/degrib_home
 //   http://www.gdal.org/frmt_grib.html
-//   https://trac.osgeo.org/gdal/browser/trunk/autotest/gdrivers/grib.py
+//   https://github.com/OSGeo/gdal/blob/master/autotest/gdrivers/grib.py
 
-#include "frmts/grib/degrib18/degrib/myutil.h"
+#include "frmts/grib/degrib/degrib/myutil.h"
 
 #include <memory>
 #include <limits>

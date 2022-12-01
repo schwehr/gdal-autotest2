@@ -16,7 +16,7 @@
 //
 // See also:
 //   http://www.gdal.org/frmt_jp2kak.html
-//   https://trac.osgeo.org/gdal/browser/trunk/autotest/gdrivers/jp2kak.py
+//   https://github.com/OSGeo/gdal/blob/master/autotest/gdrivers/jp2kak.py
 
 // TODO(schwehr): Try these:
 //   CPLSetConfigOption("JP2KAK_THREADS", "0");
@@ -68,7 +68,8 @@ TEST(Jp2kakdatasetTest, IdentifyJp2) {
   const char kFilename[] = "/vsimem/a";
   const unsigned char kJp2[] =
       "\x00\x00\x00\x0c\x6a\x50\x20\x20\x0d\x0a\x87\x0a yada yada ";
-  const string data(reinterpret_cast<const char *>(kJp2), CPL_ARRAYSIZE(kJp2));
+  const std::string data(reinterpret_cast<const char *>(kJp2),
+                         CPL_ARRAYSIZE(kJp2));
   VsiMemTempWrapper wrapper(kFilename, data);
   std::unique_ptr<GDALOpenInfo> open_info(
       new GDALOpenInfo(kFilename, GDAL_OF_READONLY, nullptr));
@@ -77,11 +78,11 @@ TEST(Jp2kakdatasetTest, IdentifyJp2) {
 }
 
 TEST(Jp2kakdatasetTest, IdentifyJpc) {
-  std::initializer_list<string> exts = {"jpc", "j2k", "jp2", "jpx", "jpc"};
+  std::initializer_list<std::string> exts = {"jpc", "j2k", "jp2", "jpx", "jpc"};
 
   // Do not match with just the extension.
   for (const auto &ext : exts) {
-    const string filepath = "/vsimem/b." + ext;
+    const std::string filepath = "/vsimem/b." + ext;
     VsiMemTempWrapper wrapper(filepath, "junk");
     std::unique_ptr<GDALOpenInfo> open_info(
         new GDALOpenInfo(filepath.c_str(), GDAL_OF_READONLY, nullptr));
@@ -92,11 +93,12 @@ TEST(Jp2kakdatasetTest, IdentifyJpc) {
   // Must have more than jp2_header bytes of data (12 bytes) or it will be
   // treated as JPIP.
   const unsigned char kJpc[] = "\xff\x4f yada yada yada yada";
-  const string data(reinterpret_cast<const char *>(kJpc), CPL_ARRAYSIZE(kJpc));
+  const std::string data(reinterpret_cast<const char *>(kJpc),
+                         CPL_ARRAYSIZE(kJpc));
 
   // Success with extension and header.
   for (const auto &ext : exts) {
-    const string filepath = "/vsimem/c." + ext;
+    const std::string filepath = "/vsimem/c." + ext;
     VsiMemTempWrapper wrapper(filepath, data);
     std::unique_ptr<GDALOpenInfo> open_info(
         new GDALOpenInfo(filepath.c_str(), GDAL_OF_READONLY, nullptr));
@@ -105,7 +107,7 @@ TEST(Jp2kakdatasetTest, IdentifyJpc) {
   }
 
   // Fail with correct header and wrong extension.
-  const string filepath = "/vsimem/d.bad";
+  const std::string filepath = "/vsimem/d.bad";
   VsiMemTempWrapper wrapper(filepath, data);
   std::unique_ptr<GDALOpenInfo> open_info(
       new GDALOpenInfo(filepath.c_str(), GDAL_OF_READONLY, nullptr));

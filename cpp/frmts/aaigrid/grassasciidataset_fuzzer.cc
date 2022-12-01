@@ -44,10 +44,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   WithQuietHandler error_handler;
   auto open_info =
       std::make_unique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
-  int result = AAIGDataset::Identify(open_info.get());
+  int result = GRASSASCIIDataset::Identify(open_info.get());
   CHECK_LE(-1, result);
   CHECK_GE(1, result);
-  auto dataset = absl::WrapUnique(AAIGDataset::Open(open_info.get()));
+  auto dataset = absl::WrapUnique(GRASSASCIIDataset::Open(open_info.get()));
 
   // If the fuzzer data can't be opened, do not go any further.
   if (dataset == nullptr) return 0;

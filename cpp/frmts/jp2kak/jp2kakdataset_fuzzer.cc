@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "frmts/jp2kak/jp2kakdataset.h"
-
 #include <stddef.h>
 #include <stdint.h>
 #include <memory>
@@ -23,12 +21,13 @@
 #include "third_party/absl/memory/memory.h"
 #include "autotest2/cpp/fuzzers/gdal.h"
 #include "autotest2/cpp/util/vsimem.h"
+#include "frmts/jp2kak/jp2kakdataset.h"
 #include "gcore/gdal.h"
 #include "gcore/gdal_priv.h"
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   const char kFilename[] = "/vsimem/a.jp2";
-  const string data2(reinterpret_cast<const char *>(data), size);
+  const std::string data2(reinterpret_cast<const char *>(data), size);
   autotest2::VsiMemTempWrapper wrapper(kFilename, data2);
   std::unique_ptr<GDALOpenInfo> open_info(
       new GDALOpenInfo(kFilename, GDAL_OF_READONLY, nullptr));

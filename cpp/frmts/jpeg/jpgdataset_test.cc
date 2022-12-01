@@ -16,34 +16,34 @@
 //
 // See also:
 //   http://www.gdal.org/frmt_jpeg.html
-//   https://trac.osgeo.org/gdal/browser/trunk/autotest/gdrivers/jpeg.py
+//   https://github.com/OSGeo/gdal/blob/master/autotest/gdrivers/jpeg.py
 
 #include "frmts/jpeg/jpgdataset.h"
-#include "port/cpl_port.h"
 
 #include "file/base/path.h"
 #include "gmock.h"
 #include "gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
 #include "third_party/absl/memory/memory.h"
 #include "autotest2/cpp/util/error_handler.h"
 #include "autotest2/cpp/util/vsimem.h"
 #include "gcore/gdal.h"
 #include "gcore/gdal_priv.h"
-#include "util/gtl/cleanup.h"
+#include "port/cpl_port.h"
 
 namespace autotest2 {
 namespace {
 
 TEST(JpegIdentifyTest, IdentifyDoesNotExist) {
-  auto open_info = gtl::MakeUnique<GDALOpenInfo>("/does_not_exist",
-                                                 GDAL_OF_READONLY, nullptr);
+  auto open_info = absl::make_unique<GDALOpenInfo>("/does_not_exist",
+                                                   GDAL_OF_READONLY, nullptr);
   ASSERT_NE(nullptr, open_info);
   EXPECT_EQ(FALSE, JPGDataset::Identify(open_info.get()));
 }
 
 TEST(JpegIdentifyTest, Subfile) {
-  auto open_info = gtl::MakeUnique<GDALOpenInfo>("JPEG_SUBFILE:/does_not_exist",
-                                                 GDAL_OF_READONLY, nullptr);
+  auto open_info = absl::make_unique<GDALOpenInfo>(
+      "JPEG_SUBFILE:/does_not_exist", GDAL_OF_READONLY, nullptr);
   ASSERT_NE(nullptr, open_info);
   EXPECT_EQ(TRUE, JPGDataset::Identify(open_info.get()));
 }
@@ -52,11 +52,11 @@ constexpr char kIdentifyMinimum[] = "\xff\xd8\xff\xee\xff\x0e\x00\x64\x41";
 
 TEST(JpegIdentifyTest, MagicOnly) {
   const char kFilename[] = "/vsimem/header-only.jpg";
-  const string data2(reinterpret_cast<const char *>(kIdentifyMinimum),
-                     CPL_ARRAYSIZE(kIdentifyMinimum));
+  const std::string data2(reinterpret_cast<const char *>(kIdentifyMinimum),
+                          CPL_ARRAYSIZE(kIdentifyMinimum));
   autotest2::VsiMemTempWrapper wrapper(kFilename, data2);
   auto open_info =
-      gtl::MakeUnique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
+      absl::make_unique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
   ASSERT_NE(nullptr, open_info);
   EXPECT_EQ(TRUE, JPGDataset::Identify(open_info.get()));
 }
@@ -75,10 +75,11 @@ const char kOne[] =
 
 TEST(JpegDatasetCommonTest, One) {
   const char kFilename[] = "/vsimem/one.jpg";
-  const string data(reinterpret_cast<const char *>(kOne), CPL_ARRAYSIZE(kOne));
+  const std::string data(reinterpret_cast<const char *>(kOne),
+                         CPL_ARRAYSIZE(kOne));
   autotest2::VsiMemTempWrapper wrapper(kFilename, data);
   auto open_info =
-      gtl::MakeUnique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
+      absl::make_unique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
   ASSERT_NE(nullptr, open_info);
   auto src = absl::WrapUnique(JPGDatasetCommon::Open(open_info.get()));
   ASSERT_NE(nullptr, src);
@@ -117,11 +118,12 @@ const char kDatastreamContainsNoImage[] =
 
 TEST(JpegDatasetCommonTest, NoImage) {
   const char kFilename[] = "/vsimem/no-image.jpg";
-  const string data(reinterpret_cast<const char *>(kDatastreamContainsNoImage),
-                    CPL_ARRAYSIZE(kDatastreamContainsNoImage));
+  const std::string data(
+      reinterpret_cast<const char *>(kDatastreamContainsNoImage),
+      CPL_ARRAYSIZE(kDatastreamContainsNoImage));
   autotest2::VsiMemTempWrapper wrapper(kFilename, data);
   auto open_info =
-      gtl::MakeUnique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
+      absl::make_unique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
   ASSERT_NE(nullptr, open_info);
 
   WithQuietHandler error_handler;
@@ -151,10 +153,10 @@ TEST(JpegDatasetCommonTest, b64482898_CorruptICCProfile) {
   // Do not take ownership.
   VSILFILE *f =
       VSIFileFromMemBuffer(kFilename, data, CPL_ARRAYSIZE(kData), FALSE);
-  auto closer = gtl::MakeCleanup([f] { VSIFCloseL(f); });
+  auto closer = absl::MakeCleanup([f] { VSIFCloseL(f); });
 
   auto open_info =
-      gtl::MakeUnique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
+      absl::make_unique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
   ASSERT_NE(nullptr, open_info);
 
   auto src = absl::WrapUnique(JPGDatasetCommon::Open(open_info.get()));

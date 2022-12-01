@@ -15,10 +15,10 @@
 // See also:
 //   https://pds.jpl.nasa.gov/tools/standards-reference.shtml
 //   https://pds.jpl.nasa.gov/documents/sr/StdRef_20090227_v3.8.pdf
-//   https://trac.osgeo.org/gdal/browser/trunk/gdal/frmts/pds
-//   https://trac.osgeo.org/gdal/browser/trunk/gdal/ogr/ogrsf_frmts/pds
-//   https://trac.osgeo.org/gdal/browser/trunk/autotest/gdrivers/pds.py
-//   https://trac.osgeo.org/gdal/browser/trunk/autotest/ogr/ogr_pds.py
+//   https://github.com/OSGeo/gdal/blob/master/gdal/frmts/pds
+//   https://github.com/OSGeo/gdal/blob/master/gdal/ogr/ogrsf_frmts/pds
+//   https://github.com/OSGeo/gdal/blob/master/autotest/gdrivers/pds.py
+//   https://github.com/OSGeo/gdal/blob/master/autotest/ogr/ogr_pds.py
 //   https://github.com/nasa/VICAR
 //   https://isis.astrogeology.usgs.gov/
 
@@ -30,6 +30,7 @@
 #include "logging.h"
 #include "gmock.h"
 #include "gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
 #include "third_party/absl/memory/memory.h"
 #include "third_party/absl/strings/str_cat.h"
 #include "autotest2/cpp/util/cpl_cstringlist.h"
@@ -38,7 +39,6 @@
 #include "ogr/ogrsf_frmts/geojson/libjson/json_object.h"
 #include "port/cpl_port.h"
 #include "port/cpl_vsi.h"
-#include "util/gtl/cleanup.h"
 
 namespace autotest2 {
 namespace {
@@ -53,12 +53,12 @@ TEST(NasaKeywordHandlerTest, PdsSeekTooFar) {
   // Do not take ownership.
   VSILFILE *dst = VSIFileFromMemBuffer(kFilename, bytes, strlen(kPds), FALSE);
   CHECK_NOTNULL(dst);
-  auto dst_closer = gtl::MakeCleanup([dst] { VSIFCloseL(dst); });
+  auto dst_closer = absl::MakeCleanup([dst] { VSIFCloseL(dst); });
 
-  auto handler = gtl::MakeUnique<NASAKeywordHandler>();
+  auto handler = absl::make_unique<NASAKeywordHandler>();
   {
     VSILFILE *src = VSIFOpenL(kFilename, "r");
-    auto src_closer = gtl::MakeCleanup([src] { VSIFCloseL(src); });
+    auto src_closer = absl::MakeCleanup([src] { VSIFCloseL(src); });
 
     // See past the end of the file.
     EXPECT_FALSE(handler->Ingest(src, 100));
@@ -76,12 +76,12 @@ std::unique_ptr<NASAKeywordHandler> MakeHandler(const char *data) {
   // Do not take ownership.
   VSILFILE *dst = VSIFileFromMemBuffer(kFilename, bytes, strlen(data), FALSE);
   CHECK_NOTNULL(dst);
-  auto dst_closer = gtl::MakeCleanup([dst] { VSIFCloseL(dst); });
+  auto dst_closer = absl::MakeCleanup([dst] { VSIFCloseL(dst); });
 
-  auto handler = gtl::MakeUnique<NASAKeywordHandler>();
+  auto handler = absl::make_unique<NASAKeywordHandler>();
   {
     VSILFILE *src = VSIFOpenL(kFilename, "r");
-    auto src_closer = gtl::MakeCleanup([src] { VSIFCloseL(src); });
+    auto src_closer = absl::MakeCleanup([src] { VSIFCloseL(src); });
 
     handler->Ingest(src, 0);  // Ignore failures.
   }
@@ -444,19 +444,6 @@ TEST(NasaKeywordHandlerTest, PdsDeepListBraces) {
 
   EXPECT_EQ(1, keywords.size());
   EXPECT_EQ(3 + depth * 2, keywords[0].size());
-}
-
-TEST(NasaKeywordHandlerTest, StealJSon) {
-  constexpr char kPds[] = "A = B\nEND\n";
-  auto handler = MakeHandler(kPds);
-  char **keyword_list = handler->GetKeywordList();
-  auto keywords = CslToVector(keyword_list);
-  EXPECT_THAT(keywords, testing::ElementsAre("A=B"));
-  json_object *json = handler->StealJSon();
-  ASSERT_NE(nullptr, json);
-
-  // Decrement refcount.
-  json_object_put(json);
 }
 
 TEST(NasaKeywordHandlerTest, PdsAllTheFeatures) {

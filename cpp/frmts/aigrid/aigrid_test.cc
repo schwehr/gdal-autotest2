@@ -1,4 +1,4 @@
-// Copyright 2017 Google Inc. All Rights Reserved.
+// Copyright 2020 Google Inc. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,18 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests GRIB raster driver.
+// Tests AIGRID/AIG (Arc/Info Binary Grid) raster driver.
 //
 // See also:
-//   http://www.gdal.org/frmt_grib.html
-//   https://github.com/OSGeo/gdal/blob/master/autotest/gdrivers/grib.py
-
-#include <stddef.h>
+//   https://gdal.org/drivers/raster/aig.html
+//   https://github.com/OSGeo/gdal/blob/master/autotest/gdrivers/aigrid.py
 
 #include <memory>
 #include <string>
 
-#include "commandlineflags_declare.h"
 #include "file/base/path.h"
 #include "gmock.h"
 #include "googletest.h"
@@ -42,17 +39,16 @@ namespace autotest2 {
 namespace {
 
 const char kTestData[] =
-    "/google3/third_party/gdal/autotest2/cpp/frmts/grib/testdata/";
+    "/google3/third_party/gdal/autotest2/cpp/frmts/aigrid/testdata/";
 
-class GribTest : public ::testing::Test {
+class AigridTest : public ::testing::Test {
  protected:
-  void SetUp() override { GDALRegister_GRIB(); }
+  void SetUp() override { GDALRegister_AIGrid(); }
 };
 
-TEST_F(GribTest, Basics) {
-  const std::string filepath =
-      file::JoinPath(absl::GetFlag(FLAGS_test_srcdir), std::string(kTestData),
-                     "regular_latlon_surface_constant.grib2");
+TEST_F(AigridTest, Basics) {
+  const std::string filepath = file::JoinPath(absl::GetFlag(FLAGS_test_srcdir),
+                                              std::string(kTestData), "abc3x1");
   auto src = absl::WrapUnique(static_cast<GDALDataset *>(
       GDALOpenEx(filepath.c_str(), GDAL_OF_READONLY | GDAL_OF_RASTER, nullptr,
                  nullptr, nullptr)));
@@ -61,10 +57,10 @@ TEST_F(GribTest, Basics) {
   src->GetGeoTransform(geo_transform);
   EXPECT_THAT(
       geo_transform,
-      testing::ElementsAre(-1, 2, 0, 61, 0, -2));
+      testing::ElementsAre(-0.5, 1, 0, 0.5, 0, -1));
   EXPECT_EQ(0, src->GetGCPCount());
-  EXPECT_EQ(16, src->GetRasterXSize());
-  EXPECT_EQ(31, src->GetRasterYSize());
+  EXPECT_EQ(3, src->GetRasterXSize());
+  EXPECT_EQ(1, src->GetRasterYSize());
   EXPECT_EQ(1, src->GetRasterCount());
 
   GDALRasterBand *band = src->GetRasterBand(1);
@@ -72,17 +68,19 @@ TEST_F(GribTest, Basics) {
   int block_xsize = 0;
   int block_ysize = 0;
   band->GetBlockSize(&block_xsize, &block_ysize);
-  EXPECT_EQ(16, block_xsize);
-  EXPECT_EQ(1, block_ysize);
-  EXPECT_EQ(GDT_Float64, band->GetRasterDataType());
-  EXPECT_EQ(GCI_Undefined, band->GetColorInterpretation());
+  EXPECT_EQ(256, block_xsize);
+  EXPECT_EQ(4, block_ysize);
+  EXPECT_EQ(GDT_Byte, band->GetRasterDataType());
+  EXPECT_EQ(GCI_PaletteIndex, band->GetColorInterpretation());
 
   double minmax[2] = {0.0, 0.0};
   ASSERT_EQ(CE_None, band->ComputeRasterMinMax(false, minmax));
-  EXPECT_THAT(minmax, testing::ElementsAre(-272.15, -272.15));
+  EXPECT_THAT(minmax, testing::ElementsAre(0, 2));
 
   EXPECT_EQ(0, band->GetOverviewCount());
-  EXPECT_EQ(nullptr, band->GetColorTable());
+  EXPECT_NE(nullptr, band->GetColorTable());
+
+  // TODO(schwehr): Test more.
 }
 
 }  // namespace
