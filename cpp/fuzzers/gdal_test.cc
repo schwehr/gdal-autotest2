@@ -23,6 +23,8 @@
 
 #include "autotest2/cpp/fuzzers/gdal.h"
 
+#include <memory>
+
 #include "gunit.h"
 #include "third_party/absl/memory/memory.h"
 #include "autotest2/cpp/fuzzers/gdal.h"
@@ -50,11 +52,11 @@ TEST(GdalFuzzTest, BasicLayer) {
       "    107\n";
 
   const char kFilename[] = "/vsimem/a.asc";
-  const string data2(reinterpret_cast<const char *>(kGrid));
+  const std::string data2(reinterpret_cast<const char *>(kGrid));
   autotest2::VsiMemTempWrapper wrapper(kFilename, data2);
 
   auto open_info =
-      gtl::MakeUnique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
+      std::make_unique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
   auto dataset = absl::WrapUnique(AAIGDataset::Open(open_info.get()));
   ASSERT_NE(nullptr, dataset);
 

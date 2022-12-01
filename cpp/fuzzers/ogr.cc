@@ -16,8 +16,10 @@
 
 #include <stdio.h>
 
-#include "base/commandlineflags.h"
+#include "commandlineflags.h"
 #include "logging.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/absl/flags/flag.h"
 #include "third_party/absl/memory/memory.h"
 #include "autotest2/cpp/util/error_handler.h"
 #include "autotest2/cpp/util/vsimem.h"
@@ -29,9 +31,12 @@
 #include "port/cpl_error.h"
 #include "port/cpl_port.h"
 
-DEFINE_FLAG(bool, ogr_deep_fuzz, true,
-            "Disable to do light fuzzing.  Generally used for faster fuzzing "
-            "to generate initial corpus for a fuzzer.");
+// Parsing the command line requires that the calling target is built with this
+// build dependency.  It is okay to go without it.
+//   //security/fuzzing/blaze:default_init_google_for_cc_fuzz_target
+ABSL_FLAG(bool, ogr_deep_fuzz, true,
+          "Disable to do light fuzzing.  Generally used for faster fuzzing "
+          "to generate initial corpus for a fuzzer.");
 
 namespace autotest2 {
 
@@ -39,15 +44,19 @@ void
 OGRFuzzOneInput(GDALDataset *dataset) {
   if (dataset == nullptr) return;
 
-  bool ogr_deep_fuzz = base::GetFlag(FLAGS_ogr_deep_fuzz);
+  bool ogr_deep_fuzz = absl::GetFlag(FLAGS_ogr_deep_fuzz);
 
   FILE *dev_null = fopen("/dev/null", "w");
+  LOG_IF_FIRST_N(INFO, dev_null == nullptr, 1) << "Unable to write to dev_null";
+  auto closer = absl::MakeCleanup([dev_null] {
+    if (dev_null != nullptr) fclose(dev_null);
+  });
 
   const int layer_count = dataset->GetLayerCount();
   CHECK_LE(0, layer_count);
   for (int layer_num = 0; layer_num < layer_count; layer_num++) {
     OGRLayer *layer = dataset->GetLayer(layer_num);
-    CHECK_NOTNULL(layer);
+    CHECK(layer != nullptr);
 
     layer->GetSpatialRef();
     layer->GetGeomType();
@@ -63,7 +72,8 @@ OGRFuzzOneInput(GDALDataset *dataset) {
     bool first = true;
 
     while ((feature = layer->GetNextFeature())) {
-      feature->DumpReadable(dev_null);
+      if (dev_null != nullptr)
+        feature->DumpReadable(dev_null);
       if (!first) {
         delete feature;
         continue;

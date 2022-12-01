@@ -44,11 +44,11 @@ TEST(OgrFuzzTest, BasicLayer) {
   const char kGeoJson[] = R"json({"type": "Point", "coordinates": [1, 2]})json";
 
   auto open_info =
-      gtl::MakeUnique<GDALOpenInfo>(kGeoJson, GDAL_OF_READONLY, nullptr);
-  auto datasource = gtl::MakeUnique<OGRGeoJSONDataSource>();
+      std::make_unique<GDALOpenInfo>(kGeoJson, GDAL_OF_READONLY, nullptr);
+  auto datasource = std::make_unique<OGRGeoJSONDataSource>();
 
   ASSERT_NE(nullptr, datasource);
-  EXPECT_TRUE(datasource->Open(open_info.get(), eGeoJSONSourceText));
+  EXPECT_TRUE(datasource->Open(open_info.get(), eGeoJSONSourceText, "GeoJSON"));
 
   OGRFuzzOneInput(datasource.get());
 }
