@@ -43,7 +43,7 @@ namespace autotest2 {
 //   builder.AddField("bool", OFTInteger, OFSTBoolean);
 //   builder.AddField("real", OFTReal, OFSTNone);
 //   OGRFeatureDefnReleaser fd(builder.Build());
-//   auto fd_cleaner = gtl::MakeCleanup([fd] { fd->Release(); });
+//   auto fd_cleaner = absl::MakeCleanup([fd] { fd->Release(); });
 //   // Use fd.
 
 class OGRFeatureDefnBuilder {

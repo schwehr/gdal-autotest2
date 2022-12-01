@@ -26,10 +26,10 @@ typedef std::unique_ptr<char *, std::function<void(char **)>> StringListPtr;
 
 // C String List (CSL) helpers.
 
-std::vector<string> CslToVector(const char *const *string_list);
+std::vector<std::string> CslToVector(const char *const *string_list);
 
 // Caller must delete the returned result with CSLDestroy.
-char **VectorToCsl(const std::vector<string> &vs);
+char **VectorToCsl(const std::vector<std::string> &vs);
 
 }  // namespace autotest2
 

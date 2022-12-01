@@ -22,16 +22,16 @@
 
 namespace autotest2 {
 
-std::vector<string> CslToVector(const char *const *string_list) {
+std::vector<std::string> CslToVector(const char *const *string_list) {
   if (string_list == nullptr) return {};
-  std::vector<string> result;
+  std::vector<std::string> result;
   for (; *string_list != NULL; ++string_list) {
     result.push_back(*string_list);
   }
   return result;
 }
 
-char **VectorToCsl(const std::vector<string> &vs) {
+char **VectorToCsl(const std::vector<std::string> &vs) {
   if (vs.empty()) return nullptr;
 
   // Build a nullptr terminated list of C strings.

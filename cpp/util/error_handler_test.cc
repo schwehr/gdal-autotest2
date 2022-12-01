@@ -40,14 +40,14 @@ TEST(ErrorHandlerDeathTest, CPLGoogleLogErrorHandlerNullptrTest) {
 }
 
 TEST(ErrorHandlerDeathTest, CPLGoogleLogErrorHandlerFatalTest) {
-  const string fatal_msg("CE_Failure gives FATAL and die");
+  const std::string fatal_msg("CE_Failure gives FATAL and die");
   EXPECT_DEATH(
       CPLGoogleLogErrorHandler(CE_Fatal, 4, fatal_msg.c_str()),
       fatal_msg);
 }
 
 TEST(ErrorHandlerDeathTest, CPLGoogleLogErrorHandlerInvalidTest) {
-  const string invalid_msg("Invalid should give FATAL and die");
+  const std::string invalid_msg("Invalid should give FATAL and die");
   EXPECT_DEATH(
       CPLGoogleLogErrorHandler(
           static_cast<CPLErr>(-1), 5, invalid_msg.c_str()),

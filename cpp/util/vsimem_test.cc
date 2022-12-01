@@ -24,7 +24,7 @@ namespace {
 TEST(VsimemTest, VsiMemTempWrapper) {
   const char kFilename[] = "/vsimem/a";
   {
-    const string kData = "b";
+    const std::string kData = "b";
     VsiMemTempWrapper wrapper(kFilename, kData);
     VSILFILE *file = VSIFOpenL(kFilename, "rb");
     EXPECT_NE(nullptr, file);
@@ -38,7 +38,7 @@ TEST(VsimemTest, VsiMemTempWrapper) {
 
 TEST(VsimemTest, VsiMemMaybeTempWrapper) {
   const char kFilename[] = "/vsimem/c";
-  const string kData = "d";
+  const std::string kData = "d";
   {
     VsiMemMaybeTempWrapper wrapper(kFilename, kData, false);
     EXPECT_EQ(nullptr, VSIFOpenL(kFilename, "rb"));

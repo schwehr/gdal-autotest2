@@ -15,12 +15,12 @@
 #include "autotest2/cpp/util/ogr/ogrfeaturedefn.h"
 
 #include "gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
 #include "third_party/absl/memory/memory.h"
 #include "ogr/ogr_api.h"
 #include "ogr/ogr_core.h"
 #include "ogr/ogr_feature.h"
 #include "port/cpl_port.h"
-#include "util/gtl/cleanup.h"
 
 namespace autotest2 {
 namespace {
@@ -45,7 +45,7 @@ TEST(BuilderTest, OneGeo) {
   OGRFeatureDefnBuilder builder("schema");
   builder.AddGeom("geo", wkbPoint);
   auto fd = builder.Build();
-  auto fd_cleaner = gtl::MakeCleanup([fd] { fd->Release(); });
+  auto fd_cleaner = absl::MakeCleanup([fd] { fd->Release(); });
 
   EXPECT_EQ(1, fd->GetGeomFieldCount());
   EXPECT_EQ(wkbPoint, fd->GetGeomType());
@@ -59,7 +59,7 @@ TEST(BuilderTest, Empty) {
   // Create a definition without a geometry.
   OGRFeatureDefnBuilder builder("schema");
   auto fd = builder.Build();
-  auto fd_cleaner = gtl::MakeCleanup([fd] { fd->Release(); });
+  auto fd_cleaner = absl::MakeCleanup([fd] { fd->Release(); });
 
   EXPECT_EQ(0, fd->GetGeomFieldCount());
   EXPECT_EQ(0, fd->GetFieldCount());
@@ -69,7 +69,7 @@ TEST(BuilderTest, OneField) {
   OGRFeatureDefnBuilder builder("schema");
   builder.AddField("i", OFTInteger, OFSTNone);
   auto fd = builder.Build();
-  auto fd_cleaner = gtl::MakeCleanup([fd] { fd->Release(); });
+  auto fd_cleaner = absl::MakeCleanup([fd] { fd->Release(); });
 
   EXPECT_EQ(0, fd->GetGeomFieldCount());
 
@@ -84,7 +84,7 @@ TEST(BuilderTest, OneGeom) {
   OGRFeatureDefnBuilder builder("schema");
   builder.AddGeom("a", wkbUnknown);
   auto fd = builder.Build();
-  auto fd_cleaner = gtl::MakeCleanup([fd] { fd->Release(); });
+  auto fd_cleaner = absl::MakeCleanup([fd] { fd->Release(); });
 
   EXPECT_EQ(1, fd->GetGeomFieldCount());
   auto geom = fd->GetGeomFieldDefn(0);
@@ -102,7 +102,7 @@ TEST(BuilderTest, BuildFields) {
   builder.AddField("bool", OFTInteger, OFSTBoolean);
   builder.AddGeom("geo2", wkbUnknown);
   auto fd = builder.Build();
-  auto fd_cleaner = gtl::MakeCleanup([fd] { fd->Release(); });
+  auto fd_cleaner = absl::MakeCleanup([fd] { fd->Release(); });
 
   EXPECT_EQ(1, fd->GetGeomFieldCount());
   EXPECT_EQ(wkbUnknown, fd->GetGeomType());
@@ -155,7 +155,7 @@ TEST(BuilderTest, MultipleGeomFields) {
   builder.AddGeom("a", wkbPolygon);
   builder.AddGeom("b", wkbMultiPolygon);
   auto fd = builder.Build();
-  auto fd_cleaner = gtl::MakeCleanup([fd] { fd->Release(); });
+  auto fd_cleaner = absl::MakeCleanup([fd] { fd->Release(); });
 
   EXPECT_EQ(2, fd->GetGeomFieldCount());
   EXPECT_EQ(wkbPolygon, fd->GetGeomType());
@@ -176,7 +176,7 @@ TEST(BuilderTest, Lists) {
   builder.AddField("stringlist", OFTStringList, OFSTNone);
   builder.AddField("int64list", OFTInteger64List, OFSTNone);
   auto fd = builder.Build();
-  auto fd_cleaner = gtl::MakeCleanup([fd] { fd->Release(); });
+  auto fd_cleaner = absl::MakeCleanup([fd] { fd->Release(); });
 
   EXPECT_EQ(4, fd->GetFieldCount());
 

@@ -20,7 +20,7 @@
 void CPLGoogleLogErrorHandler(CPLErr error_class,
                               int error_num,
                               const char *error_msg) {
-  CHECK_NOTNULL(error_msg);
+  CHECK(error_msg != nullptr);
   int log_level;
   switch (error_class) {
     case CE_None:  // Fall through and treat as INFO.

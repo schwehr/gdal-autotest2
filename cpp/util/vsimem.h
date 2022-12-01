@@ -11,7 +11,7 @@ namespace autotest2 {
 // instance goes out of scope.
 class VsiMemTempWrapper {
  public:
-  VsiMemTempWrapper(const string &filename, const string &data)
+  VsiMemTempWrapper(const std::string &filename, const std::string &data)
       : filename_(filename) {
     VSILFILE *file = VSIFOpenL(filename.c_str(), "wb");
     CHECK_NE(nullptr, file);
@@ -21,14 +21,15 @@ class VsiMemTempWrapper {
   ~VsiMemTempWrapper() { CHECK_EQ(0, VSIUnlink(filename_.c_str())); }
 
  private:
-  string filename_;
+  std::string filename_;
 };
 
 // Writes a buffer to an in-memory filesystem and deletes the file when the
 // instance goes out of scope.
 class VsiMemMaybeTempWrapper {
  public:
-  VsiMemMaybeTempWrapper(const string &filename, const string &data, bool do_it)
+  VsiMemMaybeTempWrapper(const std::string &filename, const std::string &data,
+                         bool do_it)
       : filename_(filename), do_it_(do_it) {
     if (!do_it_) return;
     VSILFILE *file = VSIFOpenL(filename.c_str(), "wb");
@@ -42,7 +43,7 @@ class VsiMemMaybeTempWrapper {
   }
 
  private:
-  string filename_;
+  std::string filename_;
   bool do_it_;
 };
 
