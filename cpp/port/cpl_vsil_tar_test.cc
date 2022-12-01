@@ -22,7 +22,7 @@
 #include <string>
 #include <vector>
 
-#include "base/logging.h"
+#include "logging.h"
 #include "file/base/path.h"
 #include "googletest.h"
 #include "gunit.h"

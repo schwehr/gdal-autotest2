@@ -20,7 +20,7 @@
 
 #include <string>
 
-#include "base/logging.h"
+#include "logging.h"
 #include "file/base/path.h"
 #include "gmock.h"
 #include "googletest.h"

@@ -40,7 +40,7 @@
 
 #include <math.h>
 
-#include "base/logging.h"
+#include "logging.h"
 #include "gunit.h"
 #include "third_party/absl/base/macros.h"
 // TODO(schwehr): Add proj.h after cl/162737615 and change .u and .v below.

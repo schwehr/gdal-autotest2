@@ -16,7 +16,7 @@
 #include <stdint.h>
 #include <string>
 
-#include "base/logging.h"
+#include "logging.h"
 #include "third_party/absl/strings/str_cat.h"
 #include "autotest2/cpp/util/cpl_cstringlist.h"
 #include "autotest2/cpp/util/error_handler.h"

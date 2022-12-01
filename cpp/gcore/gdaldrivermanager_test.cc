@@ -41,7 +41,7 @@ void DeregisterAllDrivers() {
 }
 
 
-// A test fixture is used because {TODO(schwehr): put reason here}.
+// Make sure that tests always start with no drivers registered.
 class GDALDriverManagerTest : public ::testing::Test {
  protected:
   GDALDriverManagerTest() : manager_(GetGDALDriverManager()) {
@@ -66,11 +66,11 @@ TEST_F(GDALDriverManagerTest, DriverCount) {
   // Cannot have more than some rediculously high number of drivers.
   EXPECT_GT(300, manager_->GetDriverCount());
 
-  // If we know how many drivers should be available.
+  // Just for google3, we know how many drivers should be available.
   // If you enable more drivers, set this number to the new total number of
   // drivers and make sure that there are C++ and Python tests for
   // every active driver.
-  EXPECT_EQ(28, manager_->GetDriverCount());
+  EXPECT_EQ(35, manager_->GetDriverCount());
 }
 
 // This test verifies that a single driver config works.
@@ -80,7 +80,7 @@ TEST_F(GDALDriverManagerTest, AddRemoveSingleDriver) {
   ASSERT_EQ(1, manager_->GetDriverCount());
 
   GDALDriver *driver = manager_->GetDriver(0);
-  string driver_name = driver->GetDescription();
+  std::string driver_name = driver->GetDescription();
   EXPECT_STREQ("VRT", driver_name.c_str());
   EXPECT_EQ(driver, manager_->GetDriverByName(driver_name.c_str()));
 
@@ -99,9 +99,9 @@ TEST_F(GDALDriverManagerTest, RemoveSingleDriver) {
   const int driver_count = manager_->GetDriverCount();
   ASSERT_LT(2, driver_count);
 
-  const string name = "VRT";
+  const std::string name = "VRT";
   GDALDriver *driver = manager_->GetDriverByName(name.c_str());
-  string driver_name = driver->GetDescription();
+  std::string driver_name = driver->GetDescription();
   EXPECT_STREQ(name.c_str(), driver->GetDescription());
 
   manager_->DeregisterDriver(driver);

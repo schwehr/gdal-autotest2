@@ -17,6 +17,7 @@
 #include "gunit.h"
 #include "autotest2/cpp/util/error_handler.h"
 #include "gcore/gdal.h"
+#include "gcore/gdal_priv.h"
 
 namespace {
 
@@ -206,9 +207,58 @@ TEST(GdalMiscTest, GDALFindDataType) {
   EXPECT_EQ(GDT_CFloat64, GDALFindDataType(65, FALSE, FALSE, TRUE));
 }
 
-// TODO(schwehr): Test GDALFindDataTypeForValue.
-// TODO(schwehr): Test GDALGetDataTypeSizeBytes.
-// TODO(schwehr): Test GDALGetDataTypeSizeBits.
+TEST(GdalMiscTest, GDALFindDataTypeForValue) {
+  EXPECT_EQ(GDT_Byte, GDALFindDataTypeForValue(1, FALSE));
+  EXPECT_EQ(GDT_Int16, GDALFindDataTypeForValue(-1, FALSE));
+  EXPECT_EQ(GDT_UInt16, GDALFindDataTypeForValue(20000, FALSE));
+  EXPECT_EQ(GDT_Int32, GDALFindDataTypeForValue(-40000, FALSE));
+  EXPECT_EQ(GDT_UInt32, GDALFindDataTypeForValue(3000000000, FALSE));
+  EXPECT_EQ(GDT_Float64, GDALFindDataTypeForValue(0.1, FALSE));
+
+  EXPECT_EQ(GDT_CFloat64, GDALFindDataTypeForValue(0.1, TRUE));
+}
+
+TEST(GdalMiscTest, GDALGetDataTypeSizeBytes) {
+  EXPECT_EQ(0, GDALGetDataTypeSizeBytes(GDT_Unknown));
+
+  EXPECT_EQ(1, GDALGetDataTypeSizeBytes(GDT_Byte));
+
+  EXPECT_EQ(2, GDALGetDataTypeSizeBytes(GDT_UInt16));
+  EXPECT_EQ(2, GDALGetDataTypeSizeBytes(GDT_Int16));
+
+  EXPECT_EQ(4, GDALGetDataTypeSizeBytes(GDT_UInt32));
+  EXPECT_EQ(4, GDALGetDataTypeSizeBytes(GDT_Int32));
+  EXPECT_EQ(4, GDALGetDataTypeSizeBytes(GDT_Float32));
+  EXPECT_EQ(4, GDALGetDataTypeSizeBytes(GDT_CInt16));
+
+  EXPECT_EQ(8, GDALGetDataTypeSizeBytes(GDT_Float64));
+  EXPECT_EQ(8, GDALGetDataTypeSizeBytes(GDT_CInt32));
+  EXPECT_EQ(8, GDALGetDataTypeSizeBytes(GDT_CFloat32));
+
+  EXPECT_EQ(16, GDALGetDataTypeSizeBytes(GDT_CFloat64));
+}
+
+TEST(GdalMiscTest, GDALGetDataTypeSizeBits) {
+  EXPECT_EQ(0, GDALGetDataTypeSizeBits(GDT_Unknown));
+
+  EXPECT_EQ(1 * 8, GDALGetDataTypeSizeBits(GDT_Byte));
+
+  EXPECT_EQ(2 * 8, GDALGetDataTypeSizeBits(GDT_UInt16));
+  EXPECT_EQ(2 * 8, GDALGetDataTypeSizeBits(GDT_Int16));
+
+  EXPECT_EQ(4 * 8, GDALGetDataTypeSizeBits(GDT_UInt32));
+  EXPECT_EQ(4 * 8, GDALGetDataTypeSizeBits(GDT_Int32));
+  EXPECT_EQ(4 * 8, GDALGetDataTypeSizeBits(GDT_Float32));
+  EXPECT_EQ(4 * 8, GDALGetDataTypeSizeBits(GDT_CInt16));
+
+  EXPECT_EQ(8 * 8, GDALGetDataTypeSizeBits(GDT_Float64));
+  EXPECT_EQ(8 * 8, GDALGetDataTypeSizeBits(GDT_CInt32));
+  EXPECT_EQ(8 * 8, GDALGetDataTypeSizeBits(GDT_CFloat32));
+
+  EXPECT_EQ(16 * 8, GDALGetDataTypeSizeBits(GDT_CFloat64));
+}
+
+// TODO(schwehr): Test .
 
 TEST(GdalMiscTest, GdalDataTypeSize) {
   // Tests getting the size in bits.
@@ -234,6 +284,21 @@ TEST(GdalMiscTest, GdalDataTypeIsComplex) {
   EXPECT_TRUE(GDALDataTypeIsComplex(GDT_CInt32));
   EXPECT_TRUE(GDALDataTypeIsComplex(GDT_CFloat32));
   EXPECT_TRUE(GDALDataTypeIsComplex(GDT_CFloat64));
+}
+
+TEST(GdalMiscTest, GdalDataTypeIsInteger) {
+  EXPECT_FALSE(GDALDataTypeIsInteger(GDT_Unknown));
+  EXPECT_TRUE(GDALDataTypeIsInteger(GDT_Byte));
+  EXPECT_TRUE(GDALDataTypeIsInteger(GDT_UInt16));
+  EXPECT_TRUE(GDALDataTypeIsInteger(GDT_Int16));
+  EXPECT_TRUE(GDALDataTypeIsInteger(GDT_UInt32));
+  EXPECT_TRUE(GDALDataTypeIsInteger(GDT_Int32));
+  EXPECT_FALSE(GDALDataTypeIsInteger(GDT_Float32));
+  EXPECT_FALSE(GDALDataTypeIsInteger(GDT_Float64));
+  EXPECT_TRUE(GDALDataTypeIsInteger(GDT_CInt16));
+  EXPECT_TRUE(GDALDataTypeIsInteger(GDT_CInt32));
+  EXPECT_FALSE(GDALDataTypeIsInteger(GDT_CFloat32));
+  EXPECT_FALSE(GDALDataTypeIsInteger(GDT_CFloat64));
 }
 
 TEST(GdalMiscTest, GdalGetDataTypeName) {
@@ -385,11 +450,76 @@ TEST(GdalMiscTest, GdalAdjustValueToDataType) {
   // TODO(schwehr): nan and inf.
 }
 
-// TODO(schwehr): Test GDALGetAsyncStatusTypeByName.
-// TODO(schwehr): Test GDALGetAsyncStatusTypeName.
-// TODO(schwehr): Test GDALGetPaletteInterpretationName.
-// TODO(schwehr): Test GDALGetColorInterpretationName.
-// TODO(schwehr): Test GDALGetColorInterpretationByName.
+TEST(GdalMiscTest, GDALGetNonComplexDataType) {
+  EXPECT_EQ(GDT_Unknown, GDALGetNonComplexDataType(GDT_Unknown));
+  EXPECT_EQ(GDT_Byte, GDALGetNonComplexDataType(GDT_Byte));
+  EXPECT_EQ(GDT_UInt16, GDALGetNonComplexDataType(GDT_UInt16));
+  EXPECT_EQ(GDT_Int16, GDALGetNonComplexDataType(GDT_Int16));
+  EXPECT_EQ(GDT_UInt32, GDALGetNonComplexDataType(GDT_UInt32));
+  EXPECT_EQ(GDT_Int32, GDALGetNonComplexDataType(GDT_Int32));
+  EXPECT_EQ(GDT_Float32, GDALGetNonComplexDataType(GDT_Float32));
+  EXPECT_EQ(GDT_Float64, GDALGetNonComplexDataType(GDT_Float64));
+
+  EXPECT_EQ(GDT_Int16, GDALGetNonComplexDataType(GDT_CInt16));
+  EXPECT_EQ(GDT_Int32, GDALGetNonComplexDataType(GDT_CInt32));
+  EXPECT_EQ(GDT_Float32, GDALGetNonComplexDataType(GDT_CFloat32));
+  EXPECT_EQ(GDT_Float64, GDALGetNonComplexDataType(GDT_CFloat64));
+}
+
+TEST(GdalMiscTest, GDALGetAsyncStatusTypeByName) {
+  EXPECT_EQ(GARIO_PENDING,  GDALGetAsyncStatusTypeByName("PENDING"));
+  EXPECT_EQ(GARIO_UPDATE,  GDALGetAsyncStatusTypeByName("UPDATE"));
+  EXPECT_EQ(GARIO_ERROR,  GDALGetAsyncStatusTypeByName("ERROR"));
+  EXPECT_EQ(GARIO_COMPLETE,  GDALGetAsyncStatusTypeByName("COMPLETE"));
+  EXPECT_EQ(GARIO_ERROR,  GDALGetAsyncStatusTypeByName("Garbage"));
+}
+
+TEST(GdalMiscTest, GDALGetAsyncStatusTypeName) {
+  EXPECT_STREQ("PENDING",  GDALGetAsyncStatusTypeName(GARIO_PENDING));
+  EXPECT_STREQ("UPDATE",  GDALGetAsyncStatusTypeName(GARIO_UPDATE));
+  EXPECT_STREQ("ERROR",  GDALGetAsyncStatusTypeName(GARIO_ERROR));
+  EXPECT_STREQ("COMPLETE",  GDALGetAsyncStatusTypeName(GARIO_COMPLETE));
+  EXPECT_EQ(nullptr,  GDALGetAsyncStatusTypeName(GARIO_TypeCount));
+}
+
+TEST(GdalMiscTest, GDALGetPaletteInterpretationName) {
+  EXPECT_STREQ("Gray", GDALGetPaletteInterpretationName(GPI_Gray));
+  EXPECT_STREQ("RGB", GDALGetPaletteInterpretationName(GPI_RGB));
+  EXPECT_STREQ("CMYK", GDALGetPaletteInterpretationName(GPI_CMYK));
+  EXPECT_STREQ("HLS", GDALGetPaletteInterpretationName(GPI_HLS));
+  EXPECT_STREQ("Unknown", GDALGetPaletteInterpretationName(
+                              static_cast<GDALPaletteInterp>(9999)));
+}
+
+TEST(GdalMiscTest, GDALGetColorInterpretationName) {
+  EXPECT_STREQ("Undefined", GDALGetColorInterpretationName(GCI_Undefined));
+  EXPECT_STREQ("Gray", GDALGetColorInterpretationName(GCI_GrayIndex));
+  EXPECT_STREQ("Palette", GDALGetColorInterpretationName(GCI_PaletteIndex));
+  EXPECT_STREQ("Red", GDALGetColorInterpretationName(GCI_RedBand));
+  EXPECT_STREQ("Green", GDALGetColorInterpretationName(GCI_GreenBand));
+  EXPECT_STREQ("Blue", GDALGetColorInterpretationName(GCI_BlueBand));
+  EXPECT_STREQ("Alpha", GDALGetColorInterpretationName(GCI_AlphaBand));
+  EXPECT_STREQ("Hue", GDALGetColorInterpretationName(GCI_HueBand));
+  EXPECT_STREQ("Saturation",
+               GDALGetColorInterpretationName(GCI_SaturationBand));
+  EXPECT_STREQ("Lightness", GDALGetColorInterpretationName(GCI_LightnessBand));
+  EXPECT_STREQ("Cyan", GDALGetColorInterpretationName(GCI_CyanBand));
+  EXPECT_STREQ("Magenta", GDALGetColorInterpretationName(GCI_MagentaBand));
+  EXPECT_STREQ("Yellow", GDALGetColorInterpretationName(GCI_YellowBand));
+  EXPECT_STREQ("Black", GDALGetColorInterpretationName(GCI_BlackBand));
+  EXPECT_STREQ("YCbCr_Y", GDALGetColorInterpretationName(GCI_YCbCr_YBand));
+  EXPECT_STREQ("YCbCr_Cb", GDALGetColorInterpretationName(GCI_YCbCr_CbBand));
+  EXPECT_STREQ("YCbCr_Cr", GDALGetColorInterpretationName(GCI_YCbCr_CrBand));
+  EXPECT_STREQ("Unknown", GDALGetColorInterpretationName(
+                              static_cast<GDALColorInterp>(9999)));
+}
+
+TEST(GdalMiscTest, GDALGetColorInterpretationByName) {
+  EXPECT_EQ(GCI_Undefined, GDALGetColorInterpretationByName("Undefined"));
+  EXPECT_EQ(GCI_GrayIndex, GDALGetColorInterpretationByName("gray"));
+  EXPECT_EQ(GCI_Undefined, GDALGetColorInterpretationByName("Does not exist"));
+}
+
 // TODO(schwehr): Test GDALGetRandomRasterSample.
 // TODO(schwehr): Test GDALInitGCPs.
 // TODO(schwehr): Test GDALDeinitGCPs.
@@ -418,5 +548,30 @@ TEST(GdalMiscTest, GdalAdjustValueToDataType) {
 // TODO(schwehr): Test GDALCheckBandCount.
 // TODO(schwehr): Test GDALSerializeGCPListToXML.
 // TODO(schwehr): Test GDALDeserializeGCPListFromXML.
+// TODO(schwehr): Test GDALSerializeOpenOptionsToXML()
+// TODO(schwehr): Test GDALDeserializeOpenOptionsFromXML()
+// TODO(schwehr): Test GDALRasterIOGetResampleAlg()
+// TODO(schwehr): Test GDALRasterIOGetResampleAlgStr()
+// TODO(schwehr): Test GDALRasterIOExtraArgSetResampleAlg()
+
+TEST(GdalMiscTest, GDALCanFileAcceptSidecarFile) {
+  // Do not call with nullptr.
+  EXPECT_TRUE(GDALCanFileAcceptSidecarFile(""));
+  EXPECT_TRUE(GDALCanFileAcceptSidecarFile(" "));
+  EXPECT_TRUE(GDALCanFileAcceptSidecarFile("\r\n\t\v"));
+
+  EXPECT_TRUE(GDALCanFileAcceptSidecarFile("/vsicurl/"));
+  EXPECT_TRUE(GDALCanFileAcceptSidecarFile("/vsicurl/a"));
+  EXPECT_FALSE(GDALCanFileAcceptSidecarFile("/vsicurl/?"));
+  EXPECT_FALSE(GDALCanFileAcceptSidecarFile("/vsicurl/a/?/b"));
+  EXPECT_FALSE(GDALCanFileAcceptSidecarFile("c/vsicurl/?"));
+  EXPECT_FALSE(GDALCanFileAcceptSidecarFile("d/vsicurl/a/?/b"));
+  EXPECT_FALSE(GDALCanFileAcceptSidecarFile("?/vsicurl/e"));
+
+  EXPECT_FALSE(GDALCanFileAcceptSidecarFile("/vsisubfile/"));
+  EXPECT_TRUE(GDALCanFileAcceptSidecarFile("a/vsisubfile/"));
+
+  EXPECT_FALSE(GDALCanFileAcceptSidecarFile("a/vsisubfile/?/vsicurl/e"));
+}
 
 }  // namespace

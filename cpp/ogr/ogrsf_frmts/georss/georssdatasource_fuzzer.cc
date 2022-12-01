@@ -17,7 +17,7 @@
 #include <memory>
 #include <string>
 
-#include "base/logging.h"
+#include "logging.h"
 #include "absl/memory/memory.h"
 #include "autotest2/cpp/fuzzers/ogr.h"
 #include "autotest2/cpp/util/error_handler.h"
