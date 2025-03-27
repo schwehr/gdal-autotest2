@@ -36,8 +36,8 @@ import struct
 
 from osgeo import gdal
 
-from google3.testing.pybase import googletest
-from google3.testing.pybase import parameterized
+import unittest
+from absl.testing import parameterized
 from google3.third_party.gdal.autotest2.python.gdrivers import gdrivers_util
 
 DRIVER = gdrivers_util.JPEGXL_DRIVER
@@ -749,4 +749,4 @@ class JpegxlTest(gdrivers_util.DriverTestCase, parameterized.TestCase):
 
 
 if __name__ == '__main__':
-  googletest.main()
+  unittest.main()
