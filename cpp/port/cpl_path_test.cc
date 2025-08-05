@@ -6,7 +6,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,13 +14,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Tests for https://github.com/OSGeo/gdal/blob/master/port/cpl_path.cpp
+
 #include <cstdlib>
 #include <string>
 
-#include "gunit.h"
+#include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
 #include "third_party/absl/types/optional.h"
-#include "gcore/gdal_priv.h"
-#include "port/cpl_conv.h"
+#include "third_party/gdal/port/cpl_conv.h"
 
 namespace {
 
@@ -41,7 +43,7 @@ TEST(CplPathTest, CPLGetPath) {
 }
 
 // Tests getting the directory portion of a file path.
-// Almost the sampe as CPLGetPath, but with "." rather than ""
+// Almost the same as CPLGetPath, but with "." rather than ""
 // for an empty directory path.
 TEST(CplPathTest, CPLGetDirname) {
   EXPECT_STREQ(".", CPLGetDirname(""));
@@ -92,7 +94,7 @@ TEST(CplPathTest, CPLGetExtension) {
   EXPECT_STREQ("", CPLGetExtension("a"));
   EXPECT_STREQ("", CPLGetExtension("."));
   // Undocumented behavior.  Expected "b", but got "" for ".b"
-  // Reported upstream: http://trac.osgeo.org/gdal/ticket/5373
+  // Reported upstream: https://trac.osgeo.org/gdal/ticket/5373
   EXPECT_STREQ("", CPLGetExtension(".b"));
   EXPECT_STREQ("d", CPLGetExtension("/foo/c.d"));
   EXPECT_STREQ("", CPLGetExtension("/foo.bar/e"));
@@ -179,7 +181,36 @@ TEST(CplPathTest, CPLCleanTrailingSlash) {
 
 // TODO(schwehr): Test CPLCorrespondingPaths
 // TODO(schwehr): Test CPLGenerateTempFilename
-// TODO(schwehr): Test CPLExpandTilde
+
+TEST(CplExpandTilde, NoTilde) {
+  EXPECT_STREQ("/foo/bar", CPLExpandTilde("/foo/bar"));
+}
+
+TEST(CplExpandTilde, TildeNotAtBeginning) {
+  EXPECT_STREQ("/foo/bar/~/", CPLExpandTilde("/foo/bar/~/"));
+}
+
+TEST(CplExpandTilde, WillExpand) {
+  // TODO: b/335317901 - CPLExpandTilde doesn't look up USERPROFILE on Windows.
+
+  // Save/restore HOME config. Use CPLGetGlobalConfigOption to avoid reading
+  // the HOME env var, which would pollute config state for other tests.
+  // Note, CPLSetConfigOption invalidates this ptr.
+  const char *curr_config = CPLGetGlobalConfigOption("HOME", nullptr);
+  char *saved_config = curr_config ? CPLStrdup(curr_config) : nullptr;
+  absl::Cleanup curr_config_cleanup = [saved_config] {
+    CPLSetConfigOption("HOME", saved_config);
+    CPLFree(saved_config);
+  };
+
+  CPLSetConfigOption("HOME", "/foo");
+
+#ifdef WIN32
+  EXPECT_STREQ("/foo\\bar", CPLExpandTilde("~/bar"));
+#else
+  EXPECT_STREQ("/foo/bar", CPLExpandTilde("~/bar"));
+#endif
+}
 
 class CPLSaveEnv {
  public:
@@ -190,6 +221,8 @@ class CPLSaveEnv {
   ~CPLSaveEnv() {
     if (value_.has_value())
       setenv(key_.c_str(), value_.value().c_str(), 1 /* overwrite*/);
+    else
+      unsetenv(key_.c_str());
   }
 
  private:
