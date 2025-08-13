@@ -1,12 +1,10 @@
-#!/usr/bin/env python
-
 # Copyright 2014 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+#     https://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -40,28 +38,28 @@
 
 Format is described here:
 
-http://www.gdal.org/frmt_various.html#AAIGrid
+https://gdal.org/drivers/raster/aaigrid.html
 
 Rewrite of aaigrid.py:
 
-http://trac.osgeo.org/gdal/browser/trunk/autotest/gdrivers/aaigrid.py
+https://github.com/OSGeo/gdal/blob/master/autotest/gdrivers/aaigrid.py
 """
-
+import glob
 import os
 import unittest
 
 from osgeo import gdal
+
 from autotest2.gdrivers import gdrivers_util
 
 DRIVER = gdrivers_util.AAIGRID_DRIVER
 EXT = '.asc'
 
 
-@gdrivers_util.SkipIfDriverMissing(DRIVER)
 class AaigridTest(gdrivers_util.DriverTestCase):
 
-  def setUp(self):
-    super(AaigridTest, self).setUp(DRIVER, EXT)
+  def setUp(self):  # pytype: disable=signature-mismatch
+    super().setUp(DRIVER, EXT)
 
   def getTestFilePath(self, filename):
     return gdrivers_util.GetTestFilePath(os.path.join(DRIVER, filename))
@@ -100,7 +98,6 @@ class AaigridTest(gdrivers_util.DriverTestCase):
     self.CheckGeoTransform((100000, 50, 0, 650600, 0, -50))
     self.CheckBand(1, 1123, gdal.GDT_Float32, -99999)
 
-  @gdrivers_util.SkipIfDriverMissing(gdrivers_util.GTIFF_DRIVER)
   def testCreateCopy(self):
     filepath = gdrivers_util.GetTestFilePath('gtiff/byte.tif')
     self.CheckOpen(filepath, check_driver=False)
@@ -145,9 +142,9 @@ class AaigridTest(gdrivers_util.DriverTestCase):
     self.CheckOpen(filepath)
     self.CheckBand(1, 278, gdal.GDT_Int32, -99999)
 
-  @gdrivers_util.SkipIfDriverMissing(gdrivers_util.VRT_DRIVER)
+  # TODO: b/429626570 - Use GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE.
   def testAai07NonSquareVrt(self):
-    filepath = gdrivers_util.GetTestFilePath('nonsquare.vrt')
+    filepath = gdrivers_util.GetTestFilePath('raw/nonsquare.vrt')
     self.CheckOpen(filepath, check_driver=False)
     self.CheckBand(1, 12481)
     self.CheckCreateCopy()
@@ -158,18 +155,18 @@ class AaigridTest(gdrivers_util.DriverTestCase):
     self.CheckBand(1, 4672)
     self.CheckCreateCopy(vsimem=True)
 
-  @gdrivers_util.SkipIfDriverMissing(gdrivers_util.EHDR_DRIVER)
   def testAai09DecimalPrecision(self):
-    filepath = gdrivers_util.GetTestFilePath('float32.bil')
+    filepath = gdrivers_util.GetTestFilePath('ehdr/float32.bil')
     self.CheckOpen(filepath, check_driver=False)
     dst = self.CheckCreateCopy(check_stats=False,
                                options=['DECIMAL_PRECISION=2'])
+    assert dst is not None
     stats = dst.GetRasterBand(1).ComputeRasterMinMax()
     self.assertAlmostEqual(stats[0], -0.84)
     self.assertEqual(stats[1], 2)
 
   def testAai10DatatypeConfig(self):
-    with gdrivers_util.ConfigOption('AAIGRID_DATATYPE', 'Float64'):
+    with gdal.config_option('AAIGRID_DATATYPE', 'Float64'):
       self.assertEqual(gdal.GetConfigOption('AAIGRID_DATATYPE'), 'Float64')
       filepath = self.getTestFilePath('float64.asc')
       xml_file = filepath + '.xml'
@@ -180,19 +177,25 @@ class AaigridTest(gdrivers_util.DriverTestCase):
     band = self.src.GetRasterBand(1)
     self.assertEqual(band.DataType, gdal.GDT_Float64)
 
-  # TODO(schwehr): Rewrite test 11.
-  # TODO(schwehr): Rewrite test 12.
-  # TODO(schwehr): Rewrite test 13.
-  # TODO(schwehr): Rewrite test 14.
-  # TODO(schwehr): Rewrite test 15.
+  # TODO: b/335317901 - Rewrite test 11.
+  # TODO: b/335317901 - Rewrite test 12.
+  # TODO: b/335317901 - Rewrite test 13.
+  # TODO: b/335317901 - Rewrite test 14.
+  # TODO: b/335317901 - Rewrite test 15.
+  # TODO: b/335317901 - test_aaigrid_null
+  # TODO: b/335317901 - test_aaigrid_null_float64
+  # TODO: b/335317901 - test_aaigrid_write_south_up_raster
+  # TODO: b/335317901 - test_aaigrid_starting_with_nan
+  # TODO: b/335317901 - test_aaigrid_nodata_nan
 
   def testInfo(self):
-    for base in ('case_sensitive.ASC', 'float64.asc', 'nodata_float.asc',
-                 'nodata_int.asc', 'pixel_per_line.asc',
-                 'pixel_per_line_comma.asc'):
-      filepath = self.getTestFilePath(base)
-      self.CheckOpen(filepath)
-      self.CheckInfo()
+    globpath = gdrivers_util.GetTestFilePath(DRIVER) + '/*.json'
+    for jsonfile in sorted(glob.glob(globpath)):
+      filepath = os.path.splitext(jsonfile)[0]
+      with self.subTest(input=os.path.basename(filepath)):
+        self.CheckOpen(filepath)
+        self.CheckInfo()
+
 
 if __name__ == '__main__':
   unittest.main()
