@@ -1,6 +1,6 @@
 // Tests public atomic operations:
-//   http://trac.osgeo.org/gdal/browser/trunk/gdal/port/cpl_atomic_ops.h
-//   http://trac.osgeo.org/gdal/browser/trunk/gdal/port/cpl_atomic_ops.cpp
+//   https://github.com/OSGeo/gdal/blob/master/port/cpl_atomic_ops.h
+//   https://github.com/OSGeo/gdal/blob/master/port/cpl_atomic_ops.cpp
 //
 // Copyright 2014 Google Inc. All Rights Reserved.
 //
@@ -8,7 +8,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,9 +16,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "gunit.h"
-#include "gcore/gdal_priv.h"
-#include "port/cpl_atomic_ops.h"
+#include "third_party/gdal/port/cpl_atomic_ops.h"
+
+#include "testing/base/public/gunit.h"
 
 namespace {
 
@@ -34,6 +34,11 @@ TEST(CplAtomicOpsTest, Atomic) {
   ASSERT_EQ(1, CPLAtomicInc(&value));
   ASSERT_EQ(0, CPLAtomicDec(&value));
   ASSERT_EQ(-1, CPLAtomicDec(&value));
+
+  ASSERT_TRUE(CPLAtomicCompareAndExchange(&value, -1, 42));
+  ASSERT_EQ(42, value);
+  ASSERT_FALSE(CPLAtomicCompareAndExchange(&value, -1, 99));
+  ASSERT_EQ(42, value);
 }
 
 }  // namespace

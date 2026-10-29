@@ -1,7 +1,7 @@
 // Tests for GDAL's CPLString class that is derived from STL string.
 // Yes, there is also a cpl_string.cc tested in cpl_string_test.cc.
 //
-//   http://trac.osgeo.org/gdal/browser/trunk/gdal/port/cplstring.cpp
+//   https://github.com/OSGeo/gdal/blob/master/port/cplstring.cpp
 //
 // Copyright 2014 Google Inc. All Rights Reserved.
 //
@@ -9,7 +9,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,12 +17,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <cstdarg>
 #include <string>
 
-#include "gunit.h"
+#include "testing/base/public/gunit.h"
+#include "third_party/gdal/port/cpl_string.h"
 
-#include "port/cpl_string.h"
+TEST(CPLString, ConstructFromStdString) {
+  ASSERT_STREQ("abc", CPLString(std::string("abc")).c_str());
+}
 
+TEST(CPLString, ConstructFromConstCharStar) {
+  ASSERT_STREQ("abc", CPLString("abc").c_str());
+}
+
+TEST(CPLString, ConstructWithCount) {
+  ASSERT_STREQ("a", CPLString("abc", 1).c_str());
+}
 
 // Tests formatting of doubles to a CPLString.
 TEST(CPLString, FormatC) {
@@ -97,8 +108,7 @@ TEST(CPLString, toupper) {
   str = "\n\r\t\b ";
   EXPECT_EQ("\n\r\t\b ", str.toupper());
   str = "1290-=!@#$%^&*()_+`~\"[]\\{}|;':,./<>?azAZ";
-  EXPECT_EQ("1290-=!@#$%^&*()_+`~\"[]\\{}|;':,./<>?AZAZ",
-               str.toupper());
+  EXPECT_EQ("1290-=!@#$%^&*()_+`~\"[]\\{}|;':,./<>?AZAZ", str.toupper());
 }
 
 // Tests converting a string to lower case.
@@ -108,8 +118,7 @@ TEST(CPLString, tolower) {
   str = "\n\r\t\b ";
   EXPECT_EQ("\n\r\t\b ", str.tolower());
   str = "1290-=!@#$%^&*()_+`~\"[]\\{}|;':,./<>?azAZ";
-  EXPECT_EQ("1290-=!@#$%^&*()_+`~\"[]\\{}|;':,./<>?azaz",
-               str.tolower());
+  EXPECT_EQ("1290-=!@#$%^&*()_+`~\"[]\\{}|;':,./<>?azaz", str.tolower());
 }
 
 // Tests replacing all instances of a sub-string.
@@ -294,6 +303,77 @@ TEST(CPLString, UrlAddKvp) {
 
   str = CPLURLAddKVP("foo", "bar", "baz");
   EXPECT_EQ("foo?bar=baz", str);
+
+  // Updating an existing KVP with a non-null value.
+  str = CPLURLAddKVP("http://example.org?a=b&c=1", "a", "new_b");
+  EXPECT_EQ("http://example.org?a=new_b&c=1", str);
+  str = CPLURLAddKVP("http://example.org?a=b&c=1", "c", "new_c");
+  EXPECT_EQ("http://example.org?a=b&c=new_c", str);
 }
 
-// TODO(schwehr): Test CPLOPrintf and CPLOvPrintf.
+namespace {
+CPLString CallVPrintf(CPL_FORMAT_STRING(const char* fmt), ...) {
+  va_list args;
+  va_start(args, fmt);
+  CPLString str;
+  str.vPrintf(fmt, args);
+  va_end(args);
+  return str;
+}
+
+CPLString CallCPLOvPrintf(CPL_FORMAT_STRING(const char* fmt), ...) {
+  va_list args;
+  va_start(args, fmt);
+  CPLString str = CPLOvPrintf(fmt, args);
+  va_end(args);
+  return str;
+}
+}  // namespace
+
+TEST(CPLString, PrintfAndVPrintf) {
+  CPLString str;
+  EXPECT_EQ("hello 42", str.Printf("hello %d", 42));
+  EXPECT_EQ("hello 42", str);
+
+  // Test medium buffer (> 500 bytes, < 2000 bytes).
+  std::string medium(1000, 'x');
+  EXPECT_EQ(medium, str.Printf("%s", medium.c_str()));
+
+  // Test large buffer (>= 2000 bytes, triggers while loop realloc).
+  std::string large(10000, 'y');
+  EXPECT_EQ(large, str.Printf("%s", large.c_str()));
+
+  // Direct vPrintf and CPLOPrintf / CPLOvPrintf.
+  EXPECT_EQ("test 123", CallVPrintf("test %d", 123));
+  EXPECT_EQ("oprintf 456", CPLOPrintf("oprintf %d", 456));
+  EXPECT_EQ("ovprintf 789", CallCPLOvPrintf("ovprintf %d", 789));
+}
+
+TEST(CPLString, Recode) {
+  CPLString str("hello");
+  // Same encoding (including default/nullptr -> UTF-8).
+  EXPECT_EQ("hello", str.Recode(nullptr, nullptr));
+  EXPECT_EQ("hello", str.Recode(CPL_ENC_UTF8, CPL_ENC_UTF8));
+
+  // Valid recoding from ISO-8859-1 to UTF-8.
+  CPLString latin1("\xE9");  // 'é' in ISO-8859-1
+  latin1.Recode(CPL_ENC_ISO8859_1, CPL_ENC_UTF8);
+  EXPECT_EQ("\xC3\xA9", latin1);
+}
+
+TEST(CPLString, IfindOutOfBoundsPos) {
+  CPLString str("abcdef");
+  EXPECT_EQ(std::string::npos, str.ifind("a", 100));
+}
+
+TEST(CPLString, URLEncode) {
+  CPLString str("https://example.com/path with spaces/100%20ok%GG%?a=1&b=2");
+  EXPECT_EQ("https://example.com/path%20with%20spaces/100%20ok%25GG%25?a=1&b=2",
+            str.URLEncode());
+}
+
+TEST(CPLString, QuotedSQLIdentifier) {
+  EXPECT_EQ("", CPLQuotedSQLIdentifier(nullptr));
+  EXPECT_EQ("\"my_table\"", CPLQuotedSQLIdentifier("my_table"));
+  EXPECT_EQ("\"my\"\"table\"", CPLQuotedSQLIdentifier("my\"table"));
+}

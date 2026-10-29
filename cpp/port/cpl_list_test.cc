@@ -1,6 +1,6 @@
 // Tests public functions in cpl_list:
-//   http://trac.osgeo.org/gdal/browser/trunk/gdal/port/cpl_list.h
-//   http://trac.osgeo.org/gdal/browser/trunk/gdal/port/cpl_list.cpp
+//   https://github.com/OSGeo/gdal/blob/master/port/cpl_list.h
+//   https://github.com/OSGeo/gdal/blob/master/port/cpl_list.cpp
 //
 // Copyright 2014 Google Inc. All Rights Reserved.
 //
@@ -8,7 +8,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,10 +16,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "port/cpl_list.h"
+#include "third_party/gdal/port/cpl_list.h"
 
-#include "gunit.h"
-#include "gcore/gdal_priv.h"
+#include "testing/base/public/gunit.h"
 
 namespace {
 

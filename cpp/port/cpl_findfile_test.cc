@@ -1,6 +1,6 @@
 // Tests file finding functions.
 //
-//   http://trac.osgeo.org/gdal/browser/trunk/gdal/port/cpl_findfile.cpp
+//   https://github.com/OSGeo/gdal/blob/master/port/cpl_findfile.cpp
 //
 // Copyright 2014 Google Inc. All Rights Reserved.
 //
@@ -8,7 +8,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,19 +18,16 @@
 
 #include <string>
 
-#include "googletest.h"
-#include "gunit.h"
-#include "third_party/absl/flags/flag.h"
-#include "gcore/gdal_priv.h"
-#include "port/cpl_conv.h"
-#include "port/cpl_vsi.h"
+#include "testing/base/public/gunit.h"
+#include "third_party/gdal/port/cpl_conv.h"
+#include "third_party/gdal/port/cpl_vsi.h"
 
 namespace {
 
 // Tests the default file finder with and without a location.
 TEST(CplFindFileTest, CPLDefaultFileFind) {
-  // Make sure that no search paths are registered.  The file finder
-  // should then not be able to find anything.  It was likely that
+  // Make sure that no search paths are registered. The file finder
+  // should then not be able to find anything. It was likely that
   // nothing was registered using CPLPushFinderLocation, but it is
   // better to be sure.
   CPLFinderClean();
@@ -40,11 +37,11 @@ TEST(CplFindFileTest, CPLDefaultFileFind) {
   EXPECT_EQ(nullptr, CPLDefaultFindFile("a", "b"));
 
   // TODO(schwehr): Allow this to work outside of google3.
-  const std::string temp_dir(absl::GetFlag(FLAGS_test_tmpdir));
+  const std::string temp_dir(::testing::TempDir());
   CPLPushFinderLocation(temp_dir.c_str());
 
   const std::string filename(temp_dir + "/baz.txt");
-  VSILFILE *file = VSIFOpenL(filename.c_str(), "w");
+  VSILFILE* file = VSIFOpenL(filename.c_str(), "w");
   ASSERT_NE(nullptr, file);
   ASSERT_EQ(3, VSIFWriteL("012", 1, 3, file));
   ASSERT_EQ(0, VSIFCloseL(file));
@@ -66,6 +63,48 @@ TEST(CplFindFileTest, CPLDefaultFileFind) {
   CPLFinderClean();
 }
 
-// TODO(schwehr): Test the rest of the functions.
+const char* CustomFinder(const char* /*pszClass*/, const char* pszBasename) {
+  if (pszBasename != nullptr &&
+      std::string(pszBasename) == "custom_found.txt") {
+    return "/custom/path/custom_found.txt";
+  }
+  return nullptr;
+}
+
+TEST(CplFindFileTest, FinderStackAndLocations) {
+  CPLFinderClean();
+
+  const std::string temp_dir(::testing::TempDir());
+  const std::string filename(temp_dir + "/findme.txt");
+  VSILFILE* file = VSIFOpenL(filename.c_str(), "w");
+  ASSERT_NE(nullptr, file);
+  ASSERT_EQ(3, VSIFWriteL("abc", 1, 3, file));
+  ASSERT_EQ(0, VSIFCloseL(file));
+
+  CPLPushFinderLocation(temp_dir.c_str());
+  // Pushing duplicate location is a no-op.
+  CPLPushFinderLocation(temp_dir.c_str());
+
+  EXPECT_STREQ(filename.c_str(), CPLFindFile("gdal", "findme.txt"));
+  EXPECT_EQ(nullptr, CPLFindFile("gdal", "nonexistent_file_xyz.txt"));
+
+  CPLPushFileFinder(CustomFinder);
+  EXPECT_STREQ("/custom/path/custom_found.txt",
+               CPLFindFile("gdal", "custom_found.txt"));
+  EXPECT_EQ(CustomFinder, CPLPopFileFinder());
+
+  // Pop all file finders including default, then pop empty stack.
+  while (CPLPopFileFinder() != nullptr) {
+  }
+  EXPECT_EQ(nullptr, CPLPopFileFinder());
+
+  // Pop all finder locations including default, then pop on empty stack.
+  CPLPopFinderLocation();
+  CPLPopFinderLocation();
+  CPLPopFinderLocation();
+
+  ASSERT_EQ(0, VSIUnlink(filename.c_str()));
+  CPLFinderClean();
+}
 
 }  // namespace

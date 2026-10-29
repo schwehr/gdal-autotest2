@@ -1,7 +1,6 @@
-// Tests for GDAL's C String List (CSL) API.
-// Yes, there is also a cplstring.cc tested in cplstring_test.cc.
+// Tests for GDAL's C strtod API.
 //
-//   http://trac.osgeo.org/gdal/browser/trunk/gdal/port/cpl_strtod.cpp
+//   https://github.com/OSGeo/gdal/blob/master/port/cpl_strtod.cpp
 //
 // Copyright 2015 Google Inc. All Rights Reserved.
 //
@@ -9,7 +8,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,23 +16,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 #include <cmath>
+#include <cstring>
 
-#include "gunit.h"
-#include "port/cpl_conv.h"
+#include "testing/base/public/gunit.h"
+#include "third_party/gdal/port/cpl_conv.h"
 
 namespace autotest2 {
 namespace {
-
 
 TEST(CplStrtodTest, CPLAtofDelim) {
   EXPECT_DOUBLE_EQ(-1.2, CPLAtofDelim("-1=2", '='));
 }
 
-TEST(CplStrtodTest, CPLAtof) {
-  EXPECT_DOUBLE_EQ(-1.2, CPLAtof("-1.2"));
-}
+TEST(CplStrtodTest, CPLAtof) { EXPECT_DOUBLE_EQ(-1.2, CPLAtof("-1.2")); }
 
 TEST(CplStrtodTest, AtofM) {
   // Test conversion to double using multi-lingual / locale processing.
@@ -78,6 +74,36 @@ TEST(CplStrtodTest, AtofM) {
 
   value = CPLAtofM("1.23456789123456789");
   EXPECT_EQ(1.23456789123456789, value);
+
+  // String with >= 50 characters before any '.' or ',' or '\0'.
+  value = CPLAtofM("                                                  1.5");
+  EXPECT_DOUBLE_EQ(1.5, value);
+}
+
+TEST(CplStrtodTest, StrtodM) {
+  char* end = nullptr;
+  EXPECT_DOUBLE_EQ(1.25, CPLStrtodM("1.25abc", &end));
+  ASSERT_NE(nullptr, end);
+  EXPECT_STREQ("abc", end);
+
+  end = nullptr;
+  EXPECT_DOUBLE_EQ(1.25, CPLStrtodM("1,25xyz", &end));
+  ASSERT_NE(nullptr, end);
+  EXPECT_STREQ("xyz", end);
+
+  end = nullptr;
+  EXPECT_DOUBLE_EQ(42.0, CPLStrtodM("42", &end));
+  ASSERT_NE(nullptr, end);
+  EXPECT_STREQ("", end);
+
+  // String with >= 50 characters before any '.' or ',' or '\0'.
+  end = nullptr;
+  EXPECT_DOUBLE_EQ(
+      2.5,
+      CPLStrtodM("                                                  2.5tail",
+                 &end));
+  ASSERT_NE(nullptr, end);
+  EXPECT_STREQ("tail", end);
 }
 
 TEST(CplStrtodTest, StrtodDelim) {
@@ -95,7 +121,7 @@ TEST(CplStrtodTest, StrtodDelim) {
   EXPECT_EQ(4.5, value);
 
   char str[] = "12.34abc";
-  char *end = nullptr;
+  char* end = nullptr;
   value = CPLStrtodDelim(str, &end, '.');
   EXPECT_EQ(12.34, value);
   EXPECT_EQ('a', *end);
@@ -135,6 +161,51 @@ TEST(CplStrtodTest, StrtodDelim) {
 
   value = CPLStrtodDelim("1.23456789123456789", nullptr, '.');
   EXPECT_EQ(1.23456789123456789, value);
+
+  // Leading spaces and locale decimal point in input when using custom point.
+  end = nullptr;
+  value = CPLStrtodDelim("   1,25.99", &end, ',');
+  EXPECT_DOUBLE_EQ(1.25, value);
+  ASSERT_NE(nullptr, end);
+  EXPECT_STREQ(".99", end);
+
+  // Special values with non-null endptr.
+  const char* s_neg_qnan = "-1.#QNAN";
+  end = nullptr;
+  EXPECT_TRUE(std::isnan(CPLStrtodDelim(s_neg_qnan, &end, '.')));
+  EXPECT_EQ(s_neg_qnan + strlen(s_neg_qnan), end);
+
+  const char* s_neg_inf = "-inf";
+  end = nullptr;
+  value = CPLStrtodDelim(s_neg_inf, &end, '.');
+  EXPECT_TRUE(std::isinf(value));
+  EXPECT_LT(value, 0.0);
+  EXPECT_EQ(s_neg_inf + strlen(s_neg_inf), end);
+
+  const char* s_pos_snan = "1.#SNAN";
+  end = nullptr;
+  EXPECT_TRUE(std::isnan(CPLStrtodDelim(s_pos_snan, &end, '.')));
+  EXPECT_EQ(s_pos_snan + strlen(s_pos_snan), end);
+
+  const char* s_pos_1inf = "1.#INF";
+  end = nullptr;
+  value = CPLStrtodDelim(s_pos_1inf, &end, '.');
+  EXPECT_TRUE(std::isinf(value));
+  EXPECT_GT(value, 0.0);
+  EXPECT_EQ(s_pos_1inf + strlen(s_pos_1inf), end);
+
+  const char* s_pos_inf = "inf";
+  end = nullptr;
+  value = CPLStrtodDelim(s_pos_inf, &end, '.');
+  EXPECT_TRUE(std::isinf(value));
+  EXPECT_GT(value, 0.0);
+  EXPECT_EQ(s_pos_inf + strlen(s_pos_inf), end);
+
+  const char* s_nan = "nan";
+  end = nullptr;
+  EXPECT_TRUE(std::isnan(CPLStrtodDelim(s_nan, &end, '.')));
+  EXPECT_EQ(s_nan + strlen(s_nan), end);
+  EXPECT_TRUE(std::isnan(CPLStrtodDelim("nan", nullptr, '.')));
 }
 
 TEST(CplStrtodTest, Strtod) {
@@ -187,6 +258,18 @@ TEST(CplStrtodTest, CPLStrtofDelim) {
 
   value = CPLStrtod("-123456789.123456789123456789", nullptr);
   EXPECT_EQ(-123456789.123456789123456789f, value);
+
+  char* end = nullptr;
+  value = CPLStrtofDelim("3,5rest", &end, ',');
+  EXPECT_FLOAT_EQ(3.5f, value);
+  ASSERT_NE(nullptr, end);
+  EXPECT_STREQ("rest", end);
+
+  end = nullptr;
+  value = CPLStrtof("4.25end", &end);
+  EXPECT_FLOAT_EQ(4.25f, value);
+  ASSERT_NE(nullptr, end);
+  EXPECT_STREQ("end", end);
 }
 
 }  // namespace

@@ -15,9 +15,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "port/cpl_auto_close.h"
+#include "third_party/gdal/port/cpl_auto_close.h"
 
-#include "gunit.h"
+#include "testing/base/public/gunit.h"
 
 namespace autotest2 {
 namespace {

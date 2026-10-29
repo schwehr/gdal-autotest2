@@ -15,34 +15,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "/port/cpl_json.h"
+#include "third_party/gdal/port/cpl_json.h"
 
 #include <features.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
-#include <filesystem>
+#include <filesystem>  // NOLINT
 #include <limits>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "gmock.h"
-#include "gunit.h"
-
-#include "absl/cleanup/cleanup.h"
-#include "absl/log/check.h"
-#include "absl/status/statusor.h"
-#include "absl/strings/str_replace.h"
-
-#include "autotest2/cpp/util/error_handler.h"
-#include "port/cpl_error.h"
-#include "port/cpl_json_streaming_parser.h"
-#include "port/cpl_json_streaming_writer.h"
-#include "port/cpl_port.h"
-#include "port/cpl_string.h"
-#include "port/cpl_vsi.h"
+#include "file/base/helpers.h"
+#include "file/base/options.h"
+#include "testing/base/public/gmock.h"
+#include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/absl/log/check.h"
+#include "third_party/absl/status/statusor.h"
+#include "third_party/absl/strings/str_replace.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
+#include "third_party/gdal/port/cpl_conv.h"
+#include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/port/cpl_json_streaming_parser.h"
+#include "third_party/gdal/port/cpl_json_streaming_writer.h"
+#include "third_party/gdal/port/cpl_port.h"
+#include "third_party/gdal/port/cpl_string.h"
+#include "third_party/gdal/port/cpl_vsi.h"
 
 namespace autotest2 {
 namespace {
@@ -1184,7 +1185,7 @@ TEST(CplJsonStreamingWriter,
   std::string serialization_destination;
 
   struct Local {
-    static void Serialize(const char *text, void *user_data) {
+    static void Serialize(const char* text, void* user_data) {
       *static_cast<std::string*>(user_data) += text;
     }
   };
@@ -1307,8 +1308,7 @@ TEST(CplJsonStreamingParser, CanParseNestedObject) {
     EXPECT_CALL(parser, StartObject()).Times(1);
     EXPECT_CALL(parser, StartObjectMember(::testing::StrEq("key"))).Times(1);
     EXPECT_CALL(parser, StartObject()).Times(1);
-    EXPECT_CALL(parser, StartObjectMember(::testing::StrEq("key2")))
-        .Times(1);
+    EXPECT_CALL(parser, StartObjectMember(::testing::StrEq("key2"))).Times(1);
     EXPECT_CALL(parser, Boolean(false)).Times(1);
     EXPECT_CALL(parser, EndObject()).Times(1);
     EXPECT_CALL(parser, EndObject()).Times(1);
@@ -1495,6 +1495,197 @@ TEST(CplJsonStreamingParser, ExceptionOnExceedingMaxDepthObject) {
   EXPECT_FALSE(
       parser.Parse(std::string_view(R"json({"key":{}})json", 10), true));
   EXPECT_TRUE(parser.ExceptionOccurred());
+}
+
+TEST(CplJsonCoverageTest, DocumentEdgeCasesAndLoadUrl) {
+  WithQuietHandler quiet;
+
+  // Empty document GetRoot creates new object root
+  CPLJSONDocument empty_doc;
+  CPLJSONObject root = empty_doc.GetRoot();
+  EXPECT_TRUE(root.IsValid());
+  root.Add("a", 1);
+
+  // Const GetRoot
+  const CPLJSONDocument& const_doc = empty_doc;
+  EXPECT_EQ(1, const_doc.GetRoot().GetInteger("a"));
+
+  // Self copy and move assignment, and non-null destination assignment
+  CPLJSONDocument doc2;
+  ASSERT_TRUE(doc2.LoadMemory("{\"b\":2}"));
+  doc2 = empty_doc;
+  doc2 = *&doc2;
+  EXPECT_EQ(1, doc2.GetRoot().GetInteger("a"));
+
+  CPLJSONDocument doc3;
+  ASSERT_TRUE(doc3.LoadMemory("{\"c\":3}"));
+  doc3 = std::move(doc2);
+  doc3 = std::move(*&doc3);
+  EXPECT_EQ(1, doc3.GetRoot().GetInteger("a"));
+
+  // SetRoot when m_poRootJsonObject is already non-null replaces the root.
+  doc3.SetRoot(CPLJSONObject("new_root_str"));
+  EXPECT_EQ("new_root_str", doc3.GetRoot().ToString());
+
+  // GetRoot when root is an array
+  CPLJSONDocument arr_doc;
+  ASSERT_TRUE(arr_doc.LoadMemory("[1, 2, 3]"));
+  CPLJSONObject arr_root = arr_doc.GetRoot();
+  EXPECT_EQ(CPLJSONObject::Type::Array, arr_root.GetType());
+
+  // CPL_JSON_MAX_SIZE <= 0 makes Load() fail early, even for a file that
+  // loads fine otherwise.
+  {
+    static constexpr char kPath[] = "/vsimem/document_edge_cases.json";
+    WriteFile("{\"d\": 4}", kPath);
+    absl::Cleanup remove_file = [] { VSIUnlink(kPath); };
+    CPLJSONDocument max_size_doc;
+    EXPECT_TRUE(max_size_doc.Load(kPath));
+    EXPECT_EQ(4, max_size_doc.GetRoot().GetInteger("d"));
+    CPLConfigOptionSetter max_size("CPL_JSON_MAX_SIZE", "0",
+                                   /*bSetOnlyIfUndefined=*/false);
+    EXPECT_FALSE(max_size_doc.Load(kPath));
+  }
+
+#ifndef HAVE_CURL
+  // port_lib is built without curl, so LoadUrl() is a stub that always fails.
+  // Guarded so that this never becomes a real network request if curl support
+  // is enabled in the build.
+  EXPECT_FALSE(arr_doc.LoadUrl("http://example.com/test.json", nullptr));
+#endif
+}
+
+TEST(CplJsonCoverageTest, ObjectConstructorsCloneTypesSubscriptAndArrays) {
+  WithQuietHandler quiet;
+
+  // Value constructors and GetType()
+  CPLJSONObject o_null(nullptr);
+  EXPECT_EQ(CPLJSONObject::Type::Null, o_null.GetType());
+
+  CPLJSONObject o_str(std::string("hello"));
+  EXPECT_EQ(CPLJSONObject::Type::String, o_str.GetType());
+
+  CPLJSONObject o_cstr("world");
+  EXPECT_EQ(CPLJSONObject::Type::String, o_cstr.GetType());
+
+  CPLJSONObject o_bool(true);
+  EXPECT_EQ(CPLJSONObject::Type::Boolean, o_bool.GetType());
+
+  CPLJSONObject o_int(42);
+  EXPECT_EQ(CPLJSONObject::Type::Integer, o_int.GetType());
+
+  CPLJSONObject o_int64(static_cast<int64_t>(1LL << 40));
+  EXPECT_EQ(CPLJSONObject::Type::Long, o_int64.GetType());
+
+  CPLJSONObject o_uint64(static_cast<uint64_t>(1ULL << 40));
+  EXPECT_EQ(CPLJSONObject::Type::Long, o_uint64.GetType());
+
+  CPLJSONObject o_dbl(3.14);
+  EXPECT_EQ(CPLJSONObject::Type::Double, o_dbl.GetType());
+
+  // Clone and Deinit
+  CPLJSONObject obj;
+  obj.Add("s", std::string("val"));
+  obj.Add("null_cstr", static_cast<const char*>(nullptr));
+  obj.Add("u64", static_cast<uint64_t>(999));
+  obj.Add("", CPLJSONObject("empty_name"));
+  obj.SetNull("explicit_null");
+  EXPECT_EQ(CPLJSONObject::Type::Object, obj.GetType());
+
+  CPLJSONObject cloned = obj.Clone();
+  EXPECT_EQ("val", cloned.GetString("s"));
+
+  // Self-assignment on CPLJSONObject
+  cloned = *&cloned;
+  cloned = std::move(*&cloned);
+
+  // Const operator[]
+  const CPLJSONObject& const_obj = obj;
+  EXPECT_EQ("val", const_obj["s"].ToString());
+
+  // Non-const operator[] with non-existing key (m_osKeyForSet path)
+  auto unset_proxy = obj["nonexistent_proxy"];
+  EXPECT_FALSE(unset_proxy.IsValid());
+  EXPECT_EQ("def", unset_proxy.GetString("k", "def"));
+  EXPECT_EQ("def", unset_proxy.ToString("def"));
+  EXPECT_DOUBLE_EQ(1.5, unset_proxy.GetDouble("k", 1.5));
+  EXPECT_DOUBLE_EQ(1.5, unset_proxy.ToDouble(1.5));
+  EXPECT_EQ(7, unset_proxy.GetInteger("k", 7));
+  EXPECT_EQ(7, unset_proxy.ToInteger(7));
+  EXPECT_EQ(8, unset_proxy.GetLong("k", 8));
+  EXPECT_EQ(8, unset_proxy.ToLong(8));
+  EXPECT_TRUE(unset_proxy.GetBool("k", true));
+  EXPECT_TRUE(unset_proxy.ToBool(true));
+  EXPECT_TRUE(unset_proxy.GetChildren().empty());
+  EXPECT_FALSE(unset_proxy.ToArray().IsValid());
+  EXPECT_EQ(CPLJSONObject::Type::Unknown, unset_proxy.GetType());
+
+  // Assigning to operator[] via copy, move, and CPLJSONArray move
+  obj["assigned_copy"] = o_str;
+  EXPECT_EQ("hello", obj.GetString("assigned_copy"));
+  obj["assigned_move"] = CPLJSONObject("moved_str");
+  EXPECT_EQ("moved_str", obj.GetString("assigned_move"));
+  obj["assigned_arr"] = CPLJSONArray();
+  EXPECT_EQ(CPLJSONObject::Type::Array, obj["assigned_arr"].GetType());
+
+  // CPLJSONArray constructors and Add overloads
+  CPLJSONArray arr;
+  CPLJSONArray named_arr("named");
+  arr.AddNull();
+  arr.Add(CPLJSONObject("elem_obj"));
+  arr.Add(std::string("std_str"));
+  arr.Add("c_str");
+  arr.Add(static_cast<const char*>(nullptr));
+  arr.Add(2.5);
+  arr.Add(10);
+  arr.Add(static_cast<GInt64>(100));
+  arr.Add(static_cast<uint64_t>(200));
+  arr.Add(true);
+  EXPECT_EQ(9, arr.Size());
+
+  obj.Add("my_arr", arr);
+  CPLJSONArray fetched_arr = obj.GetArray("my_arr");
+  EXPECT_TRUE(fetched_arr.IsValid());
+  EXPECT_EQ(9, fetched_arr.Size());
+  EXPECT_EQ("std_str", fetched_arr[2].ToString());
+  const CPLJSONArray& const_arr = fetched_arr;
+  EXPECT_EQ("c_str", const_arr[3].ToString());
+
+  CPLJSONArray from_obj(obj["my_arr"]);
+  EXPECT_EQ(9, from_obj.Size());
+  EXPECT_TRUE(obj["my_arr"].ToArray().IsValid());
+  EXPECT_FALSE(obj.ToArray().IsValid());
+  EXPECT_FALSE(obj.GetArray("s").IsValid());
+  EXPECT_FALSE(obj.GetArray("missing_arr").IsValid());
+
+  // GetObjectByPath edge cases: > 100 components, empty path, and a
+  // non-object intermediate.
+  std::string deep_path;
+  for (int i = 0; i < 102; ++i) deep_path += "a/";
+  deep_path += "b";
+  EXPECT_FALSE(obj.GetObj(deep_path).IsValid());
+  EXPECT_FALSE(obj.GetObj("/").IsValid());
+  EXPECT_FALSE(o_int.GetObj("a/b").IsValid());
+  EXPECT_TRUE(o_int.GetChildren().empty());
+
+  // Deinit and operations on invalid object (m_osKey == INVALID_OBJ_KEY)
+  CPLJSONObject deinit_obj;
+  deinit_obj.Deinit();
+  EXPECT_FALSE(deinit_obj.IsValid());
+  EXPECT_EQ(CPLJSONObject::Type::Unknown, deinit_obj.GetType());
+  EXPECT_EQ("", deinit_obj.Format(CPLJSONObject::PrettyFormat::Plain));
+  EXPECT_TRUE(deinit_obj.Clone().IsValid());
+
+  CPLJSONArray deinit_arr;
+  deinit_arr.Deinit();
+  EXPECT_EQ(0, deinit_arr.Size());
+
+  // CPLParseKeyValueJson
+  EXPECT_TRUE(CPLParseKeyValueJson(nullptr).empty());
+  CPLStringList kv = CPLParseKeyValueJson(
+      R"json({"k1":"v1","k2":42,"k3":1.5,"ignored":[1,2]})json");
+  EXPECT_STREQ("v1", kv.FetchNameValue("k1"));
+  EXPECT_STREQ("42", kv.FetchNameValue("k2"));
 }
 
 }  // namespace

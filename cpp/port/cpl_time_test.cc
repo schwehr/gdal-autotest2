@@ -1,6 +1,6 @@
 // Tests for UNIX to-from struct tm functions.
 //
-//   http://trac.osgeo.org/gdal/browser/trunk/gdal/port/cpl_time.cpp
+//   https://github.com/OSGeo/gdal/blob/master/port/cpl_time.cpp
 //
 // Copyright 2014 Google Inc. All Rights Reserved.
 //
@@ -8,7 +8,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,18 +22,19 @@
 //   https://tools.ietf.org/html/rfc2445
 //   https://tools.ietf.org/html/rfc3339
 
+#include "third_party/gdal/port/cpl_time.h"
 
 #include <time.h>
-#include <cstdlib>
 
-#include "gunit.h"
-#include "port/cpl_port.h"
-#include "port/cpl_time.h"
+#include "testing/base/public/gunit.h"
+#include "third_party/absl/log/check.h"
+#include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/port/cpl_port.h"
 
 // Tests Unix to struct time and back.
 TEST(TimeTest, Time) {
   struct tm time;
-  struct tm *time_result;
+  struct tm* time_result;
 
   // Start of the unix epoch.
   GIntBig test_seconds = 0;
@@ -125,12 +126,12 @@ TEST(TimeTest, Time) {
 // Tests round trip of random values.
 TEST(TimeTest, FuzzRandomTime) {
   struct tm time;
-  struct tm *time_result;
+  struct tm* time_result;
 
   // Start of the unix epoch.
-  for (int count=0; count < 10000; ++count) {
-    const GIntBig test_seconds
-        = static_cast<GIntBig> (random() % 10000000000 - 5000000000);
+  for (int count = 0; count < 10000; ++count) {
+    const GIntBig test_seconds =
+        static_cast<GIntBig>(random() % 10000000000 - 5000000000);
     time_result = CPLUnixTimeToYMDHMS(test_seconds, &time);
     ASSERT_EQ(test_seconds, CPLYMDHMSToUnixTime(&time));
   }
@@ -147,9 +148,9 @@ constexpr int kUndefined = -9999;
 class Rfc822Test : public ::testing::Test {
  protected:
   bool Check(const char* rfc822datetime) {
-    int result = CPLParseRFC822DateTime(rfc822datetime, &year_, &month_, &day_,
-                                     &hour_, &minute_, &second_, &tzflag_,
-                                     &weekday_);
+    int result =
+        CPLParseRFC822DateTime(rfc822datetime, &year_, &month_, &day_, &hour_,
+                               &minute_, &second_, &tzflag_, &weekday_);
     CHECK(result == FALSE || result == TRUE);
     return CPL_TO_BOOL(result);
   }
@@ -241,4 +242,66 @@ TEST_F(Rfc822Test, DayAndTimeZone) {
   EXPECT_EQ(17, second_);
   EXPECT_EQ(100, tzflag_);
   EXPECT_EQ(5, weekday_);
+}
+
+TEST(TimeTest, OutOfRangeAndInvalidMonth) {
+  struct tm time = {};
+  {
+    // RAII guard so the error handler stack stays balanced even if an
+    // assertion below aborts the test body.
+    struct QuietErrors {
+      QuietErrors() { CPLPushErrorHandler(CPLQuietErrorHandler); }
+      ~QuietErrors() { CPLPopErrorHandler(); }
+    } quiet;
+    constexpr GIntBig kWayPastLimit = 10000LL * 86400LL * 366LL + 100LL;
+    EXPECT_EQ(&time, CPLUnixTimeToYMDHMS(kWayPastLimit, &time));
+    EXPECT_EQ(0, time.tm_year);
+    EXPECT_EQ(&time, CPLUnixTimeToYMDHMS(-kWayPastLimit, &time));
+    EXPECT_EQ(0, time.tm_year);
+  }
+
+  time.tm_mon = -1;
+  EXPECT_EQ(-1, CPLYMDHMSToUnixTime(&time));
+  time.tm_mon = 12;
+  EXPECT_EQ(-1, CPLYMDHMSToUnixTime(&time));
+}
+
+TEST_F(Rfc822Test, AdditionalBranches) {
+  // Invalid month.
+  EXPECT_FALSE(Check("28 Foo 2007 05:24:17"));
+
+  // Year in [30, 99] -> +1900.
+  EXPECT_TRUE(Check("28 Dec 85 05:24:17"));
+  EXPECT_EQ(1985, year_);
+
+  // Invalid hour.
+  EXPECT_FALSE(Check("28 Dec 2007 24:24:17"));
+  EXPECT_FALSE(Check("28 Dec 2007 -1:24:17"));
+
+  // Missing minute (5 tokens where first token is weekday).
+  EXPECT_FALSE(Check("Fri 28 Dec 2007 05"));
+
+  // Invalid minute.
+  EXPECT_FALSE(Check("28 Dec 2007 05:60:17"));
+  EXPECT_FALSE(Check("28 Dec 2007 05:-1:17"));
+
+  // Invalid second.
+  EXPECT_FALSE(Check("28 Dec 2007 05:24:61"));
+  EXPECT_FALSE(Check("28 Dec 2007 05:24:-1"));
+
+  // Numeric timezones (+HHMM and -HHMM).
+  EXPECT_TRUE(Check("28 Dec 2007 05:24:17 +0230"));
+  EXPECT_EQ(110, tzflag_);
+
+  EXPECT_TRUE(Check("28 Dec 2007 05:24:17 -0500"));
+  EXPECT_EQ(80, tzflag_);
+
+  // Out-of-range numeric timezone hour (>= 15 or < 0).
+  EXPECT_FALSE(Check("28 Dec 2007 05:24:17 +1500"));
+
+  // Named timezone later in list (e.g. PDT) and unknown timezone.
+  EXPECT_TRUE(Check("28 Dec 2007 05:24:17 PDT"));
+  EXPECT_EQ(72, tzflag_);
+
+  EXPECT_FALSE(Check("28 Dec 2007 05:24:17 BOGUSTZ"));
 }
