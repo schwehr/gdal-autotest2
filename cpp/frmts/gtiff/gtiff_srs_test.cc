@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,7 +18,7 @@
 // support.
 //
 // See also:
-//   http://www.gdal.org/frmt_gtiff.html
+//   https://gdal.org/drivers/raster/gtiff.html
 //   https://github.com/OSGeo/gdal/blob/master/autotest/gcore/tiff_srs.py
 
 #include <stddef.h>
@@ -26,21 +26,17 @@
 #include <memory>
 #include <string>
 
-#include "commandlineflags_declare.h"
-#include "gmock.h"
-#include "googletest.h"
-#include "gunit.h"
-#include "third_party/absl/flags/flag.h"
-#include "autotest2/cpp/util/matchers.h"
-#include "autotest2/cpp/util/version.h"
-#include "gcore/gdal.h"
-#include "gcore/gdal_frmts.h"
-#include "gcore/gdal_priv.h"
-#include "ogr/ogr_api.h"
-#include "ogr/ogr_core.h"
-#include "ogr/ogr_spatialref.h"
-#include "port/cpl_conv.h"
-#include "port/cpl_error.h"
+#include "testing/base/public/gmock.h"
+#include "testing/base/public/gunit.h"
+#include "third_party/gdal/autotest2/cpp/util/matchers.h"
+#include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_frmts.h"
+#include "third_party/gdal/gcore/gdal_priv.h"
+#include "third_party/gdal/ogr/ogr_api.h"
+#include "third_party/gdal/ogr/ogr_core.h"
+#include "third_party/gdal/ogr/ogr_spatialref.h"
+#include "third_party/gdal/port/cpl_conv.h"
+#include "third_party/gdal/port/cpl_error.h"
 
 using std::to_string;
 using std::unique_ptr;
@@ -59,9 +55,8 @@ class GtiffSrsTest : public ::testing::Test {
 TEST_F(GtiffSrsTest, EpsgMany) {
   for (const int epsg :
        {2000, 2012, 2050, 2143, 2220, 3625, 3857, 4326, 32360, 32517, 32750}) {
-    const std::string filepath = absl::GetFlag(FLAGS_test_srcdir) +
-                                 std::string(kTestData) + "epsg" +
-                                 to_string(epsg) + ".tif";
+    const std::string filepath = ::testing::SrcDir() + std::string(kTestData) +
+                                 "epsg" + to_string(epsg) + ".tif";
 
     unique_ptr<GDALDataset> src(static_cast<GDALDataset *>(
         GDALOpenEx(filepath.c_str(), GDAL_OF_READONLY | GDAL_OF_RASTER, nullptr,
@@ -73,26 +68,26 @@ TEST_F(GtiffSrsTest, EpsgMany) {
 
     std::string projection(src->GetProjectionRef());
 
-    OGRSpatialReference src_srs(projection.c_str());
     OGRSpatialReference expected_srs;
     ASSERT_EQ(OGRERR_NONE, expected_srs.importFromEPSG(epsg))
         << "Failed to load epsg: " << epsg;
-    EXPECT_THAT(src_srs, IsSameAs(expected_srs));
-    EXPECT_TRUE(expected_srs.IsSame(&src_srs))
-        << "Failed for EPSG: " << epsg << "\n"
-        << "See http://spatialreference.org/ref/epsg/" << epsg;
+
+    char *expected_wkt = nullptr;
+    expected_srs.exportToWkt(&expected_wkt);
+    ASSERT_NE(nullptr, expected_wkt);
+
+    EXPECT_STREQ(expected_wkt, projection.c_str())
+        << "WKT1 mismatch for EPSG: " << epsg << "\n"
+        << "See https://spatialreference.org/ref/epsg/" << epsg << "/";
+    CPLFree(expected_wkt);
   }
 }
 
 // Rework of Python Grads test, but without Python so that debugging is easier:
 // autotest2/gcore/tiff_read_test.py
 TEST_F(GtiffSrsTest, Grads) {
-  if (!::autotest2::kGoogle3GdalContainsAb9e803) {
-    GTEST_SKIP();
-  }
-
   const std::string filepath =
-      absl::GetFlag(FLAGS_test_srcdir) + std::string(kTestData) + "test_gf.tif";
+      ::testing::SrcDir() + std::string(kTestData) + "test_gf.tif";
 
   unique_ptr<GDALDataset> src(static_cast<GDALDataset *>(
       GDALOpenEx(filepath.c_str(), GDAL_OF_READONLY | GDAL_OF_RASTER, nullptr,

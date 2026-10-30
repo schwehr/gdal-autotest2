@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,49 +16,63 @@
 
 #include <stddef.h>
 
+#include <filesystem>  // NOLINT
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "logging.h"
-#include "file/base/path.h"
-#include "gmock.h"
-#include "gunit.h"
-#include "third_party/absl/flags/flag.h"
+#include "base/logging.h"
+#include "testing/base/public/gmock.h"
+#include "testing/base/public/gunit.h"
 #include "third_party/absl/memory/memory.h"
-#include "autotest2/cpp/util/cpl_cstringlist.h"
-#include "autotest2/cpp/util/error_handler.h"
-#include "autotest2/cpp/util/vsimem.h"
-#include "gcore/gdal.h"
-#include "gcore/gdal_frmts.h"
-#include "gcore/gdal_priv.h"
-#include "port/cpl_conv.h"
-#include "port/cpl_error.h"
-#include "port/cpl_port.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_cstringlist.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
+#include "third_party/gdal/autotest2/cpp/util/vsimem.h"
+#include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_dataset.h"
+#include "third_party/gdal/gcore/gdal_driver.h"
+#include "third_party/gdal/gcore/gdal_drivermanager.h"
+#include "third_party/gdal/gcore/gdal_frmts.h"
+#include "third_party/gdal/gcore/gdal_openinfo.h"
+#include "third_party/gdal/gcore/gdal_rasterband.h"
+#include "third_party/gdal/port/cpl_conv.h"
+#include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/port/cpl_port.h"
+#include "third_party/gdal/port/cpl_string.h"
+#include "third_party/gdal/port/cpl_vsi.h"
 
 namespace autotest2 {
 namespace {
 
-constexpr char kTestData[] =
-    "/google3/third_party/gdal/autotest2/cpp/frmts/gtiff/testdata/";
+const std::filesystem::path kTestDataPath(
+    "google3/third_party/gdal/autotest2/cpp/frmts/gtiff/testdata");
+
+std::filesystem::path GetTestFilePath(const std::string_view filename) {
+  return std::filesystem::path(::testing::SrcDir()) / kTestDataPath / filename;
+}
 
 constexpr char kDriverName[] = "GTiff";
 
 class GTiffTest : public ::testing::Test {
  public:
   std::unique_ptr<GDALDataset> OpenReadOnly(const std::string& filename) {
-    auto open_info = absl::make_unique<GDALOpenInfo>(filename.c_str(),
-                                                     GDAL_OF_READONLY, nullptr);
+    auto open_info = std::make_unique<GDALOpenInfo>(filename.c_str(),
+                                                    GDAL_OF_READONLY, nullptr);
     auto dataset = absl::WrapUnique(driver_->pfnOpen(open_info.get()));
     return dataset;
   }
 
  protected:
   void SetUp() override {
+    CPLErrorReset();
+
     GDALRegister_GTiff();
     driver_ = GetGDALDriverManager()->GetDriverByName(kDriverName);
     CHECK(driver_ != nullptr);
   }
+
+  void TearDown() override { CPLErrorReset(); }
 
   GDALDriver* driver_;
 };
@@ -146,9 +160,71 @@ TEST_F(GTiffTest, CreateSimplest) {
   EXPECT_EQ(0, buf[1]);
 }
 
+TEST_F(GTiffTest, CreateCopyPreservesMaskForBandInterleavedCog) {
+  constexpr char kFilename[] = "/vsimem/create_copy_with_mask.tif";
+  constexpr int kWidth = 2;
+  constexpr int kHeight = 2;
+  constexpr size_t kSize = kWidth * kHeight;
+  constexpr int kNumBands = 1;
+
+  {
+    char** options = nullptr;
+    options = CSLSetNameValue(options, "COPY_SRC_OVERVIEWS", "YES");
+    options = CSLSetNameValue(options, "INTERLEAVE", "BAND");
+    auto dataset = absl::WrapUnique<GDALDataset>(driver_->Create(
+        kFilename, kWidth, kHeight, kNumBands, GDT_Byte, options));
+    ASSERT_TRUE(dataset != nullptr);
+
+    std::vector<unsigned char> raster_buf(kSize, 0);
+    ASSERT_EQ(dataset->RasterIO(GF_Write, 0, 0, kWidth, kHeight, &raster_buf[0],
+                                kWidth, kHeight, GDT_Byte, kNumBands, nullptr,
+                                0, 0, 0),
+              CE_None);
+    {
+      const CPLConfigOptionSetter internalMaskSetter("GDAL_TIFF_INTERNAL_MASK",
+                                                     "YES", false);
+
+      ASSERT_EQ(dataset->CreateMaskBand(GMF_PER_DATASET), CE_None);
+      auto mask_band = dataset->GetRasterBand(1)->GetMaskBand();
+      ASSERT_TRUE(mask_band != nullptr);
+      std::vector<unsigned char> mask_buf = {0, 255, 255, 255};
+      ASSERT_EQ(
+          mask_band->RasterIO(GF_Write, 0, 0, kWidth, kHeight, &mask_buf[0],
+                              kWidth, kHeight, GDT_Byte, 0, 0),
+          CE_None);
+    }
+
+    auto copy_dataset = absl::WrapUnique<GDALDataset>(driver_->CreateCopy(
+        kFilename, dataset.get(), true, options, nullptr, nullptr));
+    ASSERT_TRUE(copy_dataset != nullptr);
+
+    CSLDestroy(options);
+  }
+
+  auto dataset = OpenReadOnly(kFilename);
+
+  ASSERT_EQ(dataset->GetRasterCount(), kNumBands);
+  ASSERT_EQ(dataset->GetRasterXSize(), kWidth);
+  ASSERT_EQ(dataset->GetRasterYSize(), kHeight);
+
+  auto band = dataset->GetRasterBand(1);
+  ASSERT_NE(band->GetMaskFlags() & GMF_PER_DATASET, 0);
+  auto mask_band = band->GetMaskBand();
+  ASSERT_TRUE(mask_band != nullptr);
+  std::vector<unsigned char> mask_buf(kSize, 0);
+  ASSERT_EQ(mask_band->RasterIO(GF_Read, 0, 0, kWidth, kHeight, &mask_buf[0],
+                                kWidth, kHeight, GDT_Byte, 0, 0),
+            CE_None);
+  EXPECT_EQ(mask_buf[0], 0);
+  EXPECT_EQ(mask_buf[1], 255);
+  EXPECT_EQ(mask_buf[2], 255);
+  EXPECT_EQ(mask_buf[3], 255);
+
+  VSIUnlink(kFilename);
+}
+
 TEST_F(GTiffTest, Overviews) {
-  const std::string filepath = file::JoinPath(absl::GetFlag(FLAGS_test_srcdir),
-                                              kTestData, "with-overviews.tif");
+  const auto filepath = GetTestFilePath("with-overviews.tif");
   const auto dataset = OpenReadOnly(filepath);
   ASSERT_NE(nullptr, dataset);
 
@@ -171,8 +247,7 @@ TEST_F(GTiffTest, Overviews) {
 
 TEST_F(GTiffTest, OverviewFile) {
   // Tiff file plus a separate overview sidecar.
-  const std::string filepath = file::JoinPath(
-      absl::GetFlag(FLAGS_test_srcdir), kTestData, "with-overview-file.tif");
+  const auto filepath = GetTestFilePath("with-overview-file.tif");
   const auto dataset = OpenReadOnly(filepath);
   ASSERT_NE(nullptr, dataset);
 
@@ -195,7 +270,9 @@ TEST_F(GTiffTest, OverviewFile) {
   EXPECT_EQ(nullptr, band->GetOverview(1));
 }
 
-TEST(GTiffBad, TooManyBlocks) {
+class GTiffBadTest : public GTiffTest {};
+
+TEST_F(GTiffBadTest, TooManyBlocks) {
   // Image with more than 2G blocks in a single band.
   // Based on tiff_read_toomanyblocks().
   WithQuietHandler error_handler;
@@ -214,16 +291,14 @@ TEST(GTiffBad, TooManyBlocks) {
                           CPL_ARRAYSIZE(data));
   autotest2::VsiMemTempWrapper wrapper(kFilename, data2);
   auto open_info =
-      absl::make_unique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
-
-  GDALDriver *driver_ = GetGDALDriverManager()->GetDriverByName(kDriverName);
+      std::make_unique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
 
   auto dataset = absl::WrapUnique(driver_->pfnOpen(open_info.get()));
   EXPECT_EQ(nullptr, dataset);
-  EXPECT_THAT(CPLGetLastErrorMsg(), testing::HasSubstr("TileOffsets"));
+  EXPECT_THAT(CPLGetLastErrorMsg(), testing::HasSubstr("Too many blocks"));
 }
 
-TEST(GTiffBad, TooManyBlocksSeparate) {
+TEST_F(GTiffBadTest, TooManyBlocksSeparate) {
   // Image with more than 2G blocks for all bands.
   // Based on tiff_read_toomanyblocks_separate().
   WithQuietHandler error_handler;
@@ -243,13 +318,11 @@ TEST(GTiffBad, TooManyBlocksSeparate) {
                           CPL_ARRAYSIZE(data));
   autotest2::VsiMemTempWrapper wrapper(kFilename, data2);
   auto open_info =
-      absl::make_unique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
-
-  GDALDriver *driver_ = GetGDALDriverManager()->GetDriverByName(kDriverName);
+      std::make_unique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
 
   auto dataset = absl::WrapUnique(driver_->pfnOpen(open_info.get()));
   EXPECT_EQ(nullptr, dataset);
-  EXPECT_THAT(CPLGetLastErrorMsg(), testing::HasSubstr("TileOffsets"));
+  EXPECT_THAT(CPLGetLastErrorMsg(), testing::HasSubstr("Too many blocks"));
 }
 
 }  // namespace
