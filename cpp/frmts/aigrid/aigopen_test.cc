@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "testing/base/public/gmock.h"
@@ -141,6 +142,8 @@ class VsiDirGuard {
   explicit VsiDirGuard(std::string path) : path_(std::move(path)) {
     VSIMkdir(path_.c_str(), 0777);
   }
+  VsiDirGuard(const VsiDirGuard&) = delete;
+  VsiDirGuard& operator=(const VsiDirGuard&) = delete;
   ~VsiDirGuard() { CPLUnlinkTree(path_.c_str()); }
   const std::string& path() const { return path_; }
 

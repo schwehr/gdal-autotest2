@@ -15,10 +15,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <climits>
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "testing/base/public/gmock.h"
@@ -84,6 +85,8 @@ class VsiDirGuard {
   explicit VsiDirGuard(std::string path) : path_(std::move(path)) {
     VSIMkdir(path_.c_str(), 0777);
   }
+  VsiDirGuard(const VsiDirGuard&) = delete;
+  VsiDirGuard& operator=(const VsiDirGuard&) = delete;
   ~VsiDirGuard() { CPLUnlinkTree(path_.c_str()); }
   const std::string& path() const { return path_; }
 
@@ -109,6 +112,8 @@ class MemBlockFile {
     WriteMemFile(path_, raw);
     fp_ = VSIFOpenL(path_.c_str(), "rb");
   }
+  MemBlockFile(const MemBlockFile&) = delete;
+  MemBlockFile& operator=(const MemBlockFile&) = delete;
 
   ~MemBlockFile() {
     if (fp_ != nullptr) {
@@ -130,6 +135,15 @@ CPLErr ReadCompressedBlock(const std::vector<GByte>& payload, int block_x,
   EXPECT_NE(nullptr, mf.fp());
   return AIGReadBlock(mf.fp(), 0, static_cast<int>(payload.size()), block_x,
                       block_y, out->data(), AIG_CELLTYPE_INT, TRUE);
+}
+
+void CPL_STDCALL CaptureErrorHandler(CPLErr /*err_class*/,
+                                     CPLErrorNum /*err_num*/, const char* msg) {
+  auto* errors =
+      static_cast<std::vector<std::string>*>(CPLGetErrorHandlerUserData());
+  if (errors != nullptr) {
+    errors->emplace_back(msg != nullptr ? msg : "");
+  }
 }
 
 TEST(GridlibTest, ReadHeaderBoundsAndStatistics) {
@@ -397,8 +411,8 @@ TEST(GridlibTest, ReadBlockHeaderErrorsAndRawFormats) {
                                        AIG_CELLTYPE_INT, TRUE));
     EXPECT_THAT(data, ElementsAre(0, 0, 0, 0));
 
-    // Prefix says 2 bytes, pass nBlockSize = 4 -> mismatch (file has 4 bytes,
-    // wait: create 6-byte file whose prefix says 2 bytes while passing 4).
+    // 6-byte file whose 2-byte prefix reports 2 payload bytes while
+    // nBlockSize = 4 is passed -> block size mismatch.
     std::vector<GByte> mismatch_raw(6, 0);
     WriteBE16(mismatch_raw, 0, 1);  // says 2 bytes
     WriteMemFile("/vsimem/gridlib_mm.adf", mismatch_raw);
@@ -431,7 +445,9 @@ TEST(GridlibTest, ReadBlockHeaderErrorsAndRawFormats) {
     EXPECT_FLOAT_EQ(1.25f, out[0]);
     EXPECT_FLOAT_EQ(-3.5f, out[1]);
 
-    // Too small for 2x2 float block (8 < 16).
+    // Too small for 2x2 float block (8 < 16). AIGReadBlock currently ignores
+    // the CE_Failure return value from AIGProcessRaw*Block helpers and returns
+    // CE_None even after emitting "Block too small".
     float out4[4] = {};
     CPLErrorReset();
     EXPECT_EQ(CE_None,
@@ -452,6 +468,8 @@ TEST(GridlibTest, ReadBlockHeaderErrorsAndRawFormats) {
     EXPECT_EQ(100, out[0]);
     EXPECT_EQ(-50, out[1]);
 
+    // AIGReadBlock ignores the CE_Failure return value from
+    // AIGProcessRaw32BitBlock and returns CE_None.
     GInt32 out4[4] = {};
     CPLErrorReset();
     EXPECT_EQ(CE_None,
@@ -510,6 +528,11 @@ TEST(GridlibTest, MinSizeVariantsAndFixedBitFormats) {
                                          2, 2, &out));
   EXPECT_THAT(out, ElementsAre(-100000, -100000, -100000, -100000));
 
+  // Note: For fixed-bit raw formats (0x01, 0x04, 0x08, 0x10, 0x20),
+  // AIGReadBlock currently ignores the CE_Failure return value from the
+  // AIGProcessRaw*Block helpers and returns CE_None even after emitting
+  // "Block too small".
+
   // nMagic == 0x01 (1-bit raw): nMin = 10, bits = 0b1010_0000 -> 11, 10,
   // 11, 10.
   ASSERT_EQ(CE_None, ReadCompressedBlock({0x01, 0x01, 10, 0xA0}, 2, 2, &out));
@@ -548,8 +571,8 @@ TEST(GridlibTest, MinSizeVariantsAndFixedBitFormats) {
             ReadCompressedBlock({0x10, 0x02, 0x03, 0xE8, 0, 1}, 2, 2, &out));
   EXPECT_THAT(CPLGetLastErrorMsg(), HasSubstr("Block too small"));
 
-  // nMagic == 0x20 (32-bit raw): nMin = 10 (1 byte + 1 pad? Wait: 2 + 1 + 16 =
-  // 19, pad to even 20 -> nDataSize = 18 >= 16).
+  // nMagic == 0x20 (32-bit raw): nMin = 10 (1 byte) + 4x4-byte values + 1 pad
+  // byte (20 bytes total -> nDataSize = 18 >= 16).
   ASSERT_EQ(CE_None, ReadCompressedBlock({0x20, 0x01, 10, 0, 0, 0, 1, 0, 0, 0,
                                           2,    0,    0,  0, 3, 0, 0, 0, 4, 0},
                                          2, 2, &out));
@@ -561,7 +584,8 @@ TEST(GridlibTest, MinSizeVariantsAndFixedBitFormats) {
 }
 
 TEST(GridlibTest, CcittFFBlockAndRleCompressionFormats) {
-  CPLPushErrorHandler(CPLQuietErrorHandler);
+  std::vector<std::string> errors;
+  CPLPushErrorHandlerEx(CaptureErrorHandler, &errors);
   absl::Cleanup pop_handler = [] { CPLPopErrorHandler(); };
 
   // 1. nMagic == 0xFF (CCITT RLE): 8x1 block, nMin = 20.
@@ -641,9 +665,14 @@ TEST(GridlibTest, CcittFFBlockAndRleCompressionFormats) {
             ReadCompressedBlock({0xCF, 0x01, 100, 5, 0, 1}, 2, 2, &out));
 
   // 8. Ran out of data (only 1 pixel decoded out of 4).
-  CPLErrorReset();
+  // Capture all emitted errors via `CPLPushErrorHandlerEx` rather than checking
+  // `CPLGetLastErrorMsg()`, because `AIGReadBlock` follows the first
+  // `AIGProcessBlock` failure in the process with a `CPLErrorOnce` warning that
+  // would otherwise overwrite the last error message if run in isolation.
+  errors.clear();
   EXPECT_EQ(CE_Failure, ReadCompressedBlock({0xDF, 0x01, 10, 1}, 2, 2, &out));
-  EXPECT_THAT(CPLGetLastErrorMsg(), HasSubstr("Ran out of data"));
+  ASSERT_FALSE(errors.empty());
+  EXPECT_THAT(errors.front(), HasSubstr("Ran out of data"));
 
   // 9. Unknown magic code (0xAA) -> fills nodata and returns CE_Failure.
   std::fill(out.begin(), out.end(), 123);

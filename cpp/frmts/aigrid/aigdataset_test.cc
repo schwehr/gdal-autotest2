@@ -15,10 +15,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "testing/base/public/gmock.h"
@@ -30,7 +32,6 @@
 #include "third_party/gdal/frmts/aigrid/aigrid.h"
 #include "third_party/gdal/gcore/gdal.h"
 #include "third_party/gdal/gcore/gdal_frmts.h"
-#include "third_party/gdal/gcore/gdal_priv.h"
 #include "third_party/gdal/gcore/gdal_rat.h"
 #include "third_party/gdal/ogr/ogr_spatialref.h"
 #include "third_party/gdal/port/cpl_conv.h"
@@ -90,6 +91,8 @@ class VsiDirGuard {
   explicit VsiDirGuard(std::string path) : path_(std::move(path)) {
     VSIMkdir(path_.c_str(), 0777);
   }
+  VsiDirGuard(const VsiDirGuard&) = delete;
+  VsiDirGuard& operator=(const VsiDirGuard&) = delete;
   ~VsiDirGuard() { CPLUnlinkTree(path_.c_str()); }
   const std::string& path() const { return path_; }
 
@@ -779,6 +782,7 @@ TEST_F(AigdatasetTest, RenameAndDeleteDataset) {
 
     // Delete via driver. Note: AIGDelete in aigdataset.cpp omits
     // CSLDestroy(papszFileList), so disable leak checking for this call.
+    // Remove once https://github.com/OSGeo/gdal/pull/15461 is in google3.
     {
       absl::LeakCheckDisabler disabler;
       ASSERT_EQ(CE_None, driver->Delete("/vsimem/aigds_ren_dst2"));
