@@ -28,6 +28,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "testing/base/public/gmock.h"
@@ -35,7 +36,6 @@
 #include "third_party/absl/cleanup/cleanup.h"
 #include "third_party/absl/memory/memory.h"
 #include "third_party/absl/strings/str_cat.h"
-#include "third_party/absl/strings/string_view.h"
 #include "third_party/gdal/gcore/gdal.h"
 #include "third_party/gdal/gcore/gdal_frmts.h"
 #include "third_party/gdal/gcore/gdal_priv.h"
@@ -63,7 +63,7 @@ using ::testing::NotNull;
 // RAII wrapper that writes data to a /vsimem/ file and unlinks it on exit.
 class VsiMemFile {
  public:
-  VsiMemFile(std::string path, absl::string_view content)
+  VsiMemFile(std::string path, std::string_view content)
       : path_(std::move(path)) {
     VSILFILE* fp = VSIFOpenL(path_.c_str(), "wb");
     if (fp != nullptr) {
@@ -232,7 +232,7 @@ class ControllableVsiHandler final : public VSIFilesystemHandler {
   VSIVirtualHandleUniquePtr Open(const char* filename, const char* access,
                                  bool /*bSetError*/,
                                  CSLConstList /*papszOptions*/) override {
-    const absl::string_view fname(filename);
+    const std::string_view fname(filename);
     if (fail_prj_open_ && fname.size() >= 4 &&
         fname.substr(fname.size() - 4) == ".prj") {
       return nullptr;
@@ -1645,6 +1645,7 @@ TEST(AaigridCreateCopyTest, IntFloatSouthUpNonSquarePrecisionAndProjection) {
 
 TEST(AaigridCreateCopyTest, LowLevelWriteFailuresAndWriteOnlyFallback) {
   QuietErrorHandler quiet;
+  GDALRegister_AAIGrid();
   ControllableVsiHandler* handler = GetControllableHandler();
 
   std::unique_ptr<GDALDataset> src_int = CreateMemDataset(2, 1, 1, GDT_Int32);
