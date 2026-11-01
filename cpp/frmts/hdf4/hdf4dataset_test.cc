@@ -22,8 +22,6 @@
 //   hdf4 is used as a part of netcdf:
 //   https://github.com/OSGeo/gdal/blob/master/autotest/gdrivers/netcdf.py
 
-#include "third_party/gdal/frmts/hdf4/hdf4dataset.h"
-
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -36,6 +34,7 @@
 #include "third_party/absl/strings/str_cat.h"
 #include "third_party/gdal/autotest2/cpp/frmts/hdf4/hdf4_test_util.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
+#include "third_party/gdal/frmts/hdf4/hdf4dataset.h"
 #include "third_party/gdal/frmts/hdf4/hdf4drivercore.h"
 #include "third_party/gdal/gcore/gdal.h"
 #include "third_party/gdal/port/cpl_conv.h"
