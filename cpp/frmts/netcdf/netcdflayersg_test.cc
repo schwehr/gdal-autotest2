@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,18 +20,18 @@
 #include <utility>
 #include <vector>
 
-#include "netcdf.h"
 #include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
 #include "third_party/gdal/apps/gdal_utils.h"
 #include "third_party/gdal/frmts/netcdf/netcdfdataset.h"
 #include "third_party/gdal/frmts/netcdf/netcdfsg.h"
 #include "third_party/gdal/gcore/gdal.h"
-#include "third_party/gdal/gcore/gdal_priv.h"
+#include "third_party/gdal/gcore/gdal_dataset.h"
 #include "third_party/gdal/ogr/ogr_spatialref.h"
 #include "third_party/gdal/ogr/ogrsf_frmts/ogrsf_frmts.h"
 #include "third_party/gdal/port/cpl_error.h"
 #include "third_party/gdal/port/cpl_vsi.h"
+#include "third_party/netcdf/include/netcdf.h"
 
 namespace autotest2 {
 namespace {
@@ -548,10 +548,9 @@ TEST_F(NetCDFLayerSGTest, ScanForGeometryContainersException) {
   // variables, the read-only vector open then yields no dataset.
   std::vector<std::pair<CPLErr, std::string>> errors;
   CPLErrorReset();
-  CPLPushErrorHandlerEx(CollectErrors, &errors);
+  const CPLErrorHandlerPusher error_handler(CollectErrors, &errors);
   std::unique_ptr<GDALDataset> poDS(static_cast<GDALDataset*>(
       GDALOpenEx(filename.c_str(), GDAL_OF_VECTOR, nullptr, nullptr, nullptr)));
-  CPLPopErrorHandler();
 
   EXPECT_EQ(nullptr, poDS);
   EXPECT_THAT(errors,

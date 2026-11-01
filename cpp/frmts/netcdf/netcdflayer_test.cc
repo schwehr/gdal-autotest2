@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -1555,11 +1555,12 @@ TEST_F(NetCDFLayerTest, WKTAutoGrowAndTruncation) {
     ls->addPoint(100, 100);
     f->SetGeometryDirectly(ls);
     CPLErrorReset();
-    CPLPushErrorHandler(CPLQuietErrorHandler);
-    // The driver reports a failure but still returns OGRERR_NONE: the WKT is
-    // simply not written.
-    EXPECT_EQ(OGRERR_NONE, l->CreateFeature(f));
-    CPLPopErrorHandler();
+    {
+      const CPLErrorHandlerPusher error_handler(CPLQuietErrorHandler);
+      // The driver reports a failure but still returns OGRERR_NONE: the WKT is
+      // simply not written.
+      EXPECT_EQ(OGRERR_NONE, l->CreateFeature(f));
+    }
     EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
     EXPECT_THAT(CPLGetLastErrorMsg(),
                 HasSubstr("Cannot write geometry as WKT"));
@@ -1689,9 +1690,10 @@ TEST_F(NetCDFLayerTest, WriterConfigMainDim) {
   // created against the record dimension.
   OGRFieldDefn f2("missing_dim_field", OFTInteger);
   CPLErrorReset();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(OGRERR_NONE, l->CreateField(&f2));
-  CPLPopErrorHandler();
+  {
+    const CPLErrorHandlerPusher error_handler(CPLQuietErrorHandler);
+    EXPECT_EQ(OGRERR_NONE, l->CreateField(&f2));
+  }
   EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
   EXPECT_THAT(CPLGetLastErrorMsg(),
               HasSubstr("Dimension 'non_existent_dim' does not exist"));
@@ -1994,9 +1996,10 @@ TEST_F(NetCDFLayerTest, LegacyStringGrowthAndTruncation) {
     f->SetField("f_str", "toolong");
     f->SetGeometryDirectly(new OGRPoint(1, 2));
     CPLErrorReset();
-    CPLPushErrorHandler(CPLQuietErrorHandler);
-    EXPECT_EQ(OGRERR_NONE, l->CreateFeature(f));
-    CPLPopErrorHandler();
+    {
+      const CPLErrorHandlerPusher error_handler(CPLQuietErrorHandler);
+      EXPECT_EQ(OGRERR_NONE, l->CreateFeature(f));
+    }
     EXPECT_EQ(CE_Warning, CPLGetLastErrorType());
     EXPECT_THAT(CPLGetLastErrorMsg(),
                 HasSubstr("exceeded the 4 character limit"));

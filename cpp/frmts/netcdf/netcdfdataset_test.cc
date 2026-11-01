@@ -1,4 +1,4 @@
-// Copyright 2017 Google Inc. All Rights Reserved.
+// Copyright 2017 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,7 +23,6 @@
 
 #include "third_party/gdal/frmts/netcdf/netcdfdataset.h"
 
-#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>  // NOLINT
@@ -33,7 +32,6 @@
 #include <string_view>
 #include <vector>
 
-#include "netcdf.h"
 #include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
 #include "third_party/absl/log/check.h"
@@ -41,17 +39,17 @@
 #include "third_party/absl/strings/str_split.h"
 #include "third_party/gdal/frmts/netcdf/netcdfdrivercore.h"
 #include "third_party/gdal/gcore/gdal.h"
-#include "third_party/gdal/gcore/gdal_pam.h"
-#include "third_party/gdal/gcore/gdal_priv.h"
+#include "third_party/gdal/gcore/gdal_dataset.h"
+#include "third_party/gdal/gcore/gdal_drivermanager.h"
 #include "third_party/gdal/ogr/ogr_spatialref.h"
 #include "third_party/gdal/ogr/ogrsf_frmts/ogrsf_frmts.h"
 #include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
-#include "third_party/gdal/port/cpl_json.h"
-#include "third_party/gdal/port/cpl_minixml.h"
 #include "third_party/gdal/port/cpl_port.h"
+#include "third_party/gdal/port/cpl_progress.h"
 #include "third_party/gdal/port/cpl_string.h"
 #include "third_party/gdal/port/cpl_vsi.h"
+#include "third_party/netcdf/include/netcdf.h"
 
 namespace autotest2 {
 namespace {
@@ -2138,8 +2136,6 @@ TEST_F(NetCDFDatasetTest, GeolocationMetadataAndCreateCopy) {
   VSIUnlink(out_fn.c_str());
   VSIUnlink(x_fn.c_str());
   VSIUnlink(y_fn.c_str());
-  VSIUnlink(x_fn.c_str());
-  VSIUnlink(y_fn.c_str());
   VSIUnlink(src_fn.c_str());
 }
 
@@ -3571,9 +3567,14 @@ TEST_F(NetCDFDatasetTest, CenterLongAndValidRangeEdgeCases) {
     auto poDS = std::unique_ptr<GDALDataset>(static_cast<GDALDataset*>(
         GDALOpenEx(sub_fn.c_str(), GDAL_OF_RASTER, nullptr, nullptr, nullptr)));
     ASSERT_NE(nullptr, poDS);
+    auto* poBand = poDS->GetRasterBand(1);
+    ASSERT_NE(nullptr, poBand);
+    EXPECT_EQ(GDT_UInt16, poBand->GetRasterDataType());
+    EXPECT_STREQ("{35536,64536}", poBand->GetMetadataItem("valid_range"));
   }
   {
     const std::string sub_fn = std::string("NETCDF:\"") + fn + "\":v_inv";
+    CPLErrorReset();
     std::unique_ptr<GDALDataset> poDS;
     {
       CPLErrorHandlerPusher oQuiet(CPLQuietErrorHandler);
@@ -3581,18 +3582,28 @@ TEST_F(NetCDFDatasetTest, CenterLongAndValidRangeEdgeCases) {
           sub_fn.c_str(), GDAL_OF_RASTER, nullptr, nullptr, nullptr)));
     }
     ASSERT_NE(nullptr, poDS);
+    EXPECT_EQ(CE_Warning, CPLGetLastErrorType());
+    auto* poBand = poDS->GetRasterBand(1);
+    ASSERT_NE(nullptr, poBand);
+    EXPECT_EQ(GDT_Float32, poBand->GetRasterDataType());
   }
   {
     const std::string sub_fn = std::string("NETCDF:\"") + fn + "\":v_ub";
     auto poDS = std::unique_ptr<GDALDataset>(static_cast<GDALDataset*>(
         GDALOpenEx(sub_fn.c_str(), GDAL_OF_RASTER, nullptr, nullptr, nullptr)));
     ASSERT_NE(nullptr, poDS);
+    auto* poBand = poDS->GetRasterBand(1);
+    ASSERT_NE(nullptr, poBand);
+    EXPECT_EQ(GDT_Int8, poBand->GetRasterDataType());
   }
   {
     const std::string sub_fn = std::string("NETCDF:\"") + fn + "\":v_sb";
     auto poDS = std::unique_ptr<GDALDataset>(static_cast<GDALDataset*>(
         GDALOpenEx(sub_fn.c_str(), GDAL_OF_RASTER, nullptr, nullptr, nullptr)));
     ASSERT_NE(nullptr, poDS);
+    auto* poBand = poDS->GetRasterBand(1);
+    ASSERT_NE(nullptr, poBand);
+    EXPECT_EQ(GDT_Int8, poBand->GetRasterDataType());
   }
 
   VSIUnlink(fn.c_str());
@@ -3759,14 +3770,16 @@ TEST_F(NetCDFDatasetTest, IWriteBlockAllTypes) {
     if (ti.eType == GDT_Int64) {
       EXPECT_EQ(CE_None, poBand->SetNoDataValueAsInt64(-9999));
       int bSuccess = FALSE;
-      EXPECT_EQ(int64_t(-9999), poBand->GetNoDataValueAsInt64(&bSuccess));
+      EXPECT_EQ(static_cast<int64_t>(-9999),
+                poBand->GetNoDataValueAsInt64(&bSuccess));
       EXPECT_TRUE(bSuccess);
       // Early exit if value already set
       EXPECT_EQ(CE_None, poBand->SetNoDataValueAsInt64(-9999));
     } else if (ti.eType == GDT_UInt64) {
       EXPECT_EQ(CE_None, poBand->SetNoDataValueAsUInt64(9999));
       int bSuccess = FALSE;
-      EXPECT_EQ(uint64_t(9999), poBand->GetNoDataValueAsUInt64(&bSuccess));
+      EXPECT_EQ(static_cast<uint64_t>(9999),
+                poBand->GetNoDataValueAsUInt64(&bSuccess));
       EXPECT_TRUE(bSuccess);
       // Early exit if value already set
       EXPECT_EQ(CE_None, poBand->SetNoDataValueAsUInt64(9999));
@@ -3795,12 +3808,12 @@ TEST_F(NetCDFDatasetTest, IWriteBlockAllTypes) {
 
     if (ti.eType == GDT_Int64) {
       int bSuccess = FALSE;
-      EXPECT_EQ(int64_t(-9999),
+      EXPECT_EQ(static_cast<int64_t>(-9999),
                 poReadDS->GetRasterBand(1)->GetNoDataValueAsInt64(&bSuccess));
       EXPECT_TRUE(bSuccess);
     } else if (ti.eType == GDT_UInt64) {
       int bSuccess = FALSE;
-      EXPECT_EQ(uint64_t(9999),
+      EXPECT_EQ(static_cast<uint64_t>(9999),
                 poReadDS->GetRasterBand(1)->GetNoDataValueAsUInt64(&bSuccess));
       EXPECT_TRUE(bSuccess);
     } else {
@@ -4505,6 +4518,15 @@ TEST_F(NetCDFDatasetTest, Put1DVarAndGeolocationBands) {
     CSLDestroy(papszGeoOpts);
     ASSERT_NE(nullptr, poDst);
     poDst.reset();
+    auto poReopened =
+        std::unique_ptr<GDALDataset>(static_cast<GDALDataset*>(GDALOpenEx(
+            fn_geoloc_out.c_str(), GDAL_OF_RASTER, nullptr, nullptr, nullptr)));
+    ASSERT_NE(nullptr, poReopened);
+    EXPECT_EQ(1, poReopened->GetRasterCount());
+    EXPECT_NE(nullptr, poReopened->GetMetadata("GEOLOCATION"));
+    EXPECT_NE(nullptr, poReopened->GetMetadataItem("X_DATASET", "GEOLOCATION"));
+    EXPECT_NE(nullptr, poReopened->GetMetadataItem("Y_DATASET", "GEOLOCATION"));
+    poReopened.reset();
     VSIUnlink(fn_geoloc_out.c_str());
     VSIUnlink(fn_gx.c_str());
     VSIUnlink(fn_gy.c_str());
@@ -4642,6 +4664,12 @@ TEST_F(NetCDFDatasetTest, FinalCoveragePush) {
           fn_frac.c_str(), GDAL_OF_RASTER, nullptr, nullptr, nullptr)));
     }
     ASSERT_NE(nullptr, poDS);
+    EXPECT_EQ(CE_Warning, CPLGetLastErrorType());
+    EXPECT_EQ(1, poDS->GetRasterCount());
+    auto* poBand = poDS->GetRasterBand(1);
+    ASSERT_NE(nullptr, poBand);
+    EXPECT_EQ(GDT_Int16, poBand->GetRasterDataType());
+    EXPECT_DOUBLE_EQ(0.1, poBand->GetScale());
     poDS.reset();
     VSIUnlink(fn_frac.c_str());
   }
@@ -4699,6 +4727,10 @@ TEST_F(NetCDFDatasetTest, FinalCoveragePush) {
           sub_fn.c_str(), GDAL_OF_RASTER, nullptr, nullptr, nullptr)));
     }
     ASSERT_NE(nullptr, poDS);
+    EXPECT_EQ(2, poDS->GetRasterCount());
+    auto* poBand = poDS->GetRasterBand(1);
+    ASSERT_NE(nullptr, poBand);
+    EXPECT_EQ(GDT_Float32, poBand->GetRasterDataType());
     poDS.reset();
     VSIUnlink(fn_multi_1d.c_str());
   }
@@ -4752,6 +4784,15 @@ TEST_F(NetCDFDatasetTest, FinalCoveragePush) {
     CSLDestroy(papszGeoOpts);
     ASSERT_NE(nullptr, poDst);
     poDst.reset();
+    auto poReopened =
+        std::unique_ptr<GDALDataset>(static_cast<GDALDataset*>(GDALOpenEx(
+            fn_geoloc_out.c_str(), GDAL_OF_RASTER, nullptr, nullptr, nullptr)));
+    ASSERT_NE(nullptr, poReopened);
+    EXPECT_EQ(1, poReopened->GetRasterCount());
+    EXPECT_NE(nullptr, poReopened->GetMetadata("GEOLOCATION"));
+    EXPECT_NE(nullptr, poReopened->GetMetadataItem("X_DATASET", "GEOLOCATION"));
+    EXPECT_NE(nullptr, poReopened->GetMetadataItem("Y_DATASET", "GEOLOCATION"));
+    poReopened.reset();
     VSIUnlink(fn_geoloc_out.c_str());
     VSIUnlink(fn_gx.c_str());
     VSIUnlink(fn_gy.c_str());

@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,10 +15,8 @@
 #include <map>
 #include <string>
 
-#include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
 #include "third_party/gdal/frmts/netcdf/netcdfdataset.h"
-#include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
 #include "third_party/gdal/port/cpl_minixml.h"
 #include "third_party/gdal/port/cpl_vsi.h"
