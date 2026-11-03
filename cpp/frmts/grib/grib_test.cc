@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,34 +15,32 @@
 // Tests GRIB raster driver.
 //
 // See also:
-//   http://www.gdal.org/frmt_grib.html
+//   https://gdal.org/drivers/raster/grib.html
 //   https://github.com/OSGeo/gdal/blob/master/autotest/gdrivers/grib.py
 
 #include <stddef.h>
 
+#include <filesystem>  // NOLINT
 #include <memory>
-#include <string>
+#include <string_view>
 
-#include "commandlineflags_declare.h"
-#include "file/base/path.h"
-#include "gmock.h"
-#include "googletest.h"
-#include "gunit.h"
-#include "third_party/absl/flags/flag.h"
+#include "testing/base/public/gmock.h"
+#include "testing/base/public/gunit.h"
 #include "third_party/absl/memory/memory.h"
-#include "gcore/gdal.h"
-#include "gcore/gdal_frmts.h"
-#include "gcore/gdal_priv.h"
-#include "ogr/ogr_core.h"
-#include "ogr/ogr_spatialref.h"
-#include "port/cpl_conv.h"
-#include "port/cpl_error.h"
+#include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_frmts.h"
+#include "third_party/gdal/gcore/gdal_priv.h"
+#include "third_party/gdal/port/cpl_error.h"
 
 namespace autotest2 {
 namespace {
 
-const char kTestData[] =
-    "/google3/third_party/gdal/autotest2/cpp/frmts/grib/testdata/";
+const std::filesystem::path kTestDataPath(
+    "google3/third_party/gdal/autotest2/cpp/frmts/grib/testdata");
+
+std::filesystem::path GetTestFilePath(const std::string_view filename) {
+  return std::filesystem::path(::testing::SrcDir()) / kTestDataPath / filename;
+}
 
 class GribTest : public ::testing::Test {
  protected:
@@ -50,9 +48,8 @@ class GribTest : public ::testing::Test {
 };
 
 TEST_F(GribTest, Basics) {
-  const std::string filepath =
-      file::JoinPath(absl::GetFlag(FLAGS_test_srcdir), std::string(kTestData),
-                     "regular_latlon_surface_constant.grib2");
+  const auto filepath =
+      GetTestFilePath("regular_latlon_surface_constant.grib2");
   auto src = absl::WrapUnique(static_cast<GDALDataset *>(
       GDALOpenEx(filepath.c_str(), GDAL_OF_READONLY | GDAL_OF_RASTER, nullptr,
                  nullptr, nullptr)));
