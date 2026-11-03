@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,15 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests gcore/gdalgeorefpamdataset.cpp.
+// Tests PAM-backed georeferenced dataset base class
+// (gcore/gdalgeorefpamdataset.cpp).
+//
+// Build caveat in google3: //third_party/gdal/BUILD compiles with PAM_ENABLED
+// undefined, so GDAL_PAM_ENABLED defaults to "NO" unless overridden via
+// CPLConfigOptionSetter.
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdalgeorefpamdataset.cpp
 
 #include "third_party/gdal/gcore/gdalgeorefpamdataset.h"
 
 #include "testing/base/public/gunit.h"
 #include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_geotransform.h"
 #include "third_party/gdal/port/cpl_conv.h"
+#include "third_party/gdal/port/cpl_error.h"
 #include "third_party/gdal/port/cpl_string.h"
 
+namespace autotest2 {
 namespace {
 
 class TestGeorefPamDataset : public GDALGeorefPamDataset {
@@ -51,7 +62,7 @@ class TestGeorefPamDataset : public GDALGeorefPamDataset {
   }
 };
 
-TEST(GdalgeorefpamdatasetTest, GeorefAndMetadataPrecedence) {
+TEST(GdalGeorefPamDatasetTest, GeorefAndMetadataPrecedence) {
   TestGeorefPamDataset ds;
 
   // Empty state before configuring internal georef.
@@ -101,3 +112,4 @@ TEST(GdalgeorefpamdatasetTest, GeorefAndMetadataPrecedence) {
 }
 
 }  // namespace
+}  // namespace autotest2

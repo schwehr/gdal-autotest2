@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,21 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests gcore/gdalsubdatasetinfo.cpp.
+// Tests GDALSubdatasetInfo and subdataset C API (gcore/gdalsubdatasetinfo.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdalsubdatasetinfo.cpp
 
 #include "third_party/gdal/gcore/gdalsubdatasetinfo.h"
 
+#include <memory>
 #include <string>
 
 #include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_memory.h"
 #include "third_party/gdal/gcore/gdal.h"
-#include "third_party/gdal/gcore/gdal_priv.h"
-#include "third_party/gdal/port/cpl_conv.h"
-#include "third_party/gdal/port/cpl_string.h"
+#include "third_party/gdal/gcore/gdal_driver.h"
+#include "third_party/gdal/gcore/gdal_drivermanager.h"
+#include "third_party/gdal/port/cpl_port.h"
 
+namespace autotest2 {
 namespace {
 
-class TestSubdatasetInfo : public GDALSubdatasetInfo {
+class TestSubdatasetInfo final : public GDALSubdatasetInfo {
  public:
   TestSubdatasetInfo(const std::string& file_name, const std::string& prefix,
                      const std::string& path, const std::string& subdataset)
@@ -61,7 +68,7 @@ GDALSubdatasetInfo* MockSubdatasetInfoFunc(const char* file_name) {
   return nullptr;
 }
 
-TEST(GdalsubdatasetinfoTest, QuoteUnquoteAndModifyPath) {
+TEST(GdalSubdatasetInfoTest, QuoteUnquoteAndModifyPath) {
   // Unquoted path.
   TestSubdatasetInfo info1("DRV:/dir/file.dat:sub1", "DRV", "/dir/file.dat",
                            "sub1");
@@ -90,44 +97,45 @@ TEST(GdalsubdatasetinfoTest, QuoteUnquoteAndModifyPath) {
   EXPECT_EQ(R"("a\"b")", TestSubdatasetInfo::CallQuote(R"(a"b)"));
 }
 
-TEST(GdalsubdatasetinfoTest, CApiAndDriverLookup) {
+TEST(GdalSubdatasetInfoTest, CApiAndDriverLookup) {
   // Register two mock drivers: one without GDAL_DMD_SUBDATASETS, and one with.
   GDALDriver drv_no_meta;
   drv_no_meta.SetDescription("MOCK_NO_SDS_META");
   drv_no_meta.pfnGetSubdatasetInfoFunc = &MockSubdatasetInfoFunc;
   GetGDALDriverManager()->RegisterDriver(&drv_no_meta);
+  absl::Cleanup deregister_no_meta = [&drv_no_meta] {
+    GetGDALDriverManager()->DeregisterDriver(&drv_no_meta);
+  };
 
   GDALDriver drv_with_meta;
   drv_with_meta.SetDescription("MOCK_WITH_SDS_META");
   drv_with_meta.SetMetadataItem(GDAL_DMD_SUBDATASETS, "YES");
   drv_with_meta.pfnGetSubdatasetInfoFunc = &MockSubdatasetInfoFunc;
   GetGDALDriverManager()->RegisterDriver(&drv_with_meta);
+  absl::Cleanup deregister_with_meta = [&drv_with_meta] {
+    GetGDALDriverManager()->DeregisterDriver(&drv_with_meta);
+  };
 
   // Non-matching filename returns nullptr.
   EXPECT_EQ(nullptr, GDALGetSubdatasetInfo("NONEXISTENT_PREFIX:foo:bar"));
 
   // Matching filename returns valid handle.
-  GDALSubdatasetInfoH h_info =
-      GDALGetSubdatasetInfo("MOCKSDS:/path/to/mock.dat:layer1");
+  std::unique_ptr<GDALSubdatasetInfo> h_info(
+      GDALGetSubdatasetInfo("MOCKSDS:/path/to/mock.dat:layer1"));
   ASSERT_NE(nullptr, h_info);
 
-  char* path = GDALSubdatasetInfoGetPathComponent(h_info);
-  EXPECT_STREQ("/path/to/mock.dat", path);
-  CPLFree(path);
+  std::unique_ptr<char, CplFreeDeleter> path(
+      GDALSubdatasetInfoGetPathComponent(h_info.get()));
+  EXPECT_STREQ("/path/to/mock.dat", path.get());
 
-  char* subds = GDALSubdatasetInfoGetSubdatasetComponent(h_info);
-  EXPECT_STREQ("layer1", subds);
-  CPLFree(subds);
+  std::unique_ptr<char, CplFreeDeleter> subds(
+      GDALSubdatasetInfoGetSubdatasetComponent(h_info.get()));
+  EXPECT_STREQ("layer1", subds.get());
 
-  char* modified =
-      GDALSubdatasetInfoModifyPathComponent(h_info, "/new/mock.dat");
-  EXPECT_STREQ("MOCKSDS:/new/mock.dat:layer1", modified);
-  CPLFree(modified);
-
-  GDALDestroySubdatasetInfo(h_info);
-
-  GetGDALDriverManager()->DeregisterDriver(&drv_with_meta);
-  GetGDALDriverManager()->DeregisterDriver(&drv_no_meta);
+  std::unique_ptr<char, CplFreeDeleter> modified(
+      GDALSubdatasetInfoModifyPathComponent(h_info.get(), "/new/mock.dat"));
+  EXPECT_STREQ("MOCKSDS:/new/mock.dat:layer1", modified.get());
 }
 
 }  // namespace
+}  // namespace autotest2

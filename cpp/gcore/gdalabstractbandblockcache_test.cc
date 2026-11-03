@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,16 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests gcore/gdalabstractbandblockcache.cpp.
+// Tests abstract band block cache (gcore/gdalabstractbandblockcache.cpp).
+//
+// Runtime caveat in google3: gunit_main installs CPLGoogleLogErrorHandler, so
+// CPLIsDefaultErrorHandlerAndCatchDebug() returns false and
+// StartDirtyBlockFlushingLog() leaves m_nInitialDirtyBlocksInFlushCache at 0.
+// SetInitialDirtyBlocksForLog() exercises UpdateDirtyBlockFlushingLog().
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdalabstractbandblockcache.cpp
 
 #include <memory>
 
 #include "testing/base/public/gunit.h"
 #include "third_party/gdal/gcore/gdal.h"
 #include "third_party/gdal/gcore/gdal_abstractbandblockcache.h"
+#include "third_party/gdal/gcore/gdal_frmts.h"
 #include "third_party/gdal/gcore/gdal_priv.h"
 #include "third_party/gdal/port/cpl_conv.h"
+#include "third_party/gdal/port/cpl_error.h"
 
+namespace autotest2 {
 namespace {
 
 class TestBandBlockCache : public GDALAbstractBandBlockCache {
@@ -55,18 +66,21 @@ class TestBandBlockCache : public GDALAbstractBandBlockCache {
   void CallUpdateLog() { UpdateDirtyBlockFlushingLog(); }
   void CallEndLog() { EndDirtyBlockFlushingLog(); }
 
+  int InitialDirtyBlocksForLog() const {
+    return m_nInitialDirtyBlocksInFlushCache;
+  }
+
   void SetInitialDirtyBlocksForLog(int count) {
     m_nInitialDirtyBlocksInFlushCache = count;
     m_nLastTick = -1;
   }
 };
 
-TEST(GdalabstractbandblockcacheTest, BlockRecyclingAndDirtyBlockLogging) {
-  GDALAllRegister();
+TEST(GdalAbstractBandBlockCacheTest, BlockRecyclingAndDirtyBlockLogging) {
+  GDALRegister_MEM();
   GDALDriver* mem_driver = GetGDALDriverManager()->GetDriverByName("MEM");
   ASSERT_NE(nullptr, mem_driver);
-  std::unique_ptr<GDALDataset> ds(
-      mem_driver->Create("", 8, 8, 1, GDT_Byte, nullptr));
+  GDALDatasetUniquePtr ds(mem_driver->Create("", 8, 8, 1, GDT_Byte, nullptr));
   ASSERT_NE(nullptr, ds);
 
   TestBandBlockCache cache(ds->GetRasterBand(1));
@@ -80,6 +94,7 @@ TEST(GdalabstractbandblockcacheTest, BlockRecyclingAndDirtyBlockLogging) {
 
   // Recycling from free list returns the same block reinitialized for (1, 0).
   GDALRasterBlock* b2 = cache.CreateBlock(1, 0);
+  ASSERT_NE(nullptr, b2);
   EXPECT_EQ(b1, b2);
   EXPECT_EQ(1, b2->GetXOff());
   EXPECT_EQ(0, b2->GetYOff());
@@ -97,22 +112,28 @@ TEST(GdalabstractbandblockcacheTest, BlockRecyclingAndDirtyBlockLogging) {
   cache.IncDirtyBlocks(2);
   EXPECT_TRUE(cache.HasDirtyBlocks());
 
-  // Enable CPL_DEBUG so StartDirtyBlockFlushingLog initializes progress.
-  CPLSetThreadLocalConfigOption("CPL_DEBUG", "ON");
-  CPLSetThreadLocalConfigOption("GDAL_REPORT_DIRTY_BLOCK_FLUSHING", nullptr);
-  cache.CallStartLog();
-  // Even if WITHOUT_CPLDEBUG is compiled in, also set
-  // m_nInitialDirtyBlocksInFlushCache directly so UpdateDirtyBlockFlushingLog
-  // is guaranteed to execute all ticks.
-  cache.SetInitialDirtyBlocksForLog(2);
-  cache.IncDirtyBlocks(-1);
-  cache.CallUpdateLog();
-  cache.IncDirtyBlocks(-1);
-  cache.CallUpdateLog();
-  cache.CallEndLog();
-  CPLSetThreadLocalConfigOption("CPL_DEBUG", nullptr);
+  // StartDirtyBlockFlushingLog() checks
+  // CPLIsDefaultErrorHandlerAndCatchDebug(), which returns false under
+  // gunit_main's custom error handler; pin that it stays 0 and then seed the
+  // tick state directly via SetInitialDirtyBlocksForLog(2).
+  {
+    CPLConfigOptionSetter debug_setter("CPL_DEBUG", "ON",
+                                       /*bSetOnlyIfUndefined=*/false);
+    CPLConfigOptionSetter report_setter("GDAL_REPORT_DIRTY_BLOCK_FLUSHING",
+                                        nullptr,
+                                        /*bSetOnlyIfUndefined=*/false);
+    cache.CallStartLog();
+    EXPECT_EQ(0, cache.InitialDirtyBlocksForLog());
+    cache.SetInitialDirtyBlocksForLog(2);
+    cache.IncDirtyBlocks(-1);
+    cache.CallUpdateLog();
+    cache.IncDirtyBlocks(-1);
+    cache.CallUpdateLog();
+    cache.CallEndLog();
+  }
 
   EXPECT_FALSE(cache.HasDirtyBlocks());
 }
 
 }  // namespace
+}  // namespace autotest2

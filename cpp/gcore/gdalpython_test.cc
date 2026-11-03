@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,398 +11,719 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Unit tests for gcore/gdalpython.cpp.
+//
+// Build & runtime caveats in google3:
+// - libpython is not linked in google3, so Python initialization and C-API
+//   calls are tested via dynamic-linker interposition (dlopen/dlclose/dlsym
+//   resolved through dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.34"|"2.2.5"|"2.17"))
+//   outside sanitizer builds, and direct GDALPy function-pointer stubs under
+//   ASan/MSan/TSan (whose runtimes interpose dlsym).
+// - GDALPythonInitialize() is exercised using a temporary #!/bin/sh version
+//   script and a two-level symlink chain prepended to PATH in
+//   ::testing::TempDir().
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdalpython.cpp
 
-#include "third_party/gdal/gcore/gdalpython.h"
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(memory_sanitizer) || \
+    __has_feature(thread_sanitizer)
+#define GDAL_PYTHON_TEST_USE_DIRECT_STUBS 1
+#endif
+#elif defined(ADDRESS_SANITIZER) || defined(MEMORY_SANITIZER) || \
+    defined(THREAD_SANITIZER)
+#define GDAL_PYTHON_TEST_USE_DIRECT_STUBS 1
+#endif
 
+#if !defined(GDAL_PYTHON_TEST_USE_DIRECT_STUBS)
 #include <dlfcn.h>
-#include <sys/stat.h>
-#include <unistd.h>
+#endif
 
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
+#include <filesystem>  // NOLINT
 #include <string>
 
 #include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
-#include "third_party/gdal/port/cpl_conv.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
+#include "third_party/gdal/gcore/gdalpython.h"
 #include "third_party/gdal/port/cpl_error.h"
-#include "third_party/gdal/port/cpl_string.h"
+#include "third_party/gdal/port/cpl_port.h"
 
-namespace gdal {
+namespace autotest2 {
 namespace {
 
-using GDALPy::Py_buffer;
-using GDALPy::Py_ssize_t;
-using GDALPy::PyGILState_STATE;
-using GDALPy::PyModuleDef;
-using GDALPy::PyObject;
+using ::testing::HasSubstr;
 
-static int g_dlsym_calls = 0;
-static int g_dlopen_calls = 0;
-static int g_py_is_initialized = 0;
-static bool g_py_err_occurred = false;
-static bool g_py_compile_fail = false;
-static bool g_py_call_fail = false;
-static bool g_py_with_traceback = false;
-static PyObject g_dummy_obj = {1, nullptr};
-static PyObject g_err_obj = {1, nullptr};
+GDALPy::PyObject g_dummy_obj = {1, nullptr};
+GDALPy::PyObject g_bytes_obj = {1, nullptr};
+GDALPy::PyObject g_tuple_obj = {1, nullptr};
+GDALPy::PyObject g_mod_obj = {1, nullptr};
+GDALPy::PyObject g_func_obj = {1, nullptr};
+GDALPy::PyObject g_res_obj = {1, nullptr};
+GDALPy::PyObject g_err_obj = {1, nullptr};
 
-const char* Stub_Py_GetVersion() { return "3.11.0\r\n(mock)\n"; }
-void Stub_Py_SetProgramName(const wchar_t*) {}
-void Stub_Py_SetPythonHome(const wchar_t*) {}
-int Stub_PyBuffer_FillInfo(Py_buffer*, PyObject*, void*, size_t, int, int) {
-  return 0;
-}
-PyObject* Stub_PyMemoryView_FromBuffer(Py_buffer*) { return &g_dummy_obj; }
-PyObject* Stub_PyObject_Type(PyObject*) { return &g_dummy_obj; }
-int Stub_PyObject_IsInstance(PyObject*, PyObject*) { return 1; }
-PyObject* Stub_PyTuple_New(size_t) { return &g_dummy_obj; }
-PyObject* Stub_PyBool_FromLong(long) { return &g_dummy_obj; }
-PyObject* Stub_PyLong_FromLong(long) { return &g_dummy_obj; }
-long Stub_PyLong_AsLong(PyObject*) { return 0; }
-PyObject* Stub_PyLong_FromLongLong(GIntBig) { return &g_dummy_obj; }
-GIntBig Stub_PyLong_AsLongLong(PyObject*) { return 0; }
-Py_ssize_t Stub_PyBytes_Size(PyObject*) { return 4; }
-const char* Stub_PyBytes_AsString(PyObject*) { return "mock_str"; }
-int* Stub_PyBytes_AsStringAndSize(PyObject*, char**, Py_ssize_t*) {
-  return nullptr;
-}
-PyObject* Stub_PyBytes_FromObject(PyObject*) { return &g_dummy_obj; }
-PyObject* Stub_PyBytes_FromStringAndSize(const void*, size_t) {
-  return &g_dummy_obj;
-}
-PyObject* Stub_PyModule_Create2(PyModuleDef*, int) { return &g_dummy_obj; }
-PyObject* Stub_PyUnicode_FromString(const char*) { return &g_dummy_obj; }
-PyObject* Stub_PyUnicode_AsUTF8String(PyObject*) { return &g_dummy_obj; }
-PyObject* Stub_PyFloat_FromDouble(double) { return &g_dummy_obj; }
-double Stub_PyFloat_AsDouble(PyObject*) { return 0.0; }
-PyObject* Stub_PyObject_Call(PyObject*, PyObject*, PyObject*) {
-  if (g_py_call_fail) {
-    g_py_err_occurred = true;
-  } else {
-    g_py_err_occurred = false;
-  }
-  return &g_dummy_obj;
-}
-PyObject* Stub_PyObject_GetIter(PyObject*) { return &g_dummy_obj; }
-PyObject* Stub_PyIter_Next(PyObject*) { return nullptr; }
-void Stub_Py_IncRef(PyObject*) {}
-void Stub_Py_DecRef(PyObject*) {}
-PyObject* Stub_PyErr_Occurred() {
+bool g_py_err_occurred = false;
+bool g_py_call_fail = false;
+bool g_py_compile_fail = false;
+bool g_py_unicode_fail = false;
+
+void Stub_Py_IncRef(GDALPy::PyObject*) {}
+void Stub_Py_DecRef(GDALPy::PyObject*) {}
+
+GDALPy::PyObject* Stub_PyErr_Occurred() {
   return g_py_err_occurred ? &g_err_obj : nullptr;
 }
-void Stub_PyErr_Print() { g_py_err_occurred = false; }
-int Stub_Py_IsInitialized() { return g_py_is_initialized; }
-void Stub_Py_InitializeEx(int) { g_py_is_initialized = 1; }
-void Stub_PyEval_InitThreads() {}
-void* Stub_PyEval_SaveThread() { return &g_dummy_obj; }
-void Stub_PyEval_RestoreThread(void*) {}
-void Stub_Py_Finalize() { g_py_is_initialized = 0; }
-PyObject* Stub_Py_CompileStringExFlags(const char*, const char*, int, void*,
-                                       int) {
-  if (g_py_compile_fail) {
+
+void Stub_PyErr_Print() {}
+
+void Stub_PyErr_Fetch(GDALPy::PyObject** p_type, GDALPy::PyObject** p_val,
+                      GDALPy::PyObject** p_tb) {
+  g_py_err_occurred = false;
+  *p_type = &g_dummy_obj;
+  *p_val = &g_dummy_obj;
+  *p_tb = &g_dummy_obj;
+}
+
+void Stub_PyErr_Clear() { g_py_err_occurred = false; }
+
+GDALPy::PyObject* Stub_Py_CompileStringExFlags(const char*, const char*, int,
+                                               void*, int) {
+  return g_py_compile_fail ? nullptr : &g_dummy_obj;
+}
+
+GDALPy::PyObject* Stub_PyImport_ExecCodeModule(const char*, GDALPy::PyObject*) {
+  return &g_mod_obj;
+}
+
+GDALPy::PyObject* Stub_PyObject_GetAttrString(GDALPy::PyObject*, const char*) {
+  return &g_func_obj;
+}
+
+GDALPy::PyObject* Stub_PyTuple_New(size_t) { return &g_tuple_obj; }
+
+int Stub_PyTuple_SetItem(GDALPy::PyObject*, size_t, GDALPy::PyObject*) {
+  return 0;
+}
+
+GDALPy::PyObject* Stub_PyObject_Call(GDALPy::PyObject*, GDALPy::PyObject*,
+                                     GDALPy::PyObject*) {
+  if (g_py_call_fail) {
     g_py_err_occurred = true;
     return nullptr;
   }
-  g_py_err_occurred = false;
-  return &g_dummy_obj;
+  return &g_res_obj;
 }
-PyObject* Stub_PyImport_ExecCodeModule(const char*, PyObject*) {
-  return &g_dummy_obj;
-}
-int Stub_PyObject_HasAttrString(PyObject*, const char*) { return 1; }
-PyObject* Stub_PyObject_GetAttrString(PyObject*, const char*) {
-  return &g_dummy_obj;
-}
-int Stub_PyObject_SetAttrString(PyObject*, const char*, PyObject*) { return 0; }
-int Stub_PyTuple_SetItem(PyObject*, size_t, PyObject*) { return 0; }
-void Stub_PyObject_Print(PyObject*, FILE*, int) {}
-PyObject* Stub_PyImport_ImportModule(const char*) { return &g_dummy_obj; }
-int Stub_PyCallable_Check(PyObject*) { return 1; }
-PyObject* Stub_PyDict_New() { return &g_dummy_obj; }
-int Stub_PyDict_SetItemString(PyObject*, const char*, PyObject*) { return 0; }
-int Stub_PyDict_Next(PyObject*, size_t*, PyObject**, PyObject**) { return 0; }
-PyObject* Stub_PyDict_GetItemString(PyObject*, const char*) {
-  return &g_dummy_obj;
-}
-PyObject* Stub_PyList_New(Py_ssize_t) { return &g_dummy_obj; }
-int Stub_PyList_SetItem(PyObject*, Py_ssize_t, PyObject*) { return 0; }
-int Stub_PySequence_Check(PyObject*) { return 1; }
-Py_ssize_t Stub_PySequence_Size(PyObject*) { return 0; }
-PyObject* Stub_PySequence_GetItem(PyObject*, Py_ssize_t) {
-  return &g_dummy_obj;
-}
-int Stub_PyArg_ParseTuple(PyObject*, const char*, ...) { return 1; }
-PyGILState_STATE Stub_PyGILState_Ensure() { return 1; }
-void Stub_PyGILState_Release(PyGILState_STATE) {}
-void Stub_PyErr_Fetch(PyObject** poPyType, PyObject** poPyValue,
-                      PyObject** poPyTraceback) {
-  *poPyType = &g_dummy_obj;
-  *poPyValue = &g_dummy_obj;
-  *poPyTraceback = g_py_with_traceback ? &g_dummy_obj : nullptr;
-  g_py_err_occurred = false;
-}
-void Stub_PyErr_Clear() { g_py_err_occurred = false; }
 
-#define NO_SANITIZE __attribute__((no_sanitize("address", "memory")))
+GDALPy::PyObject* Stub_PyUnicode_AsUTF8String(GDALPy::PyObject*) {
+  return g_py_unicode_fail ? nullptr : &g_bytes_obj;
+}
 
-NO_SANITIZE static bool is_equal(const char* a, const char* b) {
-  if (!a || !b) return a == b;
-  while (*a && *b && *a == *b) {
+const char* Stub_PyBytes_AsString(GDALPy::PyObject* p) {
+  return p != nullptr ? "stub_py_str" : nullptr;
+}
+
+#if !defined(GDAL_PYTHON_TEST_USE_DIRECT_STUBS)
+
+#define NO_SANITIZE \
+  __attribute__((no_sanitize("address", "memory", "thread", "undefined")))
+
+using DlopenFn = void* (*)(const char*, int);
+using DlcloseFn = int (*)(void*);
+using DlsymFn = void* (*)(void*, const char*);
+
+int g_fake_lib = 0;
+bool g_py_is_initialized = false;
+
+int Stub_Py_IsInitialized() { return g_py_is_initialized ? 1 : 0; }
+void Stub_Py_InitializeEx(int) {}
+void Stub_PyEval_InitThreads() {}
+void* Stub_PyEval_SaveThread() { return &g_dummy_obj; }
+void Stub_PyEval_RestoreThread(void*) {}
+void Stub_Py_Finalize() {}
+const char* Stub_Py_GetVersion() { return "3.12.0\r\n(stub)"; }
+void Stub_Py_SetProgramName(const wchar_t*) {}
+void Stub_Py_SetPythonHome(const wchar_t*) {}
+GDALPy::PyGILState_STATE Stub_PyGILState_Ensure() { return 0; }
+void Stub_PyGILState_Release(GDALPy::PyGILState_STATE) {}
+
+int Stub_PyBuffer_FillInfo(GDALPy::Py_buffer*, GDALPy::PyObject*, void*, size_t,
+                           int, int) {
+  return 0;
+}
+
+GDALPy::PyObject* Stub_PyMemoryView_FromBuffer(GDALPy::Py_buffer*) {
+  return &g_dummy_obj;
+}
+
+GDALPy::PyObject* Stub_PyObject_Type(GDALPy::PyObject*) { return &g_dummy_obj; }
+
+int Stub_PyObject_IsInstance(GDALPy::PyObject*, GDALPy::PyObject*) { return 1; }
+
+GDALPy::PyObject* Stub_PyBool_FromLong(long) {  // NOLINT(runtime/int)
+  return &g_dummy_obj;
+}
+
+GDALPy::PyObject* Stub_PyLong_FromLong(long) {  // NOLINT(runtime/int)
+  return &g_dummy_obj;
+}
+
+long Stub_PyLong_AsLong(GDALPy::PyObject*) {  // NOLINT(runtime/int)
+  return 0;
+}
+
+GDALPy::PyObject* Stub_PyLong_FromLongLong(GIntBig) { return &g_dummy_obj; }
+GIntBig Stub_PyLong_AsLongLong(GDALPy::PyObject*) { return 0; }
+GDALPy::Py_ssize_t Stub_PyBytes_Size(GDALPy::PyObject*) { return 0; }
+
+int* Stub_PyBytes_AsStringAndSize(GDALPy::PyObject*, char**,
+                                  GDALPy::Py_ssize_t*) {
+  return nullptr;
+}
+
+GDALPy::PyObject* Stub_PyBytes_FromObject(GDALPy::PyObject*) {
+  return &g_bytes_obj;
+}
+
+GDALPy::PyObject* Stub_PyBytes_FromStringAndSize(const void*, size_t) {
+  return &g_bytes_obj;
+}
+
+GDALPy::PyObject* Stub_PyModule_Create2(GDALPy::PyModuleDef*, int) {
+  return &g_mod_obj;
+}
+
+GDALPy::PyObject* Stub_PyUnicode_FromString(const char*) {
+  return &g_dummy_obj;
+}
+
+GDALPy::PyObject* Stub_PyFloat_FromDouble(double) { return &g_dummy_obj; }
+double Stub_PyFloat_AsDouble(GDALPy::PyObject*) { return 0.0; }
+GDALPy::PyObject* Stub_PyObject_GetIter(GDALPy::PyObject*) {
+  return &g_dummy_obj;
+}
+
+GDALPy::PyObject* Stub_PyIter_Next(GDALPy::PyObject*) { return nullptr; }
+int Stub_PyObject_HasAttrString(GDALPy::PyObject*, const char*) { return 1; }
+int Stub_PyObject_SetAttrString(GDALPy::PyObject*, const char*,
+                                GDALPy::PyObject*) {
+  return 0;
+}
+
+void Stub_PyObject_Print(GDALPy::PyObject*, FILE*, int) {}
+GDALPy::PyObject* Stub_PyImport_ImportModule(const char*) { return &g_mod_obj; }
+int Stub_PyCallable_Check(GDALPy::PyObject*) { return 1; }
+GDALPy::PyObject* Stub_PyDict_New() { return &g_dummy_obj; }
+
+int Stub_PyDict_SetItemString(GDALPy::PyObject*, const char*,
+                              GDALPy::PyObject*) {
+  return 0;
+}
+
+int Stub_PyDict_Next(GDALPy::PyObject*, size_t*, GDALPy::PyObject**,
+                     GDALPy::PyObject**) {
+  return 0;
+}
+
+GDALPy::PyObject* Stub_PyDict_GetItemString(GDALPy::PyObject*, const char*) {
+  return &g_dummy_obj;
+}
+
+GDALPy::PyObject* Stub_PyList_New(GDALPy::Py_ssize_t) { return &g_dummy_obj; }
+int Stub_PyList_SetItem(GDALPy::PyObject*, GDALPy::Py_ssize_t,
+                        GDALPy::PyObject*) {
+  return 0;
+}
+
+int Stub_PyArg_ParseTuple(GDALPy::PyObject*, const char*, ...) { return 1; }
+int Stub_PySequence_Check(GDALPy::PyObject*) { return 1; }
+GDALPy::Py_ssize_t Stub_PySequence_Size(GDALPy::PyObject*) { return 0; }
+GDALPy::PyObject* Stub_PySequence_GetItem(GDALPy::PyObject*,
+                                          GDALPy::Py_ssize_t) {
+  return nullptr;
+}
+
+NO_SANITIZE bool IsEqual(const char* a, const char* b) {
+  if (a == nullptr || b == nullptr) {
+    return a == b;
+  }
+  while (*a != '\0' && *b != '\0') {
+    if (*a != *b) {
+      return false;
+    }
     ++a;
     ++b;
   }
   return *a == *b;
 }
 
-NO_SANITIZE static bool contains(const char* haystack, const char* needle) {
-  if (!haystack || !needle) return false;
-  for (const char* h = haystack; *h; ++h) {
-    const char* h_sub = h;
+NO_SANITIZE bool Contains(const char* haystack, const char* needle) {
+  if (haystack == nullptr || needle == nullptr) {
+    return false;
+  }
+  if (*needle == '\0') {
+    return true;
+  }
+  for (const char* p = haystack; *p != '\0'; ++p) {
+    const char* h = p;
     const char* n = needle;
-    while (*h_sub && *n && *h_sub == *n) {
-      ++h_sub;
+    while (*h != '\0' && *n != '\0' && *h == *n) {
+      ++h;
       ++n;
     }
-    if (!*n) return true;
+    if (*n == '\0') {
+      return true;
+    }
   }
   return false;
 }
 
-static void* g_py_handle = nullptr;
-static void* g_self_handle = nullptr;
-static bool g_py_opened = false;
-
-NO_SANITIZE void* MyDlopen(const char* filename, int flags) {
-  auto real_dlopen = reinterpret_cast<void* (*)(const char*, int)>(
-      dlvsym(RTLD_NEXT, "dlopen", "GLIBC_2.2.5"));
-  if (filename == nullptr) {
-    gdal::g_dlopen_calls++;
-    if (real_dlopen) {
-      g_self_handle = real_dlopen(nullptr, flags);
-      return g_self_handle;
+NO_SANITIZE DlsymFn GetRealDlsym() {
+  static DlsymFn real_dlsym = []() NO_SANITIZE -> DlsymFn {
+    void* sym = dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.34");
+    if (sym == nullptr) {
+      sym = dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.2.5");
     }
-    return nullptr;
-  }
-  if (gdal::contains(filename, "libpython3.14.so.1.0")) {
-    gdal::g_dlopen_calls++;
-    g_py_opened = true;
-    if (real_dlopen) {
-      g_py_handle = real_dlopen(nullptr, flags);
-      return g_py_handle;
+    if (sym == nullptr) {
+      sym = dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.17");
     }
-    return nullptr;
-  }
-  if (real_dlopen) {
-    return real_dlopen(filename, flags);
-  }
-  return nullptr;
+    return reinterpret_cast<DlsymFn>(sym);
+  }();
+  return real_dlsym;
 }
 
-NO_SANITIZE int MyDlclose(void* handle) {
-  auto real_dlclose = reinterpret_cast<int (*)(void*)>(
-      dlvsym(RTLD_NEXT, "dlclose", "GLIBC_2.2.5"));
-  if (real_dlclose) {
-    return real_dlclose(handle);
-  }
-  return 0;
-}
-
-}  // namespace
-}  // namespace gdal
-
-extern "C" NO_SANITIZE void* dlopen(const char* filename, int flags) {
-  return gdal::MyDlopen(filename, flags);
-}
-
-extern "C" NO_SANITIZE int dlclose(void* handle) {
-  return gdal::MyDlclose(handle);
-}
-
-extern "C" NO_SANITIZE void* dlsym(void* handle, const char* symbol) {
-  if (!gdal::g_py_opened || handle != gdal::g_py_handle) {
-    if (gdal::is_equal(symbol, "dlopen")) {
-      return reinterpret_cast<void*>(&gdal::MyDlopen);
-    }
-    if (gdal::is_equal(symbol, "dlclose")) {
-      return reinterpret_cast<void*>(&gdal::MyDlclose);
-    }
-    if (!gdal::g_py_opened && handle == gdal::g_self_handle &&
-        gdal::is_equal(symbol, "Py_SetProgramName")) {
+NO_SANITIZE DlopenFn GetRealDlopen() {
+  static DlopenFn real_dlopen = []() NO_SANITIZE -> DlopenFn {
+    DlsymFn real_dlsym = GetRealDlsym();
+    if (real_dlsym == nullptr) {
       return nullptr;
     }
-    auto real_dlsym = reinterpret_cast<void* (*)(void*, const char*)>(
-        dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.2.5"));
-    if (real_dlsym) {
-      return real_dlsym(handle, symbol);
+    return reinterpret_cast<DlopenFn>(real_dlsym(RTLD_NEXT, "dlopen"));
+  }();
+  return real_dlopen;
+}
+
+NO_SANITIZE DlcloseFn GetRealDlclose() {
+  static DlcloseFn real_dlclose = []() NO_SANITIZE -> DlcloseFn {
+    DlsymFn real_dlsym = GetRealDlsym();
+    if (real_dlsym == nullptr) {
+      return nullptr;
     }
-    return nullptr;
+    return reinterpret_cast<DlcloseFn>(real_dlsym(RTLD_NEXT, "dlclose"));
+  }();
+  return real_dlclose;
+}
+
+NO_SANITIZE void* LookupStubSymbol(const char* symbol) {
+  if (IsEqual(symbol, "Py_CompileString")) return nullptr;
+  if (IsEqual(symbol, "Py_CompileStringExFlags")) {
+    return reinterpret_cast<void*>(Stub_Py_CompileStringExFlags);
   }
-  gdal::g_dlsym_calls++;
-#define MATCH_SYM(name, fn) \
-  if (gdal::is_equal(symbol, name)) return reinterpret_cast<void*>(&gdal::fn)
-  MATCH_SYM("Py_GetVersion", Stub_Py_GetVersion);
-  MATCH_SYM("Py_SetProgramName", Stub_Py_SetProgramName);
-  MATCH_SYM("Py_SetPythonHome", Stub_Py_SetPythonHome);
-  MATCH_SYM("PyBuffer_FillInfo", Stub_PyBuffer_FillInfo);
-  MATCH_SYM("PyMemoryView_FromBuffer", Stub_PyMemoryView_FromBuffer);
-  MATCH_SYM("PyObject_Type", Stub_PyObject_Type);
-  MATCH_SYM("PyObject_IsInstance", Stub_PyObject_IsInstance);
-  MATCH_SYM("PyTuple_New", Stub_PyTuple_New);
-  MATCH_SYM("PyBool_FromLong", Stub_PyBool_FromLong);
-  MATCH_SYM("PyLong_FromLong", Stub_PyLong_FromLong);
-  MATCH_SYM("PyLong_AsLong", Stub_PyLong_AsLong);
-  MATCH_SYM("PyLong_FromLongLong", Stub_PyLong_FromLongLong);
-  MATCH_SYM("PyLong_AsLongLong", Stub_PyLong_AsLongLong);
-  MATCH_SYM("PyBytes_Size", Stub_PyBytes_Size);
-  MATCH_SYM("PyBytes_AsString", Stub_PyBytes_AsString);
-  MATCH_SYM("PyBytes_AsStringAndSize", Stub_PyBytes_AsStringAndSize);
-  MATCH_SYM("PyBytes_FromObject", Stub_PyBytes_FromObject);
-  MATCH_SYM("PyBytes_FromStringAndSize", Stub_PyBytes_FromStringAndSize);
-  MATCH_SYM("PyModule_Create2", Stub_PyModule_Create2);
-  MATCH_SYM("PyUnicodeUCS4_FromString", Stub_PyUnicode_FromString);
-  MATCH_SYM("PyUnicodeUCS4_AsUTF8String", Stub_PyUnicode_AsUTF8String);
-  MATCH_SYM("PyFloat_FromDouble", Stub_PyFloat_FromDouble);
-  MATCH_SYM("PyFloat_AsDouble", Stub_PyFloat_AsDouble);
-  MATCH_SYM("PyObject_Call", Stub_PyObject_Call);
-  MATCH_SYM("PyObject_GetIter", Stub_PyObject_GetIter);
-  MATCH_SYM("PyIter_Next", Stub_PyIter_Next);
-  MATCH_SYM("Py_IncRef", Stub_Py_IncRef);
-  MATCH_SYM("Py_DecRef", Stub_Py_DecRef);
-  MATCH_SYM("PyErr_Occurred", Stub_PyErr_Occurred);
-  MATCH_SYM("PyErr_Print", Stub_PyErr_Print);
-  MATCH_SYM("Py_IsInitialized", Stub_Py_IsInitialized);
-  MATCH_SYM("Py_InitializeEx", Stub_Py_InitializeEx);
-  MATCH_SYM("PyEval_InitThreads", Stub_PyEval_InitThreads);
-  MATCH_SYM("PyEval_SaveThread", Stub_PyEval_SaveThread);
-  MATCH_SYM("PyEval_RestoreThread", Stub_PyEval_RestoreThread);
-  MATCH_SYM("Py_Finalize", Stub_Py_Finalize);
-  MATCH_SYM("Py_CompileStringExFlags", Stub_Py_CompileStringExFlags);
-  MATCH_SYM("PyImport_ExecCodeModule", Stub_PyImport_ExecCodeModule);
-  MATCH_SYM("PyObject_HasAttrString", Stub_PyObject_HasAttrString);
-  MATCH_SYM("PyObject_GetAttrString", Stub_PyObject_GetAttrString);
-  MATCH_SYM("PyObject_SetAttrString", Stub_PyObject_SetAttrString);
-  MATCH_SYM("PyTuple_SetItem", Stub_PyTuple_SetItem);
-  MATCH_SYM("PyObject_Print", Stub_PyObject_Print);
-  MATCH_SYM("PyImport_ImportModule", Stub_PyImport_ImportModule);
-  MATCH_SYM("PyCallable_Check", Stub_PyCallable_Check);
-  MATCH_SYM("PyDict_New", Stub_PyDict_New);
-  MATCH_SYM("PyDict_SetItemString", Stub_PyDict_SetItemString);
-  MATCH_SYM("PyDict_Next", Stub_PyDict_Next);
-  MATCH_SYM("PyDict_GetItemString", Stub_PyDict_GetItemString);
-  MATCH_SYM("PyList_New", Stub_PyList_New);
-  MATCH_SYM("PyList_SetItem", Stub_PyList_SetItem);
-  MATCH_SYM("PySequence_Check", Stub_PySequence_Check);
-  MATCH_SYM("PySequence_Size", Stub_PySequence_Size);
-  MATCH_SYM("PySequence_GetItem", Stub_PySequence_GetItem);
-  MATCH_SYM("PyArg_ParseTuple", Stub_PyArg_ParseTuple);
-  MATCH_SYM("PyGILState_Ensure", Stub_PyGILState_Ensure);
-  MATCH_SYM("PyGILState_Release", Stub_PyGILState_Release);
-  MATCH_SYM("PyErr_Fetch", Stub_PyErr_Fetch);
-  MATCH_SYM("PyErr_Clear", Stub_PyErr_Clear);
-#undef MATCH_SYM
+  if (IsEqual(symbol, "Py_IsInitialized")) {
+    return reinterpret_cast<void*>(Stub_Py_IsInitialized);
+  }
+  if (IsEqual(symbol, "Py_InitializeEx")) {
+    return reinterpret_cast<void*>(Stub_Py_InitializeEx);
+  }
+  if (IsEqual(symbol, "PyEval_InitThreads")) {
+    return reinterpret_cast<void*>(Stub_PyEval_InitThreads);
+  }
+  if (IsEqual(symbol, "PyEval_SaveThread")) {
+    return reinterpret_cast<void*>(Stub_PyEval_SaveThread);
+  }
+  if (IsEqual(symbol, "PyEval_RestoreThread")) {
+    return reinterpret_cast<void*>(Stub_PyEval_RestoreThread);
+  }
+  if (IsEqual(symbol, "Py_Finalize")) {
+    return reinterpret_cast<void*>(Stub_Py_Finalize);
+  }
+  if (IsEqual(symbol, "Py_GetVersion")) {
+    return reinterpret_cast<void*>(Stub_Py_GetVersion);
+  }
+  if (IsEqual(symbol, "Py_SetProgramName")) {
+    return reinterpret_cast<void*>(Stub_Py_SetProgramName);
+  }
+  if (IsEqual(symbol, "Py_SetPythonHome")) {
+    return reinterpret_cast<void*>(Stub_Py_SetPythonHome);
+  }
+  if (IsEqual(symbol, "PyGILState_Ensure")) {
+    return reinterpret_cast<void*>(Stub_PyGILState_Ensure);
+  }
+  if (IsEqual(symbol, "PyGILState_Release")) {
+    return reinterpret_cast<void*>(Stub_PyGILState_Release);
+  }
+  if (IsEqual(symbol, "PyBuffer_FillInfo")) {
+    return reinterpret_cast<void*>(Stub_PyBuffer_FillInfo);
+  }
+  if (IsEqual(symbol, "PyMemoryView_FromBuffer")) {
+    return reinterpret_cast<void*>(Stub_PyMemoryView_FromBuffer);
+  }
+  if (IsEqual(symbol, "PyObject_Type")) {
+    return reinterpret_cast<void*>(Stub_PyObject_Type);
+  }
+  if (IsEqual(symbol, "PyObject_IsInstance")) {
+    return reinterpret_cast<void*>(Stub_PyObject_IsInstance);
+  }
+  if (IsEqual(symbol, "PyTuple_New")) {
+    return reinterpret_cast<void*>(Stub_PyTuple_New);
+  }
+  if (IsEqual(symbol, "PyBool_FromLong")) {
+    return reinterpret_cast<void*>(Stub_PyBool_FromLong);
+  }
+  if (IsEqual(symbol, "PyLong_FromLong")) {
+    return reinterpret_cast<void*>(Stub_PyLong_FromLong);
+  }
+  if (IsEqual(symbol, "PyLong_AsLong")) {
+    return reinterpret_cast<void*>(Stub_PyLong_AsLong);
+  }
+  if (IsEqual(symbol, "PyLong_FromLongLong")) {
+    return reinterpret_cast<void*>(Stub_PyLong_FromLongLong);
+  }
+  if (IsEqual(symbol, "PyLong_AsLongLong")) {
+    return reinterpret_cast<void*>(Stub_PyLong_AsLongLong);
+  }
+  if (IsEqual(symbol, "PyBytes_Size")) {
+    return reinterpret_cast<void*>(Stub_PyBytes_Size);
+  }
+  if (IsEqual(symbol, "PyBytes_AsString")) {
+    return reinterpret_cast<void*>(Stub_PyBytes_AsString);
+  }
+  if (IsEqual(symbol, "PyBytes_AsStringAndSize")) {
+    return reinterpret_cast<void*>(Stub_PyBytes_AsStringAndSize);
+  }
+  if (IsEqual(symbol, "PyBytes_FromObject")) {
+    return reinterpret_cast<void*>(Stub_PyBytes_FromObject);
+  }
+  if (IsEqual(symbol, "PyBytes_FromStringAndSize")) {
+    return reinterpret_cast<void*>(Stub_PyBytes_FromStringAndSize);
+  }
+  if (IsEqual(symbol, "PyModule_Create2")) {
+    return reinterpret_cast<void*>(Stub_PyModule_Create2);
+  }
+  if (IsEqual(symbol, "PyUnicodeUCS4_FromString")) {
+    return reinterpret_cast<void*>(Stub_PyUnicode_FromString);
+  }
+  if (IsEqual(symbol, "PyUnicodeUCS4_AsUTF8String")) {
+    return reinterpret_cast<void*>(Stub_PyUnicode_AsUTF8String);
+  }
+  if (IsEqual(symbol, "PyFloat_FromDouble")) {
+    return reinterpret_cast<void*>(Stub_PyFloat_FromDouble);
+  }
+  if (IsEqual(symbol, "PyFloat_AsDouble")) {
+    return reinterpret_cast<void*>(Stub_PyFloat_AsDouble);
+  }
+  if (IsEqual(symbol, "PyObject_Call")) {
+    return reinterpret_cast<void*>(Stub_PyObject_Call);
+  }
+  if (IsEqual(symbol, "PyObject_GetIter")) {
+    return reinterpret_cast<void*>(Stub_PyObject_GetIter);
+  }
+  if (IsEqual(symbol, "PyIter_Next")) {
+    return reinterpret_cast<void*>(Stub_PyIter_Next);
+  }
+  if (IsEqual(symbol, "Py_IncRef")) {
+    return reinterpret_cast<void*>(Stub_Py_IncRef);
+  }
+  if (IsEqual(symbol, "Py_DecRef")) {
+    return reinterpret_cast<void*>(Stub_Py_DecRef);
+  }
+  if (IsEqual(symbol, "PyErr_Occurred")) {
+    return reinterpret_cast<void*>(Stub_PyErr_Occurred);
+  }
+  if (IsEqual(symbol, "PyErr_Print")) {
+    return reinterpret_cast<void*>(Stub_PyErr_Print);
+  }
+  if (IsEqual(symbol, "PyImport_ExecCodeModule")) {
+    return reinterpret_cast<void*>(Stub_PyImport_ExecCodeModule);
+  }
+  if (IsEqual(symbol, "PyObject_HasAttrString")) {
+    return reinterpret_cast<void*>(Stub_PyObject_HasAttrString);
+  }
+  if (IsEqual(symbol, "PyObject_GetAttrString")) {
+    return reinterpret_cast<void*>(Stub_PyObject_GetAttrString);
+  }
+  if (IsEqual(symbol, "PyObject_SetAttrString")) {
+    return reinterpret_cast<void*>(Stub_PyObject_SetAttrString);
+  }
+  if (IsEqual(symbol, "PyTuple_SetItem")) {
+    return reinterpret_cast<void*>(Stub_PyTuple_SetItem);
+  }
+  if (IsEqual(symbol, "PyObject_Print")) {
+    return reinterpret_cast<void*>(Stub_PyObject_Print);
+  }
+  if (IsEqual(symbol, "PyImport_ImportModule")) {
+    return reinterpret_cast<void*>(Stub_PyImport_ImportModule);
+  }
+  if (IsEqual(symbol, "PyCallable_Check")) {
+    return reinterpret_cast<void*>(Stub_PyCallable_Check);
+  }
+  if (IsEqual(symbol, "PyDict_New")) {
+    return reinterpret_cast<void*>(Stub_PyDict_New);
+  }
+  if (IsEqual(symbol, "PyDict_SetItemString")) {
+    return reinterpret_cast<void*>(Stub_PyDict_SetItemString);
+  }
+  if (IsEqual(symbol, "PyDict_Next")) {
+    return reinterpret_cast<void*>(Stub_PyDict_Next);
+  }
+  if (IsEqual(symbol, "PyDict_GetItemString")) {
+    return reinterpret_cast<void*>(Stub_PyDict_GetItemString);
+  }
+  if (IsEqual(symbol, "PyList_New")) {
+    return reinterpret_cast<void*>(Stub_PyList_New);
+  }
+  if (IsEqual(symbol, "PyList_SetItem")) {
+    return reinterpret_cast<void*>(Stub_PyList_SetItem);
+  }
+  if (IsEqual(symbol, "PyArg_ParseTuple")) {
+    return reinterpret_cast<void*>(Stub_PyArg_ParseTuple);
+  }
+  if (IsEqual(symbol, "PySequence_Check")) {
+    return reinterpret_cast<void*>(Stub_PySequence_Check);
+  }
+  if (IsEqual(symbol, "PySequence_Size")) {
+    return reinterpret_cast<void*>(Stub_PySequence_Size);
+  }
+  if (IsEqual(symbol, "PySequence_GetItem")) {
+    return reinterpret_cast<void*>(Stub_PySequence_GetItem);
+  }
+  if (IsEqual(symbol, "PyErr_Fetch")) {
+    return reinterpret_cast<void*>(Stub_PyErr_Fetch);
+  }
+  if (IsEqual(symbol, "PyErr_Clear")) {
+    return reinterpret_cast<void*>(Stub_PyErr_Clear);
+  }
   return nullptr;
 }
 
-namespace gdal {
-namespace {
+#else  // defined(GDAL_PYTHON_TEST_USE_DIRECT_STUBS)
 
-TEST(GdalPythonTest, LoadPythonApiAndHelpers) {
-  // CPLErrorStateBackuper quiet(CPLQuietErrorHandler);
-
-  // Set up two directories in PATH:
-  // - dir1 has chained symlinks python3 -> python3_mid -> not_py_script (which
-  // is a shell script printing "3.99")
-  //   so on iTry=0:
-  //   1) python3 is a symlink to python3_mid (relative, another symlink) ->
-  //   follows loop! 2) python3_mid is a symlink to not_py_script (does not
-  //   start with "python", so osVersion stays empty!) 3) Because osVersion is
-  //   empty, it falls through to the `if (osVersion.empty())` CPLSpawn branch!
-  //   4) CPLSpawn runs python3 (which resolves to not_py_script) and prints
-  //   "3.99\n", setting osVersion = "3.99"! 5) Then it tries
-  //   dlopen("libpython3.99.so") and "libpython3.99m.so" (which return
-  //   nullptr),
-  //      and then falls through to the apszPythonSO loop where
-  //      "libpython3.14.so.1.0" succeeds!
-  std::string tmp_dir = testing::TempDir() + "/gdal_py_test_bin";
-  mkdir(tmp_dir.c_str(), 0755);
-  std::string script_path = tmp_dir + "/not_py_script";
-  std::string py_mid = tmp_dir + "/python3_mid";
-  std::string py3 = tmp_dir + "/python3";
-  FILE* fp = fopen(script_path.c_str(), "w");
-  ASSERT_NE(fp, nullptr);
-  fprintf(fp, "#!/bin/sh\necho 3.99\n");
-  fclose(fp);
-  chmod(script_path.c_str(), 0755);
-
-  unlink(py_mid.c_str());
-  unlink(py3.c_str());
-  EXPECT_EQ(symlink("not_py_script", py_mid.c_str()), 0);
-  EXPECT_EQ(symlink("python3_mid", py3.c_str()), 0);
-
-  const char* orig_path = getenv("PATH");
-  std::string saved_path = orig_path ? orig_path : "";
-  setenv("PATH", tmp_dir.c_str(), 1);
-
-  EXPECT_TRUE(GDALPythonInitialize());
-  // Calling again hits the nInit >= 0 and bIsInitialized == 1 fast paths
-  EXPECT_TRUE(GDALPythonInitialize());
-
-  unlink(py3.c_str());
-  unlink(py_mid.c_str());
-  unlink(script_path.c_str());
-  rmdir(tmp_dir.c_str());
-  setenv("PATH", saved_path.c_str(), 1);
-
-  // Exercise GDAL_Py_CompileString wrapper
-  ASSERT_NE(GDALPy::Py_CompileString, nullptr);
-  EXPECT_NE(GDALPy::Py_CompileString("x = 1", "test.py", Py_file_input),
-            nullptr);
-
-  // Exercise GIL_Holder (both exclusive and non-exclusive)
-  {
-    GDALPy::GIL_Holder gil1(true);
-    GDALPy::GIL_Holder gil2(false);
-  }
-
-  // Exercise GetString, GetPyExceptionString, and ErrOccurredEmitCPLError
-  g_py_err_occurred = false;
-  EXPECT_FALSE(GDALPy::ErrOccurredEmitCPLError());
-  EXPECT_STREQ(GDALPy::GetString(&g_dummy_obj, true).c_str(), "mock_str");
-
-  // GetString when PyErr_Occurred() is true (with bEmitError = false and true)
-  g_py_err_occurred = true;
-  EXPECT_STREQ(GDALPy::GetString(&g_dummy_obj, false).c_str(), "");
-  g_py_err_occurred = true;
-  EXPECT_STREQ(GDALPy::GetString(&g_dummy_obj, true).c_str(), "");
-
-  // ErrOccurredEmitCPLError with traceback = false and true
-  g_py_err_occurred = true;
-  g_py_with_traceback = false;
-  EXPECT_TRUE(GDALPy::ErrOccurredEmitCPLError());
-
-  g_py_err_occurred = true;
-  g_py_with_traceback = true;
-  EXPECT_TRUE(GDALPy::ErrOccurredEmitCPLError());
-
-  // GetPyExceptionString when PyObject_Call fails
-  g_py_call_fail = true;
-  EXPECT_THAT(GDALPy::GetPyExceptionString().c_str(),
-              testing::HasSubstr("exception occurred"));
-  g_py_call_fail = false;
-
-  // GetPyExceptionString when Py_CompileString fails
-  g_py_compile_fail = true;
-  EXPECT_THAT(GDALPy::GetPyExceptionString().c_str(),
-              testing::HasSubstr("exception occurred"));
-  g_py_compile_fail = false;
-
-  // Finalize Python
-  GDALPythonFinalize();
-  // Second call is a no-op
-  GDALPythonFinalize();
+GDALPy::PyObject* Stub_Py_CompileString(const char* str, const char* filename,
+                                        int start) {
+  return Stub_Py_CompileStringExFlags(str, filename, start, nullptr, 0);
 }
 
+#endif  // !defined(GDAL_PYTHON_TEST_USE_DIRECT_STUBS)
+
+TEST(GdalPythonTest, LoadPythonApiAndHelpers) {
+  g_py_err_occurred = false;
+  g_py_call_fail = false;
+  g_py_compile_fail = false;
+  g_py_unicode_fail = false;
+
+#if !defined(GDAL_PYTHON_TEST_USE_DIRECT_STUBS)
+  (void)GetRealDlopen();
+  (void)GetRealDlclose();
+  (void)GetRealDlsym();
+
+  const std::filesystem::path tmp_dir =
+      std::filesystem::path(::testing::TempDir()) / "gdal_py_test_bin";
+  const char* old_path = std::getenv("PATH");
+  const bool had_path = (old_path != nullptr);
+  const std::string saved_path = had_path ? old_path : "";
+  absl::Cleanup restore_env = [&]() {
+    if (had_path) {
+      setenv("PATH", saved_path.c_str(), 1);
+    } else {
+      unsetenv("PATH");
+    }
+    std::error_code ec;
+    std::filesystem::remove_all(tmp_dir, ec);
+  };
+
+  std::error_code ec;
+  std::filesystem::create_directories(tmp_dir, ec);
+  const std::filesystem::path script_path = tmp_dir / "not_py_script";
+  // Emit "3.99" so GDALPythonInitialize() probes libpython3.99.so(.1.0) and
+  // libpython3.99m.so(.1.0), misses them in InterceptDlopen, and enters the
+  // apszPythonSO fallback loop succeeding on libpython3.8.so.
+  {
+    std::FILE* fp = std::fopen(script_path.c_str(), "w");
+    ASSERT_NE(nullptr, fp);
+    absl::Cleanup close_fp = [fp]() { std::fclose(fp); };
+    std::fputs("#!/bin/sh\necho 3.99\n", fp);
+  }
+  std::filesystem::permissions(script_path, std::filesystem::perms::owner_all,
+                               ec);
+  const std::filesystem::path link_mid = tmp_dir / "python3_mid";
+  const std::filesystem::path link_top = tmp_dir / "python3";
+  std::filesystem::create_symlink(script_path, link_mid, ec);
+  std::filesystem::create_symlink(link_mid, link_top, ec);
+
+  std::string new_path = tmp_dir.string();
+  if (!saved_path.empty()) {
+    new_path += ":" + saved_path;
+  }
+  setenv("PATH", new_path.c_str(), 1);
+
+  absl::Cleanup finalize_py = []() { GDALPythonFinalize(); };
+
+  g_py_is_initialized = false;
+  EXPECT_TRUE(GDALPythonInitialize());
+  g_py_is_initialized = true;
+  EXPECT_TRUE(GDALPythonInitialize());
+  g_py_is_initialized = false;
+
+  ASSERT_NE(nullptr, GDALPy::Py_CompileString);
+  EXPECT_NE(nullptr,
+            GDALPy::Py_CompileString("x = 1", "test.py", Py_file_input));
+
+  {
+    GDALPy::GIL_Holder exclusive(true);
+    GDALPy::GIL_Holder non_exclusive(false);
+  }
+#else   // defined(GDAL_PYTHON_TEST_USE_DIRECT_STUBS)
+  {
+    CPLConfigOptionSetter py_so_setter("PYTHONSO", "/nonexistent/libpython.so",
+                                       /*bSetOnlyIfUndefined=*/false);
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_FALSE(GDALPythonInitialize());
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
+
+  GDALPy::Py_CompileString = Stub_Py_CompileString;
+  GDALPy::PyUnicode_AsUTF8String = Stub_PyUnicode_AsUTF8String;
+  GDALPy::PyBytes_AsString = Stub_PyBytes_AsString;
+  GDALPy::Py_DecRef = Stub_Py_DecRef;
+  GDALPy::Py_IncRef = Stub_Py_IncRef;
+  GDALPy::PyErr_Occurred = Stub_PyErr_Occurred;
+  GDALPy::PyErr_Print = Stub_PyErr_Print;
+  GDALPy::PyErr_Fetch = Stub_PyErr_Fetch;
+  GDALPy::PyErr_Clear = Stub_PyErr_Clear;
+  GDALPy::PyImport_ExecCodeModule = Stub_PyImport_ExecCodeModule;
+  GDALPy::PyObject_GetAttrString = Stub_PyObject_GetAttrString;
+  GDALPy::PyTuple_New = Stub_PyTuple_New;
+  GDALPy::PyTuple_SetItem = Stub_PyTuple_SetItem;
+  GDALPy::PyObject_Call = Stub_PyObject_Call;
+
+  absl::Cleanup reset_py_ptrs = []() {
+    GDALPy::Py_CompileString = nullptr;
+    GDALPy::PyUnicode_AsUTF8String = nullptr;
+    GDALPy::PyBytes_AsString = nullptr;
+    GDALPy::Py_DecRef = nullptr;
+    GDALPy::Py_IncRef = nullptr;
+    GDALPy::PyErr_Occurred = nullptr;
+    GDALPy::PyErr_Print = nullptr;
+    GDALPy::PyErr_Fetch = nullptr;
+    GDALPy::PyErr_Clear = nullptr;
+    GDALPy::PyImport_ExecCodeModule = nullptr;
+    GDALPy::PyObject_GetAttrString = nullptr;
+    GDALPy::PyTuple_New = nullptr;
+    GDALPy::PyTuple_SetItem = nullptr;
+    GDALPy::PyObject_Call = nullptr;
+  };
+
+  ASSERT_NE(nullptr, GDALPy::Py_CompileString);
+  EXPECT_NE(nullptr,
+            GDALPy::Py_CompileString("x = 1", "test.py", Py_file_input));
+#endif  // !defined(GDAL_PYTHON_TEST_USE_DIRECT_STUBS)
+
+  EXPECT_FALSE(GDALPy::ErrOccurredEmitCPLError());
+  EXPECT_EQ("stub_py_str", GDALPy::GetString(&g_dummy_obj, true));
+
+  g_py_unicode_fail = true;
+  EXPECT_EQ("", GDALPy::GetString(&g_dummy_obj, true));
+  g_py_unicode_fail = false;
+
+  g_py_err_occurred = true;
+  EXPECT_EQ("", GDALPy::GetString(&g_dummy_obj, false));
+  g_py_err_occurred = true;
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ("", GDALPy::GetString(&g_dummy_obj, true));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    EXPECT_STREQ("stub_py_str", CPLGetLastErrorMsg());
+    CPLErrorReset();
+  }
+
+  g_py_err_occurred = true;
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_TRUE(GDALPy::ErrOccurredEmitCPLError());
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    EXPECT_STREQ("stub_py_str", CPLGetLastErrorMsg());
+    CPLErrorReset();
+  }
+
+  g_py_err_occurred = true;
+  g_py_call_fail = true;
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_TRUE(GDALPy::ErrOccurredEmitCPLError());
+    EXPECT_STREQ("An exception occurred in exception formatting code...",
+                 CPLGetLastErrorMsg());
+    CPLErrorReset();
+  }
+  g_py_call_fail = false;
+  g_py_err_occurred = false;
+
+  g_py_compile_fail = true;
+  EXPECT_EQ("An exception occurred in exception formatting code...",
+            GDALPy::GetPyExceptionString());
+  g_py_compile_fail = false;
+}
+
+#if !defined(GDAL_PYTHON_TEST_USE_DIRECT_STUBS)
+NO_SANITIZE void* InterceptDlopen(const char* filename, int flags) {
+  if (Contains(filename, "3.99")) {
+    return nullptr;
+  }
+  if (Contains(filename, "libpython3.") || Contains(filename, "libpython")) {
+    return &g_fake_lib;
+  }
+  DlopenFn real_dlopen = GetRealDlopen();
+  return real_dlopen != nullptr ? real_dlopen(filename, flags) : nullptr;
+}
+
+NO_SANITIZE int InterceptDlclose(void* handle) {
+  if (handle == &g_fake_lib) {
+    return 0;
+  }
+  DlcloseFn real_dlclose = GetRealDlclose();
+  return real_dlclose != nullptr ? real_dlclose(handle) : -1;
+}
+
+NO_SANITIZE void* InterceptDlsym(void* handle, const char* symbol) {
+  if (handle == &g_fake_lib && symbol != nullptr) {
+    return LookupStubSymbol(symbol);
+  }
+  DlsymFn real_dlsym = GetRealDlsym();
+  return real_dlsym != nullptr ? real_dlsym(handle, symbol) : nullptr;
+}
+
+extern "C" {
+
+void* dlopen(const char* filename, int flags) NO_SANITIZE {
+  return InterceptDlopen(filename, flags);
+}
+
+int dlclose(void* handle) NO_SANITIZE { return InterceptDlclose(handle); }
+
+void* dlsym(void* handle, const char* symbol) NO_SANITIZE {
+  return InterceptDlsym(handle, symbol);
+}
+
+}  // extern "C"
+
+#undef NO_SANITIZE
+#endif  // !defined(GDAL_PYTHON_TEST_USE_DIRECT_STUBS)
+
+#ifdef GDAL_PYTHON_TEST_USE_DIRECT_STUBS
+#undef GDAL_PYTHON_TEST_USE_DIRECT_STUBS
+#endif
+
 }  // namespace
-}  // namespace gdal
+}  // namespace autotest2
+
+// TODO(schwehr): Cover GDALPyFunctionWrapper and Python object conversion
+// helpers (GetLong, GetDouble, CreateDict, etc.) when additional callers exist.

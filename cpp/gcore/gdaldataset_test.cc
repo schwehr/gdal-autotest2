@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,42 +11,63 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Tests GDALDataset and related dataset APIs (gcore/gdaldataset.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdaldataset.cpp
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "testing/base/public/gunit.h"
-#include "third_party/gdal/alg/gdal_alg.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_cstringlist.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_memory.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
+#include "third_party/gdal/autotest2/cpp/util/vsimem.h"
 #include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_colortable.h"
+#include "third_party/gdal/gcore/gdal_cpp_functions.h"
+#include "third_party/gdal/gcore/gdal_dataset.h"
+#include "third_party/gdal/gcore/gdal_driver.h"
+#include "third_party/gdal/gcore/gdal_drivermanager.h"
 #include "third_party/gdal/gcore/gdal_frmts.h"
+#include "third_party/gdal/gcore/gdal_geotransform.h"
+#include "third_party/gdal/gcore/gdal_multidim.h"
 #include "third_party/gdal/gcore/gdal_priv.h"
+#include "third_party/gdal/gcore/gdal_rasterband.h"
+#include "third_party/gdal/gcore/gdal_rasterblock.h"
+#include "third_party/gdal/gcore/gdal_relationship.h"
 #include "third_party/gdal/gcore/gdalantirecursion.h"
 #include "third_party/gdal/ogr/ogr_api.h"
+#include "third_party/gdal/ogr/ogr_core.h"
 #include "third_party/gdal/ogr/ogr_feature.h"
 #include "third_party/gdal/ogr/ogr_featurestyle.h"
 #include "third_party/gdal/ogr/ogr_geometry.h"
 #include "third_party/gdal/ogr/ogr_spatialref.h"
-#include "third_party/gdal/ogr/ogr_swq.h"
 #include "third_party/gdal/ogr/ogrsf_frmts/ogr_attrind.h"
 #include "third_party/gdal/ogr/ogrsf_frmts/ogrsf_frmts.h"
 #include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
 #include "third_party/gdal/port/cpl_multiproc.h"
+#include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_progress.h"
 #include "third_party/gdal/port/cpl_string.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 
-// Global functions defined in gdaldataset.cpp.
-CPLMutex** GDALGetphDLMutex();
-void GDALSetResponsiblePIDForCurrentThread(GIntBig responsiblePID);
-GIntBig GDALGetResponsiblePIDForCurrentThread();
-void GDALNullifyOpenDatasetsList();
-
+namespace autotest2 {
 namespace {
+
+constexpr char kTempDir[] = "/vsimem/gdaldataset_test";
 
 class CustomBand : public GDALRasterBand {
  public:
@@ -63,8 +84,10 @@ class CustomBand : public GDALRasterBand {
   }
 
   CPLErr IReadBlock(int /*x*/, int /*y*/, void* buf) override {
-    int bytes = GDALGetDataTypeSizeBytes(eDataType) * nBlockXSize * nBlockYSize;
-    memset(buf, nBand, bytes);
+    const size_t bytes =
+        static_cast<size_t>(GDALGetDataTypeSizeBytes(eDataType)) * nBlockXSize *
+        nBlockYSize;
+    std::memset(buf, nBand, bytes);
     return read_err_;
   }
 
@@ -73,12 +96,16 @@ class CustomBand : public GDALRasterBand {
   }
 
   CPLErr FlushCache(bool bAtClosing) override {
-    if (flush_fail_) return CE_Failure;
+    if (flush_fail_) {
+      return CE_Failure;
+    }
     return GDALRasterBand::FlushCache(bAtClosing);
   }
 
   CPLErr DropCache() override {
-    if (drop_fail_) return CE_Failure;
+    if (drop_fail_) {
+      return CE_Failure;
+    }
     return GDALRasterBand::DropCache();
   }
 
@@ -100,39 +127,53 @@ class CustomBand : public GDALRasterBand {
   GDALColorTable* GetColorTable() override { return color_table_.get(); }
 
   int GetMaskFlags() override {
-    if (custom_mask_flags_ >= 0) return custom_mask_flags_;
+    if (custom_mask_flags_ >= 0) {
+      return custom_mask_flags_;
+    }
     return GDALRasterBand::GetMaskFlags();
   }
 
   GDALRasterBand* GetMaskBand() override {
-    if (custom_mask_band_) return custom_mask_band_;
+    if (custom_mask_band_ != nullptr) {
+      return custom_mask_band_;
+    }
     return GDALRasterBand::GetMaskBand();
   }
 
   const char* GetUnitType() override { return unit_.c_str(); }
 
   double GetNoDataValue(int* pbSuccess) override {
-    if (pbSuccess) *pbSuccess = has_nodata_ ? 1 : 0;
+    if (pbSuccess != nullptr) {
+      *pbSuccess = has_nodata_ ? 1 : 0;
+    }
     return nodata_val_;
   }
 
   int64_t GetNoDataValueAsInt64(int* pbSuccess) override {
-    if (pbSuccess) *pbSuccess = has_nodata_ ? 1 : 0;
+    if (pbSuccess != nullptr) {
+      *pbSuccess = has_nodata_ ? 1 : 0;
+    }
     return static_cast<int64_t>(nodata_val_);
   }
 
   uint64_t GetNoDataValueAsUInt64(int* pbSuccess) override {
-    if (pbSuccess) *pbSuccess = has_nodata_ ? 1 : 0;
+    if (pbSuccess != nullptr) {
+      *pbSuccess = has_nodata_ ? 1 : 0;
+    }
     return static_cast<uint64_t>(nodata_val_);
   }
 
   double GetOffset(int* pbSuccess) override {
-    if (pbSuccess) *pbSuccess = has_offset_ ? 1 : 0;
+    if (pbSuccess != nullptr) {
+      *pbSuccess = has_offset_ ? 1 : 0;
+    }
     return offset_val_;
   }
 
   double GetScale(int* pbSuccess) override {
-    if (pbSuccess) *pbSuccess = has_scale_ ? 1 : 0;
+    if (pbSuccess != nullptr) {
+      *pbSuccess = has_scale_ ? 1 : 0;
+    }
     return scale_val_;
   }
 
@@ -212,7 +253,7 @@ class CustomLayer : public OGRLayer {
     defn_ = new OGRFeatureDefn(name);
     defn_->Reference();
     defn_->SetGeomType(gtype);
-    if (gtype != wkbNone && defn_->GetGeomFieldCount() > 0 && srs) {
+    if (gtype != wkbNone && defn_->GetGeomFieldCount() > 0 && srs != nullptr) {
       OGRSpatialReference* cloned_srs = srs->Clone();
       defn_->GetGeomFieldDefn(0)->SetSpatialRef(cloned_srs);
       cloned_srs->Release();
@@ -226,7 +267,8 @@ class CustomLayer : public OGRLayer {
   ~CustomLayer() override { defn_->Release(); }
 
   void EnableDummyIndex() {
-    if (!m_poAttrIndex) {
+    if (m_poAttrIndex == nullptr) {
+      // Owned by OGRLayer::~OGRLayer().
       dummy_idx_ = new DummyLayerAttrIndex();
       m_poAttrIndex = dummy_idx_;
     }
@@ -249,21 +291,33 @@ class CustomLayer : public OGRLayer {
   }
 
   int TestCapability(const char* cap) const override {
-    if (EQUAL(cap, OLCFastFeatureCount)) return fast_feature_count_ ? 1 : 0;
-    if (EQUAL(cap, OLCFastGetExtent)) return fast_get_extent_ ? 1 : 0;
-    if (EQUAL(cap, OLCTransactions)) return support_transactions_ ? 1 : 0;
-    if (EQUAL(cap, OLCCurveGeometries)) return support_curves_ ? 1 : 0;
+    if (EQUAL(cap, OLCFastFeatureCount)) {
+      return fast_feature_count_ ? 1 : 0;
+    }
+    if (EQUAL(cap, OLCFastGetExtent)) {
+      return fast_get_extent_ ? 1 : 0;
+    }
+    if (EQUAL(cap, OLCTransactions)) {
+      return support_transactions_ ? 1 : 0;
+    }
+    if (EQUAL(cap, OLCCurveGeometries)) {
+      return support_curves_ ? 1 : 0;
+    }
     return 0;
   }
 
   GIntBig GetFeatureCount(int /*bForce*/) override {
-    if (neg_feature_count_) return -1;
+    if (neg_feature_count_) {
+      return -1;
+    }
     return static_cast<GIntBig>(features_.size());
   }
 
   OGRErr IGetExtent(int /*iGeomField*/, OGREnvelope* psExtent,
                     bool /*bForce*/) override {
-    if (!has_extent_) return OGRERR_FAILURE;
+    if (!has_extent_) {
+      return OGRERR_FAILURE;
+    }
     *psExtent = extent_;
     return OGRERR_NONE;
   }
@@ -271,7 +325,9 @@ class CustomLayer : public OGRLayer {
   OGRErr SyncToDisk() override { return sync_err_; }
 
   OGRErr CreateField(const OGRFieldDefn* field, int /*bApproxOK*/) override {
-    if (create_field_err_ != OGRERR_NONE) return create_field_err_;
+    if (create_field_err_ != OGRERR_NONE) {
+      return create_field_err_;
+    }
     if (!skip_adding_field_on_create_) {
       defn_->AddFieldDefn(field);
     }
@@ -285,9 +341,15 @@ class CustomLayer : public OGRLayer {
   OGRErr AlterFieldDefn(int iField, OGRFieldDefn* poNewFieldDefn,
                         int nFlagsIn) override {
     OGRFieldDefn* f = defn_->GetFieldDefn(iField);
-    if (!f) return OGRERR_FAILURE;
-    if (nFlagsIn & ALTER_NAME_FLAG) f->SetName(poNewFieldDefn->GetNameRef());
-    if (nFlagsIn & ALTER_TYPE_FLAG) f->SetType(poNewFieldDefn->GetType());
+    if (f == nullptr) {
+      return OGRERR_FAILURE;
+    }
+    if (nFlagsIn & ALTER_NAME_FLAG) {
+      f->SetName(poNewFieldDefn->GetNameRef());
+    }
+    if (nFlagsIn & ALTER_TYPE_FLAG) {
+      f->SetType(poNewFieldDefn->GetType());
+    }
     if (nFlagsIn & ALTER_WIDTH_PRECISION_FLAG) {
       f->SetWidth(poNewFieldDefn->GetWidth());
       f->SetPrecision(poNewFieldDefn->GetPrecision());
@@ -298,7 +360,7 @@ class CustomLayer : public OGRLayer {
   OGRErr CreateGeomField(const OGRGeomFieldDefn* field,
                          int /*bApproxOK*/) override {
     OGRGeomFieldDefn copy(field);
-    if (copy.GetSpatialRef()) {
+    if (copy.GetSpatialRef() != nullptr) {
       OGRSpatialReference* cloned = copy.GetSpatialRef()->Clone();
       copy.SetSpatialRef(cloned);
       cloned->Release();
@@ -314,7 +376,9 @@ class CustomLayer : public OGRLayer {
   }
 
   OGRErr ICreateFeature(OGRFeature* feat) override {
-    if (create_feature_err_ != OGRERR_NONE) return create_feature_err_;
+    if (create_feature_err_ != OGRERR_NONE) {
+      return create_feature_err_;
+    }
     features_.emplace_back(feat->Clone());
     return OGRERR_NONE;
   }
@@ -331,7 +395,7 @@ class CustomLayer : public OGRLayer {
 
   OGRFeatureDefn* defn_ = nullptr;
   DummyLayerAttrIndex* dummy_idx_ = nullptr;
-  std::vector<std::unique_ptr<OGRFeature>> features_;
+  std::vector<OGRFeatureUniquePtr> features_;
   size_t read_idx_ = 0;
   bool fast_feature_count_ = true;
   bool neg_feature_count_ = false;
@@ -379,6 +443,7 @@ class ExposedDataset : public GDALDataset {
   using GDALDataset::DisableReadWriteMutex;
   using GDALDataset::eAccess;
   using GDALDataset::EnterReadWrite;
+  using GDALDataset::GetGeoTransform;
   using GDALDataset::IBuildOverviews;
   using GDALDataset::ICreateLayer;
   using GDALDataset::InitRWLock;
@@ -413,16 +478,19 @@ class ExposedDataset : public GDALDataset {
   using GDALDataset::ValidateRasterIOOrAdviseReadParameters;
 
   const OGRSpatialReference* GetSpatialRef() const override {
-    if (use_custom_srs_) return custom_srs_.get();
+    if (use_custom_srs_) {
+      return custom_srs_.get();
+    }
     return GDALDataset::GetSpatialRef();
   }
 
   const OGRSpatialReference* GetGCPSpatialRef() const override {
-    if (use_custom_gcp_srs_) return custom_gcp_srs_.get();
+    if (use_custom_gcp_srs_) {
+      return custom_gcp_srs_.get();
+    }
     return GDALDataset::GetGCPSpatialRef();
   }
 
-  using GDALDataset::GetGeoTransform;
   CPLErr GetGeoTransform(GDALGeoTransform& gt) const override {
     if (has_custom_gt_) {
       gt = custom_gt_;
@@ -443,7 +511,9 @@ class ExposedDataset : public GDALDataset {
   }
 
   OGRErr DeleteLayer(int i) override {
-    if (!allow_delete_layer_) return GDALDataset::DeleteLayer(i);
+    if (!allow_delete_layer_) {
+      return GDALDataset::DeleteLayer(i);
+    }
     if (i >= 0 && i < static_cast<int>(layers_.size())) {
       layers_.erase(layers_.begin() + i);
       return OGRERR_NONE;
@@ -457,10 +527,10 @@ class ExposedDataset : public GDALDataset {
     if (!allow_create_layer_) {
       return GDALDataset::ICreateLayer(name, geom_field_defn, nullptr);
     }
-    OGRwkbGeometryType gtype =
-        geom_field_defn ? geom_field_defn->GetType() : wkbNone;
+    const OGRwkbGeometryType gtype =
+        geom_field_defn != nullptr ? geom_field_defn->GetType() : wkbNone;
     const OGRSpatialReference* srs =
-        geom_field_defn ? geom_field_defn->GetSpatialRef() : nullptr;
+        geom_field_defn != nullptr ? geom_field_defn->GetSpatialRef() : nullptr;
     auto lyr = std::make_unique<CustomLayer>(name, gtype, srs);
     lyr->support_transactions_ = created_layers_support_tx_;
     lyr->null_defn_before_field_ = created_layers_null_defn_before_field_;
@@ -477,16 +547,25 @@ class ExposedDataset : public GDALDataset {
   }
 
   int TestCapability(const char* cap) const override {
-    if (EQUAL(cap, ODsCCreateLayer)) return allow_create_layer_ ? 1 : 0;
-    if (EQUAL(cap, ODsCDeleteLayer)) return allow_delete_layer_ ? 1 : 0;
-    if (EQUAL(cap, ODsCCreateGeomFieldAfterCreateLayer))
+    if (EQUAL(cap, ODsCCreateLayer)) {
+      return allow_create_layer_ ? 1 : 0;
+    }
+    if (EQUAL(cap, ODsCDeleteLayer)) {
+      return allow_delete_layer_ ? 1 : 0;
+    }
+    if (EQUAL(cap, ODsCCreateGeomFieldAfterCreateLayer)) {
       return allow_create_geom_field_ ? 1 : 0;
-    if (EQUAL(cap, ODsCCurveGeometries)) return allow_curves_ ? 1 : 0;
+    }
+    if (EQUAL(cap, ODsCCurveGeometries)) {
+      return allow_curves_ ? 1 : 0;
+    }
     return GDALDataset::TestCapability(cap);
   }
 
   std::shared_ptr<GDALGroup> GetRootGroup() const override {
-    if (root_group_) return root_group_;
+    if (root_group_ != nullptr) {
+      return root_group_;
+    }
     return GDALDataset::GetRootGroup();
   }
 
@@ -511,398 +590,479 @@ class ExposedDataset : public GDALDataset {
   std::shared_ptr<DummyGroup> root_group_;
 };
 
-void WriteMemFile(const char* path, const char* data = "x") {
+using ExposedDatasetPtr =
+    std::unique_ptr<ExposedDataset, GDALDatasetUniquePtrDeleter>;
+
+// Writes a file to /vsimem/ when the test expects GDAL itself to unlink it
+// (for example via MarkSuppressOnClose()).
+void WriteVsiMemFileForSuppressOnClose(const char* path,
+                                       std::string_view data = "x") {
   VSILFILE* fp = VSIFOpenL(path, "wb");
-  ASSERT_NE(fp, nullptr);
-  VSIFWriteL(data, 1, strlen(data), fp);
-  VSIFCloseL(fp);
+  ASSERT_NE(nullptr, fp);
+  ASSERT_EQ(data.size(), VSIFWriteL(data.data(), 1, data.size(), fp));
+  ASSERT_EQ(0, VSIFCloseL(fp));
 }
 
 TEST(GdalDatasetTest, LifecycleResponsiblePidCloseAndSuppressOnClose) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
+  GDALRegister_GTiff();
+  absl::Cleanup cleanup_dir = [] { VSIRmdirRecursive(kTempDir); };
 
-  EXPECT_NE(GDALGetphDLMutex(), nullptr);
-  GIntBig orig_pid = CPLGetPID();
-  EXPECT_EQ(GDALGetResponsiblePIDForCurrentThread(), orig_pid);
+  EXPECT_NE(nullptr, GDALGetphDLMutex());
+  const GIntBig orig_pid = CPLGetPID();
+  absl::Cleanup restore_pid = [orig_pid] {
+    GDALSetResponsiblePIDForCurrentThread(orig_pid);
+  };
+  EXPECT_EQ(orig_pid, GDALGetResponsiblePIDForCurrentThread());
   GDALSetResponsiblePIDForCurrentThread(orig_pid + 42);
-  EXPECT_EQ(GDALGetResponsiblePIDForCurrentThread(), orig_pid + 42);
+  EXPECT_EQ(orig_pid + 42, GDALGetResponsiblePIDForCurrentThread());
   GDALSetResponsiblePIDForCurrentThread(orig_pid);
 
-  // Test GDALDataset(int) constructor and Close / SuppressOnClose
-  const char* tmp_file = "/vsimem/suppress_test.bin";
-  WriteMemFile(tmp_file);
+  // 1. Test GDALDataset(int) constructor and Close / SuppressOnClose.
+  constexpr char kSuppressFile[] = "/vsimem/gdaldataset_test/suppress_test.bin";
+  WriteVsiMemFileForSuppressOnClose(kSuppressFile);
   {
     ExposedDataset ds(1);
     EXPECT_TRUE(ds.bForceCachedIO);
-    ds.SetDescription(tmp_file);
+    ds.SetDescription(kSuppressFile);
     EXPECT_FALSE(ds.IsMarkedSuppressOnClose());
-    GDALDatasetMarkSuppressOnClose(nullptr);
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      GDALDatasetMarkSuppressOnClose(nullptr);
+      EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+      CPLErrorReset();
+    }
     GDALDatasetMarkSuppressOnClose(GDALDataset::ToHandle(&ds));
     EXPECT_TRUE(ds.IsMarkedSuppressOnClose());
     ds.UnMarkSuppressOnClose();
     EXPECT_FALSE(ds.IsMarkedSuppressOnClose());
     ds.MarkSuppressOnClose();
-    EXPECT_EQ(GDALDatasetRunCloseWithoutDestroying(nullptr), CE_Failure);
-    EXPECT_EQ(GDALDatasetRunCloseWithoutDestroying(GDALDataset::ToHandle(&ds)),
-              CE_None);
-    // File was unlinked and suppress flag cleared
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_EQ(CE_Failure, GDALDatasetRunCloseWithoutDestroying(nullptr));
+      EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+      CPLErrorReset();
+    }
+    EXPECT_EQ(CE_None,
+              GDALDatasetRunCloseWithoutDestroying(GDALDataset::ToHandle(&ds)));
+    // File was unlinked and suppress flag cleared.
     EXPECT_FALSE(ds.IsMarkedSuppressOnClose());
-    VSIStatBufL stat_buf;
-    EXPECT_NE(VSIStatL(tmp_file, &stat_buf), 0);
+    VSIStatBufL stat_buf = {};
+    EXPECT_NE(0, VSIStatL(kSuppressFile, &stat_buf));
   }
 
-  // Test CleanupPostFileClosing
-  const char* cleanup_file = "/vsimem/cleanup_post.bin";
-  WriteMemFile(cleanup_file);
+  // 2. Test CleanupPostFileClosing.
+  constexpr char kCleanupFile[] = "/vsimem/gdaldataset_test/cleanup_post.bin";
+  WriteVsiMemFileForSuppressOnClose(kCleanupFile);
   {
     ExposedDataset ds;
-    ds.SetDescription(cleanup_file);
+    ds.SetDescription(kCleanupFile);
     ds.MarkSuppressOnClose();
     ds.CleanupPostFileClosing();
-    VSIStatBufL stat_buf;
-    EXPECT_NE(VSIStatL(cleanup_file, &stat_buf), 0);
+    VSIStatBufL stat_buf = {};
+    EXPECT_NE(0, VSIStatL(kCleanupFile, &stat_buf));
   }
 
-  // Test destructor with responsiblePID != CPLGetPID() on non-internal dataset
-  const char* tif_path = "/vsimem/resp_pid.tif";
+  // 3. Test destructor with responsiblePID != CPLGetPID() on non-internal
+  // dataset.
+  constexpr char kTifPath[] = "/vsimem/gdaldataset_test/resp_pid.tif";
   GDALDriver* gtiff_drv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(gtiff_drv, nullptr);
-  GDALDataset* tif_ds = gtiff_drv->Create(tif_path, 4, 4, 1, GDT_Byte, nullptr);
-  ASSERT_NE(tif_ds, nullptr);
-  GDALSetResponsiblePIDForCurrentThread(orig_pid + 99);
-  GDALClose(tif_ds);
-  GDALSetResponsiblePIDForCurrentThread(orig_pid);
-  VSIUnlink(tif_path);
-
-  CPLPopErrorHandler();
+  ASSERT_NE(nullptr, gtiff_drv);
+  GDALDatasetUniquePtr tif_ds(
+      gtiff_drv->Create(kTifPath, 4, 4, 1, GDT_Byte, nullptr));
+  ASSERT_NE(nullptr, tif_ds);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    GDALSetResponsiblePIDForCurrentThread(orig_pid + 99);
+    tif_ds.reset();
+    GDALSetResponsiblePIDForCurrentThread(orig_pid);
+    CPLErrorReset();
+  }
 }
 
 TEST(GdalDatasetTest, FlushCacheDropCacheAndBlockBasedFlushCache) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
-  EXPECT_EQ(GDALFlushCache(nullptr), CE_Failure);
-  EXPECT_EQ(GDALDropCache(nullptr), CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, GDALFlushCache(nullptr));
+    EXPECT_EQ(CE_Failure, GDALDropCache(nullptr));
+    CPLErrorReset();
+  }
 
   ExposedDataset ds;
   ds.RasterInitialize(8, 8);
-  EXPECT_EQ(ds.GetEstimatedRAMUsage(), -1);
+  EXPECT_EQ(-1, ds.GetEstimatedRAMUsage());
 
-  // Empty dataset BlockBasedFlushCache
-  EXPECT_EQ(ds.BlockBasedFlushCache(false), CE_None);
+  // Empty dataset BlockBasedFlushCache.
+  EXPECT_EQ(CE_None, ds.BlockBasedFlushCache(false));
 
   auto* b1 = new CustomBand(&ds, 1, GDT_Byte, 4, 4);
-  auto* b2 = new CustomBand(&ds, 2, GDT_Byte, 4, 4);
+  auto b2_owner = std::make_unique<CustomBand>(&ds, 2, GDT_Byte, 4, 4);
+  CustomBand* b2 = b2_owner.get();
   ds.SetBand(1, b1);
-  ds.SetBand(2, std::unique_ptr<GDALRasterBand>(b2));
+  ds.SetBand(2, std::move(b2_owner));
 
   auto lyr = std::make_unique<CustomLayer>("l1");
   CustomLayer* lyr_ptr = lyr.get();
   ds.layers_.push_back(std::move(lyr));
 
-  EXPECT_EQ(GDALFlushCache(GDALDataset::ToHandle(&ds)), CE_None);
-  EXPECT_EQ(GDALDropCache(GDALDataset::ToHandle(&ds)), CE_None);
+  EXPECT_EQ(CE_None, GDALFlushCache(GDALDataset::ToHandle(&ds)));
+  EXPECT_EQ(CE_None, GDALDropCache(GDALDataset::ToHandle(&ds)));
 
-  // Failing band FlushCache / DropCache and layer SyncToDisk
-  b1->flush_fail_ = true;
-  lyr_ptr->sync_err_ = OGRERR_FAILURE;
-  EXPECT_EQ(ds.FlushCache(false), CE_Failure);
-  b1->flush_fail_ = false;
-  lyr_ptr->sync_err_ = OGRERR_NONE;
+  // Failing band FlushCache / DropCache and layer SyncToDisk.
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    b1->flush_fail_ = true;
+    lyr_ptr->sync_err_ = OGRERR_FAILURE;
+    EXPECT_EQ(CE_Failure, ds.FlushCache(false));
+    b1->flush_fail_ = false;
+    lyr_ptr->sync_err_ = OGRERR_NONE;
 
-  b2->drop_fail_ = true;
-  EXPECT_EQ(ds.DropCache(), CE_Failure);
-  b2->drop_fail_ = false;
+    b2->drop_fail_ = true;
+    EXPECT_EQ(CE_Failure, ds.DropCache());
+    b2->drop_fail_ = false;
+    CPLErrorReset();
+  }
 
-  // BlockBasedFlushCache with matching block sizes
-  EXPECT_EQ(ds.BlockBasedFlushCache(false), CE_None);
+  // BlockBasedFlushCache with matching block sizes.
+  EXPECT_EQ(CE_None, ds.BlockBasedFlushCache(false));
 
-  // Dirty a block in b1 and make IWriteBlock fail during BlockBasedFlushCache
+  // Dirty a block in b1 and make IWriteBlock fail during BlockBasedFlushCache.
   ds.eAccess = GA_Update;
   b1->eAccess = GA_Update;
   GDALRasterBlock* blk = b1->GetLockedBlockRef(0, 0, TRUE);
-  ASSERT_NE(blk, nullptr);
+  ASSERT_NE(nullptr, blk);
   blk->MarkDirty();
   blk->DropLock();
-  b1->write_err_ = CE_Failure;
-  EXPECT_EQ(ds.BlockBasedFlushCache(false), CE_Failure);
-  b1->write_err_ = CE_None;
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    b1->write_err_ = CE_Failure;
+    EXPECT_EQ(CE_Failure, ds.BlockBasedFlushCache(false));
+    b1->write_err_ = CE_None;
+    CPLErrorReset();
+  }
 
-  // BlockBasedFlushCache when marked suppress on close & bAtClosing == true
+  // BlockBasedFlushCache when marked suppress on close & bAtClosing == true.
   ds.MarkSuppressOnClose();
-  EXPECT_EQ(ds.BlockBasedFlushCache(true), CE_None);
+  EXPECT_EQ(CE_None, ds.BlockBasedFlushCache(true));
   ds.UnMarkSuppressOnClose();
 
-  // BlockBasedFlushCache when band 3 has different block X and Y sizes
+  // BlockBasedFlushCache when band 3 has different block X and Y sizes.
   auto* b3 = new CustomBand(&ds, 3, GDT_Byte, 2, 2);
   ds.SetBand(3, b3);
-  EXPECT_EQ(ds.BlockBasedFlushCache(false), CE_None);
-
-  CPLPopErrorHandler();
+  EXPECT_EQ(CE_None, ds.BlockBasedFlushCache(false));
 }
 
 TEST(GdalDatasetTest, BandsRasterSizeAndSetBandEdgeCases) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
-  EXPECT_EQ(GDALGetRasterXSize(nullptr), 0);
-  EXPECT_EQ(GDALGetRasterYSize(nullptr), 0);
-  EXPECT_EQ(GDALGetRasterCount(nullptr), 0);
-  EXPECT_EQ(GDALGetRasterBand(nullptr, 1), nullptr);
-  EXPECT_EQ(GDALAddBand(nullptr, GDT_Byte, nullptr), CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(0, GDALGetRasterXSize(nullptr));
+    EXPECT_EQ(0, GDALGetRasterYSize(nullptr));
+    EXPECT_EQ(0, GDALGetRasterCount(nullptr));
+    EXPECT_EQ(nullptr, GDALGetRasterBand(nullptr, 1));
+    EXPECT_EQ(CE_Failure, GDALAddBand(nullptr, GDT_Byte, nullptr));
+    CPLErrorReset();
+  }
 
   ExposedDataset ds;
   ds.RasterInitialize(16, 12);
   const ExposedDataset& const_ds = ds;
 
-  EXPECT_EQ(GDALGetRasterXSize(GDALDataset::ToHandle(&ds)), 16);
-  EXPECT_EQ(GDALGetRasterYSize(GDALDataset::ToHandle(&ds)), 12);
-  EXPECT_EQ(GDALGetRasterCount(GDALDataset::ToHandle(&ds)), 0);
-  EXPECT_EQ(ds.GetRasterBand(1), nullptr);
-  EXPECT_EQ(const_ds.GetRasterBand(1), nullptr);
-  EXPECT_EQ(GDALAddBand(GDALDataset::ToHandle(&ds), GDT_Byte, nullptr),
-            CE_Failure);
+  EXPECT_EQ(16, GDALGetRasterXSize(GDALDataset::ToHandle(&ds)));
+  EXPECT_EQ(12, GDALGetRasterYSize(GDALDataset::ToHandle(&ds)));
+  EXPECT_EQ(0, GDALGetRasterCount(GDALDataset::ToHandle(&ds)));
+  EXPECT_EQ(nullptr, ds.GetRasterBand(1));
+  EXPECT_EQ(nullptr, const_ds.GetRasterBand(1));
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure,
+              GDALAddBand(GDALDataset::ToHandle(&ds), GDT_Byte, nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
 
-  // SetBand skipping band 1 (sets band 2, leaving band 1 as nullptr)
+  // SetBand skipping band 1 (sets band 2, leaving band 1 as nullptr).
   auto* b2 = new CustomBand(&ds, 2);
   ds.SetBand(2, b2);
-  EXPECT_EQ(ds.GetRasterCount(), 2);
-  EXPECT_EQ(ds.GetRasterBand(1), nullptr);
-  EXPECT_EQ(ds.GetRasterBand(2), b2);
-  EXPECT_EQ(const_ds.GetRasterBand(2), b2);
+  EXPECT_EQ(2, ds.GetRasterCount());
+  EXPECT_EQ(nullptr, ds.GetRasterBand(1));
+  EXPECT_EQ(b2, ds.GetRasterBand(2));
+  EXPECT_EQ(b2, const_ds.GetRasterBand(2));
 
-  // Out of bounds GetRasterBand (const and non-const)
-  EXPECT_EQ(ds.GetRasterBand(0), nullptr);
-  EXPECT_EQ(ds.GetRasterBand(3), nullptr);
-  EXPECT_EQ(const_ds.GetRasterBand(0), nullptr);
-  EXPECT_EQ(const_ds.GetRasterBand(3), nullptr);
+  // Out of bounds GetRasterBand (const and non-const).
+  EXPECT_EQ(nullptr, ds.GetRasterBand(0));
+  EXPECT_EQ(nullptr, ds.GetRasterBand(3));
+  EXPECT_EQ(nullptr, const_ds.GetRasterBand(0));
+  EXPECT_EQ(nullptr, const_ds.GetRasterBand(3));
 
-  // Setting already-set band 2 fails
-  CustomBand duplicate_band(&ds, 2);
-  ds.SetBand(2, &duplicate_band);
-  EXPECT_EQ(ds.GetRasterBand(2), b2);
+  // Setting already-set band 2 fails.
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    CustomBand duplicate_band(&ds, 2);
+    ds.SetBand(2, &duplicate_band);
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
+  EXPECT_EQ(b2, ds.GetRasterBand(2));
 
-  // Set band 1 properly
+  // Set band 1 properly.
   auto* b1 = new CustomBand(&ds, 1);
   ds.SetBand(1, b1);
 
-  // Test GetBands() and ConstBands iterators and indexing
+  // Test GetBands() and ConstBands iterators and indexing.
   auto bands = ds.GetBands();
-  EXPECT_EQ(bands.size(), 2U);
-  EXPECT_EQ(bands[0], b1);
-  EXPECT_EQ(bands[static_cast<size_t>(1)], b2);
+  EXPECT_EQ(2U, bands.size());
+  EXPECT_EQ(b1, bands[0]);
+  EXPECT_EQ(b2, bands[static_cast<size_t>(1)]);
   int count = 0;
   for (GDALRasterBand* b : bands) {
-    EXPECT_NE(b, nullptr);
+    EXPECT_NE(nullptr, b);
     ++count;
   }
-  EXPECT_EQ(count, 2);
+  EXPECT_EQ(2, count);
 
   auto const_bands = const_ds.GetBands();
-  EXPECT_EQ(const_bands.size(), 2U);
-  EXPECT_EQ(const_bands[0], b1);
-  EXPECT_EQ(const_bands[static_cast<size_t>(1)], b2);
+  EXPECT_EQ(2U, const_bands.size());
+  EXPECT_EQ(b1, const_bands[0]);
+  EXPECT_EQ(b2, const_bands[static_cast<size_t>(1)]);
   count = 0;
   for (const GDALRasterBand* b : const_bands) {
-    EXPECT_NE(b, nullptr);
+    EXPECT_NE(nullptr, b);
     ++count;
   }
-  EXPECT_EQ(count, 2);
-
-  CPLPopErrorHandler();
+  EXPECT_EQ(2, count);
 }
 
 TEST(GdalDatasetTest, SpatialRefGeoTransformAndGCPs) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
-  EXPECT_EQ(GDALGetSpatialRef(nullptr), nullptr);
-  EXPECT_EQ(GDALGetProjectionRef(nullptr), nullptr);
-  EXPECT_EQ(GDALSetSpatialRef(nullptr, nullptr), CE_Failure);
-  EXPECT_EQ(GDALSetProjection(nullptr, "EPSG:4326"), CE_Failure);
-  EXPECT_EQ(GDALGetGeoTransform(nullptr, nullptr), CE_Failure);
-  EXPECT_EQ(GDALSetGeoTransform(nullptr, nullptr), CE_Failure);
-  EXPECT_EQ(GDALGetGCPCount(nullptr), 0);
-  EXPECT_EQ(GDALGetGCPSpatialRef(nullptr), nullptr);
-  EXPECT_EQ(GDALGetGCPProjection(nullptr), nullptr);
-  EXPECT_EQ(GDALGetGCPs(nullptr), nullptr);
-  EXPECT_EQ(GDALSetGCPs(nullptr, 0, nullptr, nullptr), CE_Failure);
-  EXPECT_EQ(GDALSetGCPs2(nullptr, 0, nullptr, nullptr), CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, GDALGetSpatialRef(nullptr));
+    EXPECT_EQ(nullptr, GDALGetProjectionRef(nullptr));
+    EXPECT_EQ(CE_Failure, GDALSetSpatialRef(nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, GDALSetProjection(nullptr, "EPSG:4326"));
+    EXPECT_EQ(CE_Failure, GDALGetGeoTransform(nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, GDALSetGeoTransform(nullptr, nullptr));
+    EXPECT_EQ(0, GDALGetGCPCount(nullptr));
+    EXPECT_EQ(nullptr, GDALGetGCPSpatialRef(nullptr));
+    EXPECT_EQ(nullptr, GDALGetGCPProjection(nullptr));
+    EXPECT_EQ(nullptr, GDALGetGCPs(nullptr));
+    EXPECT_EQ(CE_Failure, GDALSetGCPs(nullptr, 0, nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, GDALSetGCPs2(nullptr, 0, nullptr, nullptr));
+    CPLErrorReset();
+  }
 
   ExposedDataset ds;
   GDALDatasetH hDS = GDALDataset::ToHandle(&ds);
 
-  // Default SpatialRef / ProjectionRef
-  EXPECT_EQ(GDALGetSpatialRef(hDS), nullptr);
-  EXPECT_STREQ(GDALGetProjectionRef(hDS), "");
-  EXPECT_EQ(ds.GetSpatialRefRasterOnly(), nullptr);
+  // 1. Default SpatialRef / ProjectionRef.
+  EXPECT_EQ(nullptr, GDALGetSpatialRef(hDS));
+  EXPECT_STREQ("", GDALGetProjectionRef(hDS));
+  EXPECT_EQ(nullptr, ds.GetSpatialRefRasterOnly());
 
-  // SetProjection / SetSpatialRef on base class
-  EXPECT_EQ(GDALSetProjection(hDS, ""), CE_Failure);
-  EXPECT_EQ(GDALSetProjection(hDS, "INVALID_SRS_STRING"), CE_Failure);
-  EXPECT_EQ(GDALSetProjection(hDS, "EPSG:4326"), CE_Failure);
-  ds.SetMOFlags(GMO_IGNORE_UNIMPLEMENTED);
-  EXPECT_EQ(GDALSetSpatialRef(hDS, nullptr), CE_Failure);
-  ds.SetMOFlags(0);
+  // 2. SetProjection / SetSpatialRef on base class.
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, GDALSetProjection(hDS, ""));
+    EXPECT_EQ(CE_Failure, GDALSetProjection(hDS, "INVALID_SRS_STRING"));
+    EXPECT_EQ(CE_Failure, GDALSetProjection(hDS, "EPSG:4326"));
+    ds.SetMOFlags(GMO_IGNORE_UNIMPLEMENTED);
+    EXPECT_EQ(CE_Failure, GDALSetSpatialRef(hDS, nullptr));
+    ds.SetMOFlags(0);
+    CPLErrorReset();
+  }
 
-  // Custom SRS caching in GetProjectionRef
+  // 3. Custom SRS caching in GetProjectionRef.
   ds.use_custom_srs_ = true;
   ds.custom_srs_ = std::make_unique<OGRSpatialReference>();
   ds.custom_srs_->SetWellKnownGeogCS("WGS84");
   const char* wkt1 = ds.GetProjectionRef();
-  EXPECT_NE(wkt1[0], '\0');
+  ASSERT_NE(nullptr, wkt1);
+  EXPECT_STRNE("", wkt1);
   const char* wkt2 = ds.GetProjectionRef();
-  EXPECT_EQ(wkt1, wkt2);  // Cached pointer returned
+  EXPECT_EQ(wkt1, wkt2);  // Cached pointer returned.
   ds.custom_srs_->SetWellKnownGeogCS("NAD27");
   const char* wkt3 = ds.GetProjectionRef();
-  EXPECT_NE(wkt3[0], '\0');
+  ASSERT_NE(nullptr, wkt3);
+  EXPECT_STRNE("", wkt3);
   ds.use_custom_srs_ = false;
 
-  // GetSpatialRefVectorOnly with layers
+  // 4. GetSpatialRefVectorOnly with layers.
   OGRSpatialReference srs1;
   srs1.SetWellKnownGeogCS("WGS84");
   OGRSpatialReference srs2;
   srs2.SetWellKnownGeogCS("NAD27");
 
   ds.layers_.push_back(std::make_unique<CustomLayer>("l1", wkbPoint, &srs1));
-  EXPECT_NE(ds.GetSpatialRef(), nullptr);
+  EXPECT_NE(nullptr, ds.GetSpatialRef());
   ds.layers_.push_back(std::make_unique<CustomLayer>("l2", wkbPoint, &srs1));
-  EXPECT_NE(ds.GetSpatialRef(), nullptr);
-  // Layer with different SRS -> returns nullptr
+  EXPECT_NE(nullptr, ds.GetSpatialRef());
+  // Layer with different SRS -> returns nullptr.
   ds.layers_.push_back(std::make_unique<CustomLayer>("l3", wkbPoint, &srs2));
-  EXPECT_EQ(ds.GetSpatialRef(), nullptr);
+  EXPECT_EQ(nullptr, ds.GetSpatialRef());
   ds.layers_.clear();
 
-  // GeoTransform
-  double adfGT[6] = {0};
-  EXPECT_EQ(ds.GetGeoTransform(adfGT), CE_Failure);
-  EXPECT_EQ(GDALGetGeoTransform(hDS, adfGT), CE_Failure);
-  EXPECT_DOUBLE_EQ(adfGT[1], 1.0);
-  EXPECT_EQ(GDALSetGeoTransform(hDS, nullptr), CE_Failure);
-  EXPECT_EQ(GDALSetGeoTransform(hDS, adfGT), CE_Failure);
-  EXPECT_EQ(ds.SetGeoTransform(adfGT), CE_Failure);
-  ds.SetMOFlags(GMO_IGNORE_UNIMPLEMENTED);
-  EXPECT_EQ(ds.SetGeoTransform(adfGT), CE_Failure);
-  ds.SetMOFlags(0);
+  // 5. GeoTransform.
+  double adfGT[6] = {0.0};
+  EXPECT_EQ(CE_Failure, ds.GetGeoTransform(adfGT));
+  EXPECT_EQ(CE_Failure, GDALGetGeoTransform(hDS, adfGT));
+  EXPECT_DOUBLE_EQ(1.0, adfGT[1]);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, GDALSetGeoTransform(hDS, nullptr));
+    EXPECT_EQ(CE_Failure, GDALSetGeoTransform(hDS, adfGT));
+    EXPECT_EQ(CE_Failure, ds.SetGeoTransform(adfGT));
+    ds.SetMOFlags(GMO_IGNORE_UNIMPLEMENTED);
+    EXPECT_EQ(CE_Failure, ds.SetGeoTransform(adfGT));
+    ds.SetMOFlags(0);
+    CPLErrorReset();
+  }
 
-  // GCPs
-  EXPECT_EQ(GDALGetGCPCount(hDS), 0);
-  EXPECT_EQ(GDALGetGCPSpatialRef(hDS), nullptr);
-  EXPECT_STREQ(GDALGetGCPProjection(hDS), "");
-  EXPECT_EQ(GDALGetGCPs(hDS), nullptr);
-  EXPECT_EQ(GDALSetGCPs(hDS, 0, nullptr, ""), CE_Failure);
-  EXPECT_EQ(GDALSetGCPs(hDS, 0, nullptr, "INVALID_WKT"), CE_Failure);
-  char* srs_wkt = nullptr;
-  srs1.exportToWkt(&srs_wkt);
-  EXPECT_EQ(GDALSetGCPs(hDS, 0, nullptr, srs_wkt), CE_Failure);
-  CPLFree(srs_wkt);
-  EXPECT_EQ(GDALSetGCPs2(hDS, 0, nullptr, OGRSpatialReference::ToHandle(&srs1)),
-            CE_Failure);
-  ds.SetMOFlags(GMO_IGNORE_UNIMPLEMENTED);
-  EXPECT_EQ(GDALSetGCPs2(hDS, 0, nullptr, nullptr), CE_Failure);
-  ds.SetMOFlags(0);
+  // 6. GCPs.
+  EXPECT_EQ(0, GDALGetGCPCount(hDS));
+  EXPECT_EQ(nullptr, GDALGetGCPSpatialRef(hDS));
+  EXPECT_STREQ("", GDALGetGCPProjection(hDS));
+  EXPECT_EQ(nullptr, GDALGetGCPs(hDS));
+  char* srs_wkt_raw = nullptr;
+  ASSERT_EQ(OGRERR_NONE, srs1.exportToWkt(&srs_wkt_raw));
+  const std::unique_ptr<char, CplFreeDeleter> srs_wkt(srs_wkt_raw);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, GDALSetGCPs(hDS, 0, nullptr, ""));
+    EXPECT_EQ(CE_Failure, GDALSetGCPs(hDS, 0, nullptr, "INVALID_WKT"));
+    EXPECT_EQ(CE_Failure, GDALSetGCPs(hDS, 0, nullptr, srs_wkt.get()));
+    EXPECT_EQ(CE_Failure, GDALSetGCPs2(hDS, 0, nullptr,
+                                       OGRSpatialReference::ToHandle(&srs1)));
+    ds.SetMOFlags(GMO_IGNORE_UNIMPLEMENTED);
+    EXPECT_EQ(CE_Failure, GDALSetGCPs2(hDS, 0, nullptr, nullptr));
+    ds.SetMOFlags(0);
+    CPLErrorReset();
+  }
 
-  // Custom GCP SRS caching in GetGCPProjection
+  // 7. Custom GCP SRS caching in GetGCPProjection.
   ds.use_custom_gcp_srs_ = true;
   ds.custom_gcp_srs_ = std::make_unique<OGRSpatialReference>();
   ds.custom_gcp_srs_->SetWellKnownGeogCS("WGS84");
   const char* gcp_wkt1 = ds.GetGCPProjection();
-  EXPECT_NE(gcp_wkt1[0], '\0');
+  ASSERT_NE(nullptr, gcp_wkt1);
+  EXPECT_STRNE("", gcp_wkt1);
   const char* gcp_wkt2 = ds.GetGCPProjection();
   EXPECT_EQ(gcp_wkt1, gcp_wkt2);
   ds.custom_gcp_srs_->SetWellKnownGeogCS("NAD27");
-  EXPECT_NE(ds.GetGCPProjection()[0], '\0');
-
-  CPLPopErrorHandler();
+  const char* gcp_wkt3 = ds.GetGCPProjection();
+  ASSERT_NE(nullptr, gcp_wkt3);
+  EXPECT_STRNE("", gcp_wkt3);
 }
 
 TEST(GdalDatasetTest, InternalHandleDriverRefCountsAndSharedDatasets) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
+  GDALRegister_GTiff();
+  absl::Cleanup cleanup_dir = [] { VSIRmdirRecursive(kTempDir); };
 
-  EXPECT_EQ(GDALGetInternalHandle(nullptr, "foo"), nullptr);
-  EXPECT_EQ(GDALGetDatasetDriver(nullptr), nullptr);
-  EXPECT_EQ(GDALReferenceDataset(nullptr), 0);
-  EXPECT_EQ(GDALDereferenceDataset(nullptr), 0);
-  EXPECT_EQ(GDALReleaseDataset(nullptr), 0);
-  EXPECT_EQ(GDALGetAccess(nullptr), 0);
-  GDALGetOpenDatasets(nullptr, nullptr);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, GDALGetInternalHandle(nullptr, "foo"));
+    EXPECT_EQ(nullptr, GDALGetDatasetDriver(nullptr));
+    EXPECT_EQ(0, GDALReferenceDataset(nullptr));
+    EXPECT_EQ(0, GDALDereferenceDataset(nullptr));
+    EXPECT_EQ(0, GDALReleaseDataset(nullptr));
+    EXPECT_EQ(0, GDALGetAccess(nullptr));
+    GDALGetOpenDatasets(nullptr, nullptr);
+    CPLErrorReset();
+  }
 
   auto* heap_ds = new ExposedDataset();
   GDALDatasetH hDS = GDALDataset::ToHandle(heap_ds);
-  EXPECT_EQ(GDALGetInternalHandle(hDS, "foo"), nullptr);
-  EXPECT_EQ(GDALGetDatasetDriver(hDS), nullptr);
-  EXPECT_STREQ(heap_ds->GetDriverName(), "");
-  EXPECT_EQ(GDALGetAccess(hDS), GA_ReadOnly);
+  EXPECT_EQ(nullptr, GDALGetInternalHandle(hDS, "foo"));
+  EXPECT_EQ(nullptr, GDALGetDatasetDriver(hDS));
+  EXPECT_STREQ("", heap_ds->GetDriverName());
+  EXPECT_EQ(GA_ReadOnly, GDALGetAccess(hDS));
 
-  EXPECT_EQ(heap_ds->GetRefCount(), 1);
-  EXPECT_EQ(GDALReferenceDataset(hDS), 2);
-  EXPECT_EQ(heap_ds->GetSummaryRefCount(), 2);
+  EXPECT_EQ(1, heap_ds->GetRefCount());
+  EXPECT_EQ(2, GDALReferenceDataset(hDS));
+  EXPECT_EQ(2, heap_ds->GetSummaryRefCount());
 
-  // Add a layer and check GetSummaryRefCount
+  // Add a layer and check GetSummaryRefCount.
   auto lyr = std::make_unique<CustomLayer>("l1");
   lyr->Reference();
   heap_ds->layers_.push_back(std::move(lyr));
-  EXPECT_EQ(heap_ds->GetSummaryRefCount(), 3);
+  EXPECT_EQ(3, heap_ds->GetSummaryRefCount());
 
-  // ReleaseRef when refcount > 1 returns FALSE
-  EXPECT_EQ(GDALReleaseDataset(hDS), FALSE);
-  EXPECT_EQ(heap_ds->GetRefCount(), 1);
-  EXPECT_EQ(GDALReferenceDataset(hDS), 2);
-  EXPECT_EQ(GDALDereferenceDataset(hDS), 1);
+  // ReleaseRef when refcount > 1 returns FALSE.
+  EXPECT_EQ(FALSE, GDALReleaseDataset(hDS));
+  EXPECT_EQ(1, heap_ds->GetRefCount());
+  EXPECT_EQ(2, GDALReferenceDataset(hDS));
+  EXPECT_EQ(1, GDALDereferenceDataset(hDS));
 
-  // MarkAsShared on internal dataset
-  EXPECT_EQ(heap_ds->GetShared(), FALSE);
+  // MarkAsShared on internal dataset.
+  EXPECT_EQ(FALSE, heap_ds->GetShared());
   heap_ds->MarkAsShared();
-  EXPECT_EQ(heap_ds->GetShared(), TRUE);
+  EXPECT_EQ(TRUE, heap_ds->GetShared());
 
-  // Release() destroys when refcount drops to 0
-  EXPECT_EQ(heap_ds->Release(), OGRERR_NONE);
+  // Release() destroys when refcount drops to 0.
+  EXPECT_EQ(OGRERR_NONE, heap_ds->Release());
 
-  // Test duplicate MarkAsShared on two non-internal datasets with same name
-  const char* gtiff_file1 = "/vsimem/shared_dup1.tif";
-  const char* gtiff_file2 = "/vsimem/shared_dup2.tif";
+  // Test duplicate MarkAsShared on two non-internal datasets with same name.
+  constexpr char kGtiffFile1[] = "/vsimem/gdaldataset_test/shared_dup1.tif";
+  constexpr char kGtiffFile2[] = "/vsimem/gdaldataset_test/shared_dup2.tif";
   GDALDriver* gtiff_drv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(gtiff_drv, nullptr);
-  GDALDataset* ds1 = gtiff_drv->Create(gtiff_file1, 4, 4, 1, GDT_Byte, nullptr);
-  GDALDataset* ds2 = gtiff_drv->Create(gtiff_file2, 4, 4, 1, GDT_Byte, nullptr);
-  ASSERT_NE(ds1, nullptr);
-  ASSERT_NE(ds2, nullptr);
+  ASSERT_NE(nullptr, gtiff_drv);
+  GDALDatasetUniquePtr ds1(
+      gtiff_drv->Create(kGtiffFile1, 4, 4, 1, GDT_Byte, nullptr));
+  ASSERT_NE(nullptr, ds1);
+  GDALDatasetUniquePtr ds2(
+      gtiff_drv->Create(kGtiffFile2, 4, 4, 1, GDT_Byte, nullptr));
+  ASSERT_NE(nullptr, ds2);
   ds1->MarkAsShared();
-  ds2->SetDescription(gtiff_file1);
-  ds2->MarkAsShared();  // Duplicate description in phSharedDatasetSet!
+  ds2->SetDescription(kGtiffFile1);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    ds2->MarkAsShared();  // Duplicate description in phSharedDatasetSet.
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
   // Change ds1's description so UnregisterFromSharedDataset hits the 'else'
-  // branch
-  ds1->SetDescription("/vsimem/changed_desc.tif");
-  GDALClose(ds1);
-  ds2->SetDescription(gtiff_file2);
-  GDALClose(ds2);
-  VSIUnlink(gtiff_file1);
-  VSIUnlink(gtiff_file2);
-
-  CPLPopErrorHandler();
+  // branch.
+  ds1->SetDescription("/vsimem/gdaldataset_test/changed_desc.tif");
+  ds1.reset();
+  ds2->SetDescription(kGtiffFile2);
+  ds2.reset();
 }
 
 TEST(GdalDatasetTest, BuildOverviewsAddOverviewsFileListAndMaskBand) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
+  GDALRegister_GTiff();
+  absl::Cleanup cleanup_dir = [] { VSIRmdirRecursive(kTempDir); };
 
-  EXPECT_EQ(GDALBuildOverviews(nullptr, "NEAREST", 0, nullptr, 0, nullptr,
-                               nullptr, nullptr),
-            CE_Failure);
-  EXPECT_EQ(GDALBuildOverviewsEx(nullptr, "NEAREST", 0, nullptr, 0, nullptr,
-                                 nullptr, nullptr, nullptr),
-            CE_Failure);
-  EXPECT_EQ(GDALGetFileList(nullptr), nullptr);
-  EXPECT_EQ(GDALCreateDatasetMaskBand(nullptr, GMF_PER_DATASET), CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, GDALBuildOverviews(nullptr, "NEAREST", 0, nullptr, 0,
+                                             nullptr, nullptr, nullptr));
+    EXPECT_EQ(CE_Failure,
+              GDALBuildOverviewsEx(nullptr, "NEAREST", 0, nullptr, 0, nullptr,
+                                   nullptr, nullptr, nullptr));
+    EXPECT_EQ(nullptr, GDALGetFileList(nullptr));
+    EXPECT_EQ(CE_Failure, GDALCreateDatasetMaskBand(nullptr, GMF_PER_DATASET));
+    CPLErrorReset();
+  }
 
-  // Uninitialized oOvManager dataset
+  // 1. Uninitialized oOvManager dataset.
   ExposedDataset ds;
   ds.RasterInitialize(8, 8);
   ds.SetBand(1, new CustomBand(&ds, 1));
 
-  // Fake driver with GDAL_DMD_OVERVIEW_CREATIONOPTIONLIST metadata
+  // Fake driver with GDAL_DMD_OVERVIEW_CREATIONOPTIONLIST metadata.
   GDALDriver fake_drv;
   fake_drv.SetDescription("FAKE_DRV");
   fake_drv.SetMetadataItem(GDAL_DMD_OVERVIEW_CREATIONOPTIONLIST,
@@ -913,80 +1073,82 @@ TEST(GdalDatasetTest, BuildOverviewsAddOverviewsFileListAndMaskBand) {
                            "  <Option name='COMPRESS' type='string'/>"
                            "</OverviewCreationOptionList>");
   ds.poDriver = &fake_drv;
-  EXPECT_STREQ(ds.GetDriverName(), "FAKE_DRV");
+  EXPECT_STREQ("FAKE_DRV", ds.GetDriverName());
 
-  const char* ovr_opts[] = {"USE_RRD=YES", "VRT_VIRTUAL_OVERVIEWS=YES",
-                            "COMPRESS_OVERVIEW=DEFLATE", nullptr};
-  int bad_ovr_list[] = {-2};
-  EXPECT_EQ(GDALBuildOverviewsEx(GDALDataset::ToHandle(&ds), "NEAREST", 1,
-                                 bad_ovr_list, 0, nullptr, nullptr, nullptr,
-                                 ovr_opts),
-            CE_Failure);
+  constexpr std::array<const char*, 4> kOvrOpts = {
+      "USE_RRD=YES", "VRT_VIRTUAL_OVERVIEWS=YES", "COMPRESS_OVERVIEW=DEFLATE",
+      nullptr};
+  constexpr std::array<int, 1> kBadOvrList = {-2};
+  constexpr std::array<int, 1> kGoodOvrList = {2};
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure,
+              GDALBuildOverviewsEx(GDALDataset::ToHandle(&ds), "NEAREST", 1,
+                                   kBadOvrList.data(), 0, nullptr, nullptr,
+                                   nullptr, kOvrOpts.data()));
 
-  int good_ovr_list[] = {2};
-  // Fails because oOvManager is not initialized
-  EXPECT_EQ(GDALBuildOverviews(GDALDataset::ToHandle(&ds), "NEAREST", 1,
-                               good_ovr_list, 0, nullptr, nullptr, nullptr),
-            CE_Failure);
-  EXPECT_EQ(ds.AddOverviews({}, nullptr, nullptr, nullptr), CE_Failure);
-  EXPECT_EQ(
-      GDALCreateDatasetMaskBand(GDALDataset::ToHandle(&ds), GMF_PER_DATASET),
-      CE_Failure);
+    // Fails because oOvManager is not initialized.
+    EXPECT_EQ(CE_Failure, GDALBuildOverviews(GDALDataset::ToHandle(&ds),
+                                             "NEAREST", 1, kGoodOvrList.data(),
+                                             0, nullptr, nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    EXPECT_EQ(CE_Failure, ds.AddOverviews({}, nullptr, nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, GDALCreateDatasetMaskBand(GDALDataset::ToHandle(&ds),
+                                                    GMF_PER_DATASET));
+    CPLErrorReset();
+  }
 
-  // Now test on a real GTiff in /vsimem/ with external overview and mask
-  const char* tif_path = "/vsimem/ovr_mask_test.tif";
+  // 2. Real GTiff in /vsimem/ with external overview and mask.
+  constexpr char kTifPath[] = "/vsimem/gdaldataset_test/ovr_mask_test.tif";
   GDALDriver* gtiff_drv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(gtiff_drv, nullptr);
-  GDALDataset* tif_ds =
-      gtiff_drv->Create(tif_path, 16, 16, 1, GDT_Byte, nullptr);
-  ASSERT_NE(tif_ds, nullptr);
-  GDALClose(tif_ds);
+  ASSERT_NE(nullptr, gtiff_drv);
+  GDALDatasetUniquePtr tif_ds(
+      gtiff_drv->Create(kTifPath, 16, 16, 1, GDT_Byte, nullptr));
+  ASSERT_NE(nullptr, tif_ds);
+  tif_ds.reset();
 
-  // Open read-only so BuildOverviews creates an external .ovr file
-  tif_ds = GDALDataset::FromHandle(GDALOpen(tif_path, GA_ReadOnly));
-  ASSERT_NE(tif_ds, nullptr);
-  EXPECT_EQ(tif_ds->BuildOverviews("NEAREST", 1, good_ovr_list, 0, nullptr,
-                                   nullptr, nullptr, nullptr),
-            CE_None);
+  // Open read-only so BuildOverviews creates an external .ovr file.
+  GDALDatasetUniquePtr tif_ds_ro(GDALDataset::FromHandle(GDALOpenEx(
+      kTifPath, GDAL_OF_READONLY | GDAL_OF_RASTER, nullptr, nullptr, nullptr)));
+  ASSERT_NE(nullptr, tif_ds_ro);
+  EXPECT_EQ(CE_None,
+            tif_ds_ro->BuildOverviews("NEAREST", 1, kGoodOvrList.data(), 0,
+                                      nullptr, nullptr, nullptr, nullptr));
   {
     CPLConfigOptionSetter msk_setter("GDAL_TIFF_INTERNAL_MASK", "NO", false);
-    EXPECT_EQ(GDALCreateDatasetMaskBand(GDALDataset::ToHandle(tif_ds),
-                                        GMF_PER_DATASET),
-              CE_None);
+    EXPECT_EQ(CE_None,
+              GDALCreateDatasetMaskBand(GDALDataset::ToHandle(tif_ds_ro.get()),
+                                        GMF_PER_DATASET));
   }
-  char** file_list = GDALGetFileList(GDALDataset::ToHandle(tif_ds));
-  EXPECT_GE(CSLCount(file_list), 2);
-  CSLDestroy(file_list);
+  const StringListPtr file_list(
+      GDALGetFileList(GDALDataset::ToHandle(tif_ds_ro.get())), CSLDestroy);
+  EXPECT_GE(CslToVector(file_list.get()).size(), 2U);
+  tif_ds_ro.reset();
 
-  GDALClose(tif_ds);
-  VSIUnlink(tif_path);
-  VSIUnlink("/vsimem/ovr_mask_test.tif.ovr");
-  VSIUnlink("/vsimem/ovr_mask_test.tif.msk");
-
-  // Test GDALAntiRecursionGuard
+  // 3. Test GDALAntiRecursionGuard.
   GDALAntiRecursionGuard g1("test_id");
-  EXPECT_EQ(g1.GetCallDepth(), 1);
+  EXPECT_EQ(1, g1.GetCallDepth());
   GDALAntiRecursionGuard g2(g1, "_sub");
-  EXPECT_EQ(g2.GetCallDepth(), 1);
+  EXPECT_EQ(1, g2.GetCallDepth());
   GDALAntiRecursionGuard g3(g1, "");
-  EXPECT_EQ(g3.GetCallDepth(), 0);
-
-  CPLPopErrorHandler();
+  EXPECT_EQ(0, g3.GetCallDepth());
 }
 
 TEST(GdalDatasetTest, RasterIOAndAdviseReadComprehensive) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
-  EXPECT_EQ(GDALDatasetRasterIO(nullptr, GF_Read, 0, 0, 1, 1, nullptr, 1, 1,
-                                GDT_Byte, 1, nullptr, 0, 0, 0),
-            CE_Failure);
-  EXPECT_EQ(GDALDatasetRasterIOEx(nullptr, GF_Read, 0, 0, 1, 1, nullptr, 1, 1,
-                                  GDT_Byte, 1, nullptr, 0, 0, 0, nullptr),
-            CE_Failure);
-  EXPECT_EQ(GDALDatasetAdviseRead(nullptr, 0, 0, 1, 1, 1, 1, GDT_Byte, 1,
-                                  nullptr, nullptr),
-            CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure,
+              GDALDatasetRasterIO(nullptr, GF_Read, 0, 0, 1, 1, nullptr, 1, 1,
+                                  GDT_Byte, 1, nullptr, 0, 0, 0));
+    EXPECT_EQ(CE_Failure,
+              GDALDatasetRasterIOEx(nullptr, GF_Read, 0, 0, 1, 1, nullptr, 1, 1,
+                                    GDT_Byte, 1, nullptr, 0, 0, 0, nullptr));
+    EXPECT_EQ(CE_Failure, GDALDatasetAdviseRead(nullptr, 0, 0, 1, 1, 1, 1,
+                                                GDT_Byte, 1, nullptr, nullptr));
+    CPLErrorReset();
+  }
 
   ExposedDataset ds;
   ds.RasterInitialize(8, 8);
@@ -996,351 +1158,407 @@ TEST(GdalDatasetTest, RasterIOAndAdviseReadComprehensive) {
   ds.SetBand(2, b2);
 
   GDALDatasetH hDS = GDALDataset::ToHandle(&ds);
-  GByte buf[128] = {0};
+  std::vector<GByte> buf(128, 0);
 
-  // ExtraArg version too high
   GDALRasterIOExtraArg extra;
   INIT_RASTERIO_EXTRA_ARG(extra);
-  extra.nVersion = RASTERIO_EXTRA_ARG_CURRENT_VERSION + 10;
-  EXPECT_EQ(GDALDatasetRasterIOEx(hDS, GF_Read, 0, 0, 4, 4, buf, 4, 4, GDT_Byte,
-                                  1, nullptr, 0, 0, 0, &extra),
-            CE_Failure);
-  INIT_RASTERIO_EXTRA_ARG(extra);
 
-  // Null buffer
-  EXPECT_EQ(GDALDatasetRasterIO(hDS, GF_Read, 0, 0, 4, 4, nullptr, 4, 4,
-                                GDT_Byte, 1, nullptr, 0, 0, 0),
-            CE_Failure);
+  // 1. Error cases: invalid ExtraArg version, null buffer, GF_Write on
+  // read-only, window out of range, band count > GetRasterCount, invalid band
+  // map, invalid eBufType.
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    extra.nVersion = RASTERIO_EXTRA_ARG_CURRENT_VERSION + 10;
+    EXPECT_EQ(CE_Failure,
+              GDALDatasetRasterIOEx(hDS, GF_Read, 0, 0, 4, 4, buf.data(), 4, 4,
+                                    GDT_Byte, 1, nullptr, 0, 0, 0, &extra));
+    INIT_RASTERIO_EXTRA_ARG(extra);
 
-  // GF_Write on read-only dataset
-  EXPECT_EQ(GDALDatasetRasterIO(hDS, GF_Write, 0, 0, 4, 4, buf, 4, 4, GDT_Byte,
-                                1, nullptr, 0, 0, 0),
-            CE_Failure);
+    EXPECT_EQ(CE_Failure,
+              GDALDatasetRasterIO(hDS, GF_Read, 0, 0, 4, 4, nullptr, 4, 4,
+                                  GDT_Byte, 1, nullptr, 0, 0, 0));
 
-  // Noop window (size 0)
-  EXPECT_EQ(GDALDatasetRasterIO(hDS, GF_Read, 0, 0, 0, 4, buf, 4, 4, GDT_Byte,
-                                1, nullptr, 0, 0, 0),
-            CE_None);
+    EXPECT_EQ(CE_Failure,
+              GDALDatasetRasterIO(hDS, GF_Write, 0, 0, 4, 4, buf.data(), 4, 4,
+                                  GDT_Byte, 1, nullptr, 0, 0, 0));
 
-  // Window out of range
-  EXPECT_EQ(GDALDatasetRasterIO(hDS, GF_Read, -1, 0, 4, 4, buf, 4, 4, GDT_Byte,
-                                1, nullptr, 0, 0, 0),
-            CE_Failure);
-  EXPECT_EQ(GDALDatasetRasterIO(hDS, GF_Read, 0, 0, 10, 4, buf, 4, 4, GDT_Byte,
-                                1, nullptr, 0, 0, 0),
-            CE_Failure);
+    EXPECT_EQ(CE_Failure,
+              GDALDatasetRasterIO(hDS, GF_Read, -1, 0, 4, 4, buf.data(), 4, 4,
+                                  GDT_Byte, 1, nullptr, 0, 0, 0));
+    EXPECT_EQ(CE_Failure,
+              GDALDatasetRasterIO(hDS, GF_Read, 0, 0, 10, 4, buf.data(), 4, 4,
+                                  GDT_Byte, 1, nullptr, 0, 0, 0));
 
-  // Band count > GetRasterCount() with null band map
-  EXPECT_EQ(GDALDatasetRasterIO(hDS, GF_Read, 0, 0, 4, 4, buf, 4, 4, GDT_Byte,
-                                5, nullptr, 0, 0, 0),
-            CE_Failure);
+    EXPECT_EQ(CE_Failure,
+              GDALDatasetRasterIO(hDS, GF_Read, 0, 0, 4, 4, buf.data(), 4, 4,
+                                  GDT_Byte, 5, nullptr, 0, 0, 0));
 
-  // Invalid band in panBandMap
-  int bad_map[] = {0};
-  EXPECT_EQ(GDALDatasetRasterIO(hDS, GF_Read, 0, 0, 4, 4, buf, 4, 4, GDT_Byte,
-                                1, bad_map, 0, 0, 0),
-            CE_Failure);
+    constexpr std::array<int, 1> kBadMap = {0};
+    EXPECT_EQ(CE_Failure,
+              GDALDatasetRasterIO(hDS, GF_Read, 0, 0, 4, 4, buf.data(), 4, 4,
+                                  GDT_Byte, 1, const_cast<int*>(kBadMap.data()),
+                                  0, 0, 0));
 
-  // Invalid eBufType
-  EXPECT_EQ(GDALDatasetRasterIO(hDS, GF_Read, 0, 0, 4, 4, buf, 4, 4,
-                                GDT_Unknown, 1, nullptr, 0, 0, 0),
-            CE_Failure);
+    EXPECT_EQ(CE_Failure,
+              GDALDatasetRasterIO(hDS, GF_Read, 0, 0, 4, 4, buf.data(), 4, 4,
+                                  GDT_Unknown, 1, nullptr, 0, 0, 0));
+    CPLErrorReset();
+  }
 
-  // Valid multi-band read
-  EXPECT_EQ(GDALDatasetRasterIO(hDS, GF_Read, 0, 0, 4, 4, buf, 4, 4, GDT_Byte,
-                                2, nullptr, 0, 0, 0),
-            CE_None);
+  // 2. Valid RasterIO cases: noop window, multi-band read, forced cached IO,
+  // pixel interleaved metadata, resampled reads with nodata / colortable /
+  // overviews.
+  EXPECT_EQ(CE_None, GDALDatasetRasterIO(hDS, GF_Read, 0, 0, 0, 4, buf.data(),
+                                         4, 4, GDT_Byte, 1, nullptr, 0, 0, 0));
 
-  // Forced cached IO
+  EXPECT_EQ(CE_None, GDALDatasetRasterIO(hDS, GF_Read, 0, 0, 4, 4, buf.data(),
+                                         4, 4, GDT_Byte, 2, nullptr, 0, 0, 0));
+
   ds.bForceCachedIO = true;
-  EXPECT_EQ(GDALDatasetRasterIO(hDS, GF_Read, 0, 0, 4, 4, buf, 4, 4, GDT_Byte,
-                                2, nullptr, 0, 0, 0),
-            CE_None);
+  EXPECT_EQ(CE_None, GDALDatasetRasterIO(hDS, GF_Read, 0, 0, 4, 4, buf.data(),
+                                         4, 4, GDT_Byte, 2, nullptr, 0, 0, 0));
   ds.bForceCachedIO = false;
 
-  // Pixel interleaved metadata -> BlockBasedRasterIO
   ds.SetMetadataItem("INTERLEAVE", "PIXEL", "IMAGE_STRUCTURE");
-  EXPECT_EQ(GDALDatasetRasterIO(hDS, GF_Read, 0, 0, 4, 4, buf, 4, 4, GDT_Byte,
-                                2, nullptr, 0, 0, 0),
-            CE_None);
+  EXPECT_EQ(CE_None, GDALDatasetRasterIO(hDS, GF_Read, 0, 0, 4, 4, buf.data(),
+                                         4, 4, GDT_Byte, 2, nullptr, 0, 0, 0));
   ds.SetMetadataItem("INTERLEAVE", nullptr, "IMAGE_STRUCTURE");
 
-  // Multi-band resampled read (GRIORA_Bilinear) with all bands OK
+  // Multi-band resampled read (GRIORA_Bilinear) with all bands OK.
   extra.eResampleAlg = GRIORA_Bilinear;
-  EXPECT_EQ(GDALDatasetRasterIOEx(hDS, GF_Read, 0, 0, 8, 8, buf, 4, 4, GDT_Byte,
-                                  2, nullptr, 0, 0, 0, &extra),
-            CE_None);
+  EXPECT_EQ(CE_None,
+            GDALDatasetRasterIOEx(hDS, GF_Read, 0, 0, 8, 8, buf.data(), 4, 4,
+                                  GDT_Byte, 2, nullptr, 0, 0, 0, &extra));
 
   // Multi-band resampled read where band 1 is OK and band 2 has GMF_NODATA
-  // (exercises partial nOKBands == 1 < nBandCount == 2)
+  // (exercises partial nOKBands == 1 < nBandCount == 2).
   b2->custom_mask_flags_ = GMF_NODATA;
-  EXPECT_EQ(GDALDatasetRasterIOEx(hDS, GF_Read, 0, 0, 8, 8, buf, 4, 4, GDT_Byte,
-                                  2, nullptr, 0, 0, 0, &extra),
-            CE_None);
+  EXPECT_EQ(CE_None,
+            GDALDatasetRasterIOEx(hDS, GF_Read, 0, 0, 8, 8, buf.data(), 4, 4,
+                                  GDT_Byte, 2, nullptr, 0, 0, 0, &extra));
   b2->custom_mask_flags_ = -1;
 
-  // Band 2 has a ColorTable
+  // Band 2 has a ColorTable.
   b2->color_table_ = std::make_unique<GDALColorTable>();
-  EXPECT_EQ(GDALDatasetRasterIOEx(hDS, GF_Read, 0, 0, 8, 8, buf, 4, 4, GDT_Byte,
-                                  2, nullptr, 0, 0, 0, &extra),
-            CE_None);
+  EXPECT_EQ(CE_None,
+            GDALDatasetRasterIOEx(hDS, GF_Read, 0, 0, 8, 8, buf.data(), 4, 4,
+                                  GDT_Byte, 2, nullptr, 0, 0, 0, &extra));
   b2->color_table_.reset();
 
-  // Band 1 has overviews -> breaks out of loop at i==0 (nOKBands == 0)
+  // Band 1 has overviews -> breaks out of loop at i==0 (nOKBands == 0).
   b1->ovr_count_ = 1;
   b1->overviews_.push_back(
       std::make_unique<CustomBand>(&ds, 1, GDT_Byte, 4, 1));
   b1->overviews_[0]->nRasterXSize = 4;
   b1->overviews_[0]->nRasterYSize = 4;
-  EXPECT_EQ(GDALDatasetRasterIOEx(hDS, GF_Read, 0, 0, 8, 8, buf, 4, 4, GDT_Byte,
-                                  2, nullptr, 0, 0, 0, &extra),
-            CE_None);
+  EXPECT_EQ(CE_None,
+            GDALDatasetRasterIOEx(hDS, GF_Read, 0, 0, 8, 8, buf.data(), 4, 4,
+                                  GDT_Byte, 2, nullptr, 0, 0, 0, &extra));
   b1->ovr_count_ = 0;
   b1->overviews_.clear();
 
-  // AdviseRead tests
-  EXPECT_EQ(GDALDatasetAdviseRead(hDS, 0, 0, 0, 4, 4, 4, GDT_Byte, 2, nullptr,
-                                  nullptr),
-            CE_None);
-  EXPECT_EQ(GDALDatasetAdviseRead(hDS, -1, 0, 4, 4, 4, 4, GDT_Byte, 2, nullptr,
-                                  nullptr),
-            CE_Failure);
-  int map2[] = {1, 2};
-  EXPECT_EQ(
-      GDALDatasetAdviseRead(hDS, 0, 0, 4, 4, 4, 4, GDT_Byte, 2, map2, nullptr),
-      CE_None);
-  b2->advise_err_ = CE_Failure;
-  EXPECT_EQ(
-      GDALDatasetAdviseRead(hDS, 0, 0, 4, 4, 4, 4, GDT_Byte, 2, map2, nullptr),
-      CE_Failure);
-  b2->advise_err_ = CE_None;
+  // 3. AdviseRead tests.
+  EXPECT_EQ(CE_None, GDALDatasetAdviseRead(hDS, 0, 0, 0, 4, 4, 4, GDT_Byte, 2,
+                                           nullptr, nullptr));
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, GDALDatasetAdviseRead(hDS, -1, 0, 4, 4, 4, 4,
+                                                GDT_Byte, 2, nullptr, nullptr));
+    CPLErrorReset();
+  }
+  constexpr std::array<int, 2> kMap2 = {1, 2};
+  EXPECT_EQ(CE_None,
+            GDALDatasetAdviseRead(hDS, 0, 0, 4, 4, 4, 4, GDT_Byte, 2,
+                                  const_cast<int*>(kMap2.data()), nullptr));
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    b2->advise_err_ = CE_Failure;
+    EXPECT_EQ(CE_Failure,
+              GDALDatasetAdviseRead(hDS, 0, 0, 4, 4, 4, 4, GDT_Byte, 2,
+                                    const_cast<int*>(kMap2.data()), nullptr));
+    b2->advise_err_ = CE_None;
+    CPLErrorReset();
+  }
 
-  // Null band in middle of band array triggers error in
-  // ValidateRasterIOOrAdviseReadParameters
-  ExposedDataset sparse_ds;
-  sparse_ds.RasterInitialize(4, 4);
-  sparse_ds.SetBand(2, new CustomBand(&sparse_ds, 2));
-  int map_band1[] = {1};
-  EXPECT_EQ(sparse_ds.RasterIO(GF_Read, 0, 0, 2, 2, buf, 2, 2, GDT_Byte, 1,
-                               map_band1, 0, 0, 0, nullptr),
-            CE_Failure);
-
-  CPLPopErrorHandler();
+  // 4. Null band in middle of band array triggers error in
+  // ValidateRasterIOOrAdviseReadParameters.
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    ExposedDataset sparse_ds;
+    sparse_ds.RasterInitialize(4, 4);
+    sparse_ds.SetBand(2, new CustomBand(&sparse_ds, 2));
+    constexpr std::array<int, 1> kMapBand1 = {1};
+    EXPECT_EQ(CE_Failure, sparse_ds.RasterIO(GF_Read, 0, 0, 2, 2, buf.data(), 2,
+                                             2, GDT_Byte, 1,
+                                             const_cast<int*>(kMapBand1.data()),
+                                             0, 0, 0, nullptr));
+    CPLErrorReset();
+  }
 }
 
 TEST(GdalDatasetTest, OpenOpenExOpenSharedDumpAndAsyncReader) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
+  GDALRegister_GTiff();
+  absl::Cleanup cleanup_dir = [] { VSIRmdirRecursive(kTempDir); };
 
-  EXPECT_EQ(GDALOpenEx(nullptr, 0, nullptr, nullptr, nullptr), nullptr);
-  EXPECT_EQ(GDALOpenShared(nullptr, GA_ReadOnly), nullptr);
-  EXPECT_EQ(GDALClose(nullptr), CE_None);
-  EXPECT_EQ(GDALDumpOpenDatasets(nullptr), 0);
+  EXPECT_EQ(CE_None, GDALClose(nullptr));
+  EXPECT_EQ(0, GDALDumpOpenDatasets(nullptr));
 
-  // Incompatible GDAL_OF_THREAD_SAFE flags
-  EXPECT_EQ(GDALOpenEx("/vsimem/no.tif",
-                       GDAL_OF_THREAD_SAFE | GDAL_OF_RASTER | GDAL_OF_UPDATE,
-                       nullptr, nullptr, nullptr),
-            nullptr);
-  EXPECT_EQ(GDALOpenEx("/vsimem/no.tif",
-                       GDAL_OF_THREAD_SAFE | GDAL_OF_RASTER | GDAL_OF_VECTOR,
-                       nullptr, nullptr, nullptr),
-            nullptr);
-  EXPECT_EQ(
-      GDALOpenEx("/vsimem/no.tif",
-                 GDAL_OF_THREAD_SAFE | GDAL_OF_RASTER | GDAL_OF_MULTIDIM_RASTER,
-                 nullptr, nullptr, nullptr),
-      nullptr);
-  EXPECT_EQ(GDALOpenEx("/vsimem/no.tif",
-                       GDAL_OF_THREAD_SAFE | GDAL_OF_RASTER | GDAL_OF_GNM,
-                       nullptr, nullptr, nullptr),
-            nullptr);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, GDALOpenEx(nullptr, 0, nullptr, nullptr, nullptr));
+    EXPECT_EQ(nullptr, GDALOpenShared(nullptr, GA_ReadOnly));
 
-  // Incompatible GDAL_OF_SHARED | GDAL_OF_INTERNAL
-  EXPECT_EQ(GDALOpenEx("/vsimem/no.tif", GDAL_OF_SHARED | GDAL_OF_INTERNAL,
-                       nullptr, nullptr, nullptr),
-            nullptr);
+    // Incompatible GDAL_OF_THREAD_SAFE flags.
+    constexpr char kNoTif[] = "/vsimem/gdaldataset_test/no.tif";
+    EXPECT_EQ(nullptr,
+              GDALOpenEx(kNoTif,
+                         GDAL_OF_THREAD_SAFE | GDAL_OF_RASTER | GDAL_OF_UPDATE,
+                         nullptr, nullptr, nullptr));
+    EXPECT_EQ(nullptr,
+              GDALOpenEx(kNoTif,
+                         GDAL_OF_THREAD_SAFE | GDAL_OF_RASTER | GDAL_OF_VECTOR,
+                         nullptr, nullptr, nullptr));
+    EXPECT_EQ(nullptr, GDALOpenEx(kNoTif,
+                                  GDAL_OF_THREAD_SAFE | GDAL_OF_RASTER |
+                                      GDAL_OF_MULTIDIM_RASTER,
+                                  nullptr, nullptr, nullptr));
+    EXPECT_EQ(
+        nullptr,
+        GDALOpenEx(kNoTif, GDAL_OF_THREAD_SAFE | GDAL_OF_RASTER | GDAL_OF_GNM,
+                   nullptr, nullptr, nullptr));
 
-  // Non-existent file with GDAL_OF_VERBOSE_ERROR and CACHE_KERCHUNK_JSON
-  const char* kerchunk_opts[] = {"CACHE_KERCHUNK_JSON=YES",
-                                 "@VALIDATE_OPEN_OPTIONS=NO", nullptr};
-  EXPECT_EQ(GDALOpenEx("/vsimem/does_not_exist_12345.tif",
-                       GDAL_OF_VERBOSE_ERROR, nullptr, kerchunk_opts, nullptr),
-            nullptr);
+    // Incompatible GDAL_OF_SHARED | GDAL_OF_INTERNAL.
+    EXPECT_EQ(nullptr, GDALOpenEx(kNoTif, GDAL_OF_SHARED | GDAL_OF_INTERNAL,
+                                  nullptr, nullptr, nullptr));
 
-  // Existing unrecognized file with GDAL_OF_VERBOSE_ERROR
-  const char* unrec_file = "/vsimem/unrecognized_file.bin";
-  WriteMemFile(unrec_file, "NOT_A_VALID_FORMAT_HEADER");
-  EXPECT_EQ(
-      GDALOpenEx(unrec_file, GDAL_OF_VERBOSE_ERROR, nullptr, nullptr, nullptr),
-      nullptr);
-  VSIUnlink(unrec_file);
+    // Non-existent file with GDAL_OF_VERBOSE_ERROR and CACHE_KERCHUNK_JSON.
+    constexpr std::array<const char*, 3> kKerchunkOpts = {
+        "CACHE_KERCHUNK_JSON=YES", "@VALIDATE_OPEN_OPTIONS=NO", nullptr};
+    EXPECT_EQ(nullptr,
+              GDALOpenEx("/vsimem/gdaldataset_test/does_not_exist_12345.tif",
+                         GDAL_OF_VERBOSE_ERROR, nullptr, kKerchunkOpts.data(),
+                         nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
+
+  // Existing unrecognized file with GDAL_OF_VERBOSE_ERROR.
+  {
+    constexpr char kUnrecFile[] =
+        "/vsimem/gdaldataset_test/unrecognized_file.bin";
+    VsiMemTempWrapper unrec_wrapper(kUnrecFile, "NOT_A_VALID_FORMAT_HEADER");
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, GDALOpenEx(kUnrecFile, GDAL_OF_VERBOSE_ERROR, nullptr,
+                                  nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
 
   // Create a real GTiff with overviews and test GDALOpenShared, OVERVIEW_LEVEL,
-  // GDAL_OF_THREAD_SAFE, GDALGetOpenDatasets, GDALDumpOpenDatasets, AsyncReader
-  const char* tif_file = "/vsimem/open_test.tif";
+  // GDAL_OF_THREAD_SAFE, GDALGetOpenDatasets, GDALDumpOpenDatasets,
+  // AsyncReader.
+  constexpr char kTifFile[] = "/vsimem/gdaldataset_test/open_test.tif";
   GDALDriver* gtiff_drv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(gtiff_drv, nullptr);
-  GDALDataset* ds_create =
-      gtiff_drv->Create(tif_file, 16, 16, 1, GDT_Byte, nullptr);
-  ASSERT_NE(ds_create, nullptr);
-  int ovr_factors[] = {2};
-  EXPECT_EQ(ds_create->BuildOverviews("NEAREST", 1, ovr_factors, 0, nullptr,
-                                      nullptr, nullptr, nullptr),
-            CE_None);
-  GDALClose(ds_create);
+  ASSERT_NE(nullptr, gtiff_drv);
+  GDALDatasetUniquePtr ds_create(
+      gtiff_drv->Create(kTifFile, 16, 16, 1, GDT_Byte, nullptr));
+  ASSERT_NE(nullptr, ds_create);
+  constexpr std::array<int, 1> kOvrFactors = {2};
+  EXPECT_EQ(CE_None,
+            ds_create->BuildOverviews("NEAREST", 1, kOvrFactors.data(), 0,
+                                      nullptr, nullptr, nullptr, nullptr));
+  ds_create.reset();
 
-  // GDALOpenShared in update mode, then read-only mode (reuses update dataset!)
-  GDALDatasetH hShared1 = GDALOpenShared(tif_file, GA_Update);
-  ASSERT_NE(hShared1, nullptr);
-  GDALDatasetH hShared2 = GDALOpenShared(tif_file, GA_ReadOnly);
-  EXPECT_EQ(hShared1, hShared2);
+  // GDALOpenShared in update mode, then read-only mode (reuses update dataset).
+  GDALDatasetUniquePtr shared1(
+      GDALDataset::FromHandle(GDALOpenShared(kTifFile, GA_Update)));
+  ASSERT_NE(nullptr, shared1);
+  GDALDatasetUniquePtr shared2(
+      GDALDataset::FromHandle(GDALOpenShared(kTifFile, GA_ReadOnly)));
+  EXPECT_EQ(shared1.get(), shared2.get());
 
-  // Open non-shared dataset too so GDALDumpOpenDatasets sees both shared and
-  // non-shared
-  GDALDatasetH hNonShared = GDALOpen(tif_file, GA_ReadOnly);
-  ASSERT_NE(hNonShared, nullptr);
+  // Explicitly test the GDALOpen() C API entry point to open a non-shared
+  // dataset so GDALDumpOpenDatasets sees both shared and non-shared datasets.
+  GDALDatasetUniquePtr non_shared(
+      GDALDataset::FromHandle(GDALOpen(kTifFile, GA_ReadOnly)));
+  ASSERT_NE(nullptr, non_shared);
 
   int open_count = 0;
   GDALDatasetH* open_list = nullptr;
   GDALGetOpenDatasets(&open_list, &open_count);
   EXPECT_GE(open_count, 2);
 
-  FILE* tmp_fp = tmpfile();
-  if (tmp_fp) {
-    EXPECT_GE(GDALDumpOpenDatasets(tmp_fp), 2);
-    fclose(tmp_fp);
+  char* dump_buf_raw = nullptr;
+  size_t dump_size = 0;
+  FILE* dump_fp = open_memstream(&dump_buf_raw, &dump_size);
+  ASSERT_NE(nullptr, dump_fp);
+  absl::Cleanup dump_fp_closer = [&dump_fp, &dump_buf_raw] {
+    if (dump_fp != nullptr) {
+      EXPECT_EQ(0, fclose(dump_fp));
+    }
+    std::free(dump_buf_raw);
+  };
+  EXPECT_GE(GDALDumpOpenDatasets(dump_fp), 2);
+  EXPECT_EQ(0, fclose(dump_fp));
+  dump_fp = nullptr;
+  EXPECT_GT(dump_size, 0u);
+
+  // AsyncReader on non_shared.
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr,
+              GDALBeginAsyncReader(nullptr, 0, 0, 4, 4, nullptr, 4, 4, GDT_Byte,
+                                   1, nullptr, 0, 0, 0, nullptr));
+    CPLErrorReset();
+  }
+  GDALEndAsyncReader(nullptr, nullptr);
+  std::vector<GByte> async_buf(16, 0);
+  GDALDatasetH h_non_shared = GDALDataset::ToHandle(non_shared.get());
+  GDALAsyncReaderH h_async =
+      GDALBeginAsyncReader(h_non_shared, 0, 0, 4, 4, async_buf.data(), 4, 4,
+                           GDT_Byte, 1, nullptr, 0, 0, 0, nullptr);
+  ASSERT_NE(nullptr, h_async);
+  GDALEndAsyncReader(h_non_shared, h_async);
+
+  EXPECT_EQ(CE_None, GDALClose(GDALDataset::ToHandle(non_shared.release())));
+  // Decrements refcount from 2 to 1.
+  EXPECT_EQ(CE_None, GDALClose(GDALDataset::ToHandle(shared2.release())));
+  // Closes shared dataset.
+  EXPECT_EQ(CE_None, GDALClose(GDALDataset::ToHandle(shared1.release())));
+
+  // Open with OVERVIEW_LEVEL=0only, OVERVIEW_LEVEL=NONE, OVERVIEW_LEVEL=99.
+  constexpr std::array<const char*, 2> kAllowedDrivers = {"GTiff", nullptr};
+  constexpr std::array<const char*, 2> kOvr0Opts = {"OVERVIEW_LEVEL=0only",
+                                                    nullptr};
+  GDALDatasetUniquePtr ovr0_ds(GDALDataset::FromHandle(
+      GDALOpenEx(kTifFile, GDAL_OF_RASTER | GDAL_OF_SHARED,
+                 kAllowedDrivers.data(), kOvr0Opts.data(), nullptr)));
+  ASSERT_NE(nullptr, ovr0_ds);
+  EXPECT_EQ(8, GDALGetRasterXSize(GDALDataset::ToHandle(ovr0_ds.get())));
+  ovr0_ds.reset();
+
+  constexpr std::array<const char*, 2> kOvrNoneOpts = {"OVERVIEW_LEVEL=NONE",
+                                                       nullptr};
+  GDALDatasetUniquePtr ovr_none_ds(
+      GDALDataset::Open(kTifFile, GDAL_OF_RASTER, kAllowedDrivers.data(),
+                        kOvrNoneOpts.data(), nullptr));
+  ASSERT_NE(nullptr, ovr_none_ds);
+  EXPECT_NE(nullptr, ovr_none_ds->GetOpenOptions());
+  EXPECT_NE(
+      nullptr,
+      const_cast<const GDALDataset*>(ovr_none_ds.get())->GetOpenOptions());
+  ovr_none_ds.reset();
+
+  constexpr std::array<const char*, 2> kOvrBadOpts = {"OVERVIEW_LEVEL=99",
+                                                      nullptr};
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr,
+              GDALOpenEx(kTifFile, GDAL_OF_RASTER | GDAL_OF_VERBOSE_ERROR,
+                         kAllowedDrivers.data(), kOvrBadOpts.data(), nullptr));
+    CPLErrorReset();
   }
 
-  // AsyncReader on hNonShared
-  EXPECT_EQ(GDALBeginAsyncReader(nullptr, 0, 0, 4, 4, nullptr, 4, 4, GDT_Byte,
-                                 1, nullptr, 0, 0, 0, nullptr),
-            nullptr);
-  GDALEndAsyncReader(nullptr, nullptr);
-  GByte async_buf[16] = {0};
-  GDALAsyncReaderH hAsync =
-      GDALBeginAsyncReader(hNonShared, 0, 0, 4, 4, async_buf, 4, 4, GDT_Byte, 1,
-                           nullptr, 0, 0, 0, nullptr);
-  ASSERT_NE(hAsync, nullptr);
-  GDALEndAsyncReader(hNonShared, hAsync);
-
-  EXPECT_EQ(GDALClose(hNonShared), CE_None);
-  EXPECT_EQ(GDALClose(hShared2), CE_None);  // Decrements refcount from 2 to 1
-  EXPECT_EQ(GDALClose(hShared1), CE_None);  // Closes
-
-  // Open with OVERVIEW_LEVEL=0, OVERVIEW_LEVEL=0only, OVERVIEW_LEVEL=NONE,
-  // OVERVIEW_LEVEL=99
-  const char* allowed_drivers[] = {"GTiff", nullptr};
-  const char* ovr0_opts[] = {"OVERVIEW_LEVEL=0only", nullptr};
-  GDALDatasetH hOvr0 = GDALOpenEx(tif_file, GDAL_OF_RASTER | GDAL_OF_SHARED,
-                                  allowed_drivers, ovr0_opts, nullptr);
-  ASSERT_NE(hOvr0, nullptr);
-  EXPECT_EQ(GDALGetRasterXSize(hOvr0), 8);
-  GDALClose(hOvr0);
-
-  const char* ovr_none_opts[] = {"OVERVIEW_LEVEL=NONE", nullptr};
-  GDALDataset* poOvrNone = GDALDataset::Open(
-      tif_file, GDAL_OF_RASTER, allowed_drivers, ovr_none_opts, nullptr);
-  ASSERT_NE(poOvrNone, nullptr);
-  EXPECT_NE(poOvrNone->GetOpenOptions(), nullptr);
-  EXPECT_NE(const_cast<const GDALDataset*>(poOvrNone)->GetOpenOptions(),
-            nullptr);
-  GDALClose(poOvrNone);
-
-  const char* ovr_bad_opts[] = {"OVERVIEW_LEVEL=99", nullptr};
-  EXPECT_EQ(GDALOpenEx(tif_file, GDAL_OF_RASTER | GDAL_OF_VERBOSE_ERROR,
-                       allowed_drivers, ovr_bad_opts, nullptr),
-            nullptr);
-
-  // Open with GDAL_OF_THREAD_SAFE | GDAL_OF_RASTER | GDAL_OF_SHARED
-  GDALDatasetH hThreadSafe = GDALOpenEx(
-      tif_file, GDAL_OF_RASTER | GDAL_OF_THREAD_SAFE | GDAL_OF_SHARED,
-      allowed_drivers, nullptr, nullptr);
-  ASSERT_NE(hThreadSafe, nullptr);
-  GDALClose(hThreadSafe);
-
-  VSIUnlink(tif_file);
-  CPLPopErrorHandler();
+  // Open with GDAL_OF_THREAD_SAFE | GDAL_OF_RASTER | GDAL_OF_SHARED.
+  GDALDatasetUniquePtr thread_safe_ds(GDALDataset::FromHandle(GDALOpenEx(
+      kTifFile, GDAL_OF_RASTER | GDAL_OF_THREAD_SAFE | GDAL_OF_SHARED,
+      kAllowedDrivers.data(), nullptr, nullptr)));
+  ASSERT_NE(nullptr, thread_safe_ds);
+  thread_safe_ds.reset();
 }
 
 TEST(GdalDatasetTest, ReportErrorAndDerivedSubdatasetsMetadata) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
   ExposedDataset ds;
   ds.RasterInitialize(4, 4);
-  ds.SetDescription("");
-  ds.ReportError(CE_Warning, CPLE_AppDefined, "Empty desc warning %d", 1);
-  ds.SetDescription("/vsimem/my_ds.tif");
-  ds.ReportError(CE_Warning, CPLE_AppDefined, "Named desc warning %d", 2);
-  GDALDataset::ReportError("/vsimem/static_ds.tif", CE_Warning, CPLE_AppDefined,
-                           "Static warning %d", 3);
-  GDALDataset::ReportUpdateNotSupportedByDriver("TESTDRV");
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    ds.SetDescription("");
+    ds.ReportError(CE_Warning, CPLE_AppDefined, "Empty desc warning %d", 1);
+    EXPECT_EQ(CE_Warning, CPLGetLastErrorType());
+    ds.SetDescription("/vsimem/gdaldataset_test/my_ds.tif");
+    ds.ReportError(CE_Warning, CPLE_AppDefined, "Named desc warning %d", 2);
+    GDALDataset::ReportError("/vsimem/gdaldataset_test/static_ds.tif",
+                             CE_Warning, CPLE_AppDefined, "Static warning %d",
+                             3);
+    GDALDataset::ReportUpdateNotSupportedByDriver("TESTDRV");
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
 
-  // 0 bands -> no DERIVED_SUBDATASETS domain
-  char** domains0 = ds.GetMetadataDomainList();
-  EXPECT_EQ(CSLFindString(domains0, "DERIVED_SUBDATASETS"), -1);
-  CSLDestroy(domains0);
-  EXPECT_EQ(ds.GetMetadata("DERIVED_SUBDATASETS"), nullptr);
+  // 0 bands -> no DERIVED_SUBDATASETS domain.
+  const StringListPtr domains0(ds.GetMetadataDomainList(), CSLDestroy);
+  EXPECT_EQ(-1, CSLFindString(domains0.get(), "DERIVED_SUBDATASETS"));
+  EXPECT_EQ(nullptr, ds.GetMetadata("DERIVED_SUBDATASETS"));
 
-  // 1 real band
+  // 1 real band.
   ds.SetBand(1, new CustomBand(&ds, 1, GDT_Byte));
-  char** domains1 = ds.GetMetadataDomainList();
-  EXPECT_GE(CSLFindString(domains1, "DERIVED_SUBDATASETS"), 0);
-  CSLDestroy(domains1);
+  const StringListPtr domains1(ds.GetMetadataDomainList(), CSLDestroy);
+  EXPECT_GE(CSLFindString(domains1.get(), "DERIVED_SUBDATASETS"), 0);
   char** derived_md1 = ds.GetMetadata("DERIVED_SUBDATASETS");
-  EXPECT_NE(derived_md1, nullptr);
-  const int count1 = CSLCount(derived_md1);
+  EXPECT_NE(nullptr, derived_md1);
+  const size_t count1 = CslToVector(derived_md1).size();
 
-  // Add a complex band -> includes complex derived subdatasets too
+  // Add a complex band -> includes complex derived subdatasets too.
   ds.SetBand(2, new CustomBand(&ds, 2, GDT_CFloat32));
   char** derived_md2 = ds.GetMetadata("DERIVED_SUBDATASETS");
-  EXPECT_GE(CSLCount(derived_md2), count1);
-
-  CPLPopErrorHandler();
+  EXPECT_GE(CslToVector(derived_md2).size(), count1);
 }
 
 TEST(GdalDatasetTest, VectorLayersCreateCopyAndIterators) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
-  EXPECT_EQ(GDALDatasetGetLayerCount(nullptr), 0);
-  EXPECT_EQ(GDALDatasetGetLayer(nullptr, 0), nullptr);
-  EXPECT_EQ(GDALDatasetGetLayerByName(nullptr, "a"), nullptr);
-  EXPECT_EQ(GDALDatasetIsLayerPrivate(nullptr, 0), 0);
-  EXPECT_EQ(GDALDatasetDeleteLayer(nullptr, 0), OGRERR_INVALID_HANDLE);
-  EXPECT_EQ(GDALDatasetCreateLayer(nullptr, "a", nullptr, wkbPoint, nullptr),
-            nullptr);
-  EXPECT_EQ(
-      GDALDatasetCreateLayerFromGeomFieldDefn(nullptr, "a", nullptr, nullptr),
-      nullptr);
-  EXPECT_EQ(GDALDatasetCopyLayer(nullptr, nullptr, "a", nullptr), nullptr);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(0, GDALDatasetGetLayerCount(nullptr));
+    EXPECT_EQ(nullptr, GDALDatasetGetLayer(nullptr, 0));
+    EXPECT_EQ(nullptr, GDALDatasetGetLayerByName(nullptr, "a"));
+    EXPECT_EQ(0, GDALDatasetIsLayerPrivate(nullptr, 0));
+    EXPECT_EQ(OGRERR_INVALID_HANDLE, GDALDatasetDeleteLayer(nullptr, 0));
+    EXPECT_EQ(nullptr,
+              GDALDatasetCreateLayer(nullptr, "a", nullptr, wkbPoint, nullptr));
+    EXPECT_EQ(nullptr, GDALDatasetCreateLayerFromGeomFieldDefn(
+                           nullptr, "a", nullptr, nullptr));
+    EXPECT_EQ(nullptr, GDALDatasetCopyLayer(nullptr, nullptr, "a", nullptr));
+    CPLErrorReset();
+  }
 
   ExposedDataset ds;
   GDALDatasetH hDS = GDALDataset::ToHandle(&ds);
 
-  // Base class defaults
+  // Base class defaults, null layer name checks, and CopyLayer without
+  // ODsCCreateLayer.
   struct MinimalDataset : public GDALDataset {
   } base_ds;
-  EXPECT_EQ(base_ds.GetLayerCount(), 0);
-  EXPECT_EQ(base_ds.GetLayer(0), nullptr);
+  EXPECT_EQ(0, base_ds.GetLayerCount());
+  EXPECT_EQ(nullptr, base_ds.GetLayer(0));
   EXPECT_FALSE(base_ds.IsLayerPrivate(0));
-  EXPECT_EQ(base_ds.DeleteLayer(0), OGRERR_UNSUPPORTED_OPERATION);
-  EXPECT_EQ(base_ds.CreateLayer("l1"), nullptr);
-  EXPECT_EQ(base_ds.CreateLayer("l1", nullptr), nullptr);
+  EXPECT_EQ(OGRERR_UNSUPPORTED_OPERATION, base_ds.DeleteLayer(0));
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, base_ds.CreateLayer("l1"));
+    EXPECT_EQ(nullptr, base_ds.CreateLayer("l1", nullptr));
 
-  // Null layer name checks in C API
-  EXPECT_EQ(GDALDatasetCreateLayer(hDS, nullptr, nullptr, wkbPoint, nullptr),
-            nullptr);
-  EXPECT_EQ(
-      GDALDatasetCreateLayerFromGeomFieldDefn(hDS, nullptr, nullptr, nullptr),
-      nullptr);
+    EXPECT_EQ(nullptr,
+              GDALDatasetCreateLayer(hDS, nullptr, nullptr, wkbPoint, nullptr));
+    EXPECT_EQ(nullptr, GDALDatasetCreateLayerFromGeomFieldDefn(
+                           hDS, nullptr, nullptr, nullptr));
 
-  // CopyLayer when ODsCCreateLayer is false
-  CustomLayer src_lyr("src", wkbCurvePolygon);
-  EXPECT_EQ(ds.CopyLayer(&src_lyr, "dst", nullptr), nullptr);
+    CustomLayer src_lyr("src", wkbCurvePolygon);
+    EXPECT_EQ(nullptr, ds.CopyLayer(&src_lyr, "dst", nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
 
-  // Enable layer creation on ds
+  // Enable layer creation on ds.
   ds.allow_create_layer_ = true;
   ds.allow_delete_layer_ = true;
   ds.SetMetadataItem(GDAL_DS_LAYER_CREATIONOPTIONLIST,
@@ -1348,41 +1566,40 @@ TEST(GdalDatasetTest, VectorLayersCreateCopyAndIterators) {
                      "  <Option name='OPT1' type='string'/>"
                      "</LayerCreationOptionList>");
 
-  const char* lco[] = {"OPT1=VAL", nullptr};
-  EXPECT_NE(GDALDatasetCreateLayer(hDS, "LayerOne", nullptr, wkbNone, lco),
-            nullptr);
-  // CreateLayer with non-linear geometry when ODsCCurveGeometries is false ->
-  // linearizes!
-  EXPECT_NE(GDALDatasetCreateLayer(hDS, "LayerTwo", nullptr, wkbCircularString,
-                                   nullptr),
-            nullptr);
-  EXPECT_EQ(ds.GetLayer(1)->GetGeomType(), wkbLineString);
+  constexpr std::array<const char*, 2> kLco = {"OPT1=VAL", nullptr};
+  EXPECT_NE(nullptr, GDALDatasetCreateLayer(hDS, "LayerOne", nullptr, wkbNone,
+                                            const_cast<char**>(kLco.data())));
+  // CreateLayer with non-linear geometry when ODsCCurveGeometries is false
+  // linearizes the geometry type.
+  EXPECT_NE(nullptr, GDALDatasetCreateLayer(hDS, "LayerTwo", nullptr,
+                                            wkbCircularString, nullptr));
+  EXPECT_EQ(wkbLineString, ds.GetLayer(1)->GetGeomType());
 
   OGRGeomFieldDefn gfd("geom", wkbPoint);
-  EXPECT_NE(GDALDatasetCreateLayerFromGeomFieldDefn(
-                hDS, "LayerThree", OGRGeomFieldDefn::ToHandle(&gfd), nullptr),
-            nullptr);
+  EXPECT_NE(nullptr,
+            GDALDatasetCreateLayerFromGeomFieldDefn(
+                hDS, "LayerThree", OGRGeomFieldDefn::ToHandle(&gfd), nullptr));
 
-  EXPECT_EQ(GDALDatasetGetLayerCount(hDS), 3);
-  EXPECT_NE(GDALDatasetGetLayer(hDS, 0), nullptr);
-  EXPECT_EQ(GDALDatasetIsLayerPrivate(hDS, 0), 0);
+  EXPECT_EQ(3, GDALDatasetGetLayerCount(hDS));
+  EXPECT_NE(nullptr, GDALDatasetGetLayer(hDS, 0));
+  EXPECT_EQ(0, GDALDatasetIsLayerPrivate(hDS, 0));
 
   // GetLayerByName & GetLayerIndex: exact match, case-insensitive match, not
-  // found, null
-  EXPECT_EQ(ds.GetLayerByName(nullptr), nullptr);
-  EXPECT_NE(GDALDatasetGetLayerByName(hDS, "LayerOne"), nullptr);
-  EXPECT_NE(GDALDatasetGetLayerByName(hDS, "layerone"), nullptr);
-  EXPECT_EQ(GDALDatasetGetLayerByName(hDS, "NoSuchLayer"), nullptr);
-  EXPECT_EQ(ds.GetLayerIndex("LayerTwo"), 1);
-  EXPECT_EQ(ds.GetLayerIndex("layertwo"), 1);
-  EXPECT_EQ(ds.GetLayerIndex("NoSuchLayer"), -1);
+  // found, null.
+  EXPECT_EQ(nullptr, ds.GetLayerByName(nullptr));
+  EXPECT_NE(nullptr, GDALDatasetGetLayerByName(hDS, "LayerOne"));
+  EXPECT_NE(nullptr, GDALDatasetGetLayerByName(hDS, "layerone"));
+  EXPECT_EQ(nullptr, GDALDatasetGetLayerByName(hDS, "NoSuchLayer"));
+  EXPECT_EQ(1, ds.GetLayerIndex("LayerTwo"));
+  EXPECT_EQ(1, ds.GetLayerIndex("layertwo"));
+  EXPECT_EQ(-1, ds.GetLayerIndex("NoSuchLayer"));
 
-  // Layers and ConstLayers iterators & copy/move/post-increment/indexing
+  // Layers and ConstLayers iterators & copy/move/post-increment/indexing.
   auto layers = ds.GetLayers();
-  EXPECT_EQ(layers.size(), 3U);
-  EXPECT_NE(layers[0], nullptr);
-  EXPECT_NE(layers[static_cast<size_t>(1)], nullptr);
-  EXPECT_NE(layers["LayerThree"], nullptr);
+  EXPECT_EQ(3U, layers.size());
+  EXPECT_NE(nullptr, layers[0]);
+  EXPECT_NE(nullptr, layers[static_cast<size_t>(1)]);
+  EXPECT_NE(nullptr, layers["LayerThree"]);
   GDALDataset::Layers::Iterator it_default;
   auto it1 = layers.begin();
   auto it_copy(it1);
@@ -1393,17 +1610,17 @@ TEST(GdalDatasetTest, VectorLayersCreateCopyAndIterators) {
   EXPECT_NE(*it_post, *it1);
   int lyr_cnt = 0;
   for (OGRLayer* l : layers) {
-    EXPECT_NE(l, nullptr);
+    EXPECT_NE(nullptr, l);
     ++lyr_cnt;
   }
-  EXPECT_EQ(lyr_cnt, 3);
+  EXPECT_EQ(3, lyr_cnt);
 
   const ExposedDataset& const_ds = ds;
   auto const_layers = const_ds.GetLayers();
-  EXPECT_EQ(const_layers.size(), 3U);
-  EXPECT_NE(const_layers[0], nullptr);
-  EXPECT_NE(const_layers[static_cast<size_t>(1)], nullptr);
-  EXPECT_NE(const_layers["LayerThree"], nullptr);
+  EXPECT_EQ(3U, const_layers.size());
+  EXPECT_NE(nullptr, const_layers[0]);
+  EXPECT_NE(nullptr, const_layers[static_cast<size_t>(1)]);
+  EXPECT_NE(nullptr, const_layers["LayerThree"]);
   GDALDataset::ConstLayers::Iterator cit_default;
   auto cit1 = const_layers.begin();
   auto cit_copy(cit1);
@@ -1414,13 +1631,13 @@ TEST(GdalDatasetTest, VectorLayersCreateCopyAndIterators) {
   EXPECT_NE(*cit_post, *cit1);
   lyr_cnt = 0;
   for (const OGRLayer* l : const_layers) {
-    EXPECT_NE(l, nullptr);
+    EXPECT_NE(nullptr, l);
     ++lyr_cnt;
   }
-  EXPECT_EQ(lyr_cnt, 3);
+  EXPECT_EQ(3, lyr_cnt);
 
   // CopyLayer tests:
-  // 1) Layer with 1 geom field, fields, metadata, and DST_SRSWKT reprojection
+  // 1. Layer with 1 geom field, fields, metadata, and DST_SRSWKT reprojection.
   OGRSpatialReference srs_src;
   srs_src.SetWellKnownGeogCS("WGS84");
   srs_src.SetAxisMappingStrategy(OAMS_TRADITIONAL_GIS_ORDER);
@@ -1428,378 +1645,419 @@ TEST(GdalDatasetTest, VectorLayersCreateCopyAndIterators) {
   copy_src.SetMetadataItem("META_K", "META_V");
   OGRFieldDefn f_id("id", OFTInteger);
   OGRFieldDefn f_name("name", OFTString);
-  EXPECT_EQ(copy_src.CreateField(&f_id, TRUE), OGRERR_NONE);
-  EXPECT_EQ(copy_src.CreateField(&f_name, TRUE), OGRERR_NONE);
+  EXPECT_EQ(OGRERR_NONE, copy_src.CreateField(&f_id, TRUE));
+  EXPECT_EQ(OGRERR_NONE, copy_src.CreateField(&f_name, TRUE));
   auto feat = std::make_unique<OGRFeature>(copy_src.GetLayerDefn());
   feat->SetFID(10);
   feat->SetField("id", 42);
   feat->SetField("name", "pt1");
   OGRPoint pt(2.0, 49.0);
   feat->SetGeometry(&pt);
-  EXPECT_EQ(copy_src.CreateFeature(feat.get()), OGRERR_NONE);
+  EXPECT_EQ(OGRERR_NONE, copy_src.CreateFeature(feat.get()));
 
-  // Pre-create 'id' field on destination layer, and test
-  // null_defn_before_field_
+  // Pre-create 'id' field on destination layer and test
+  // null_defn_before_field_.
   ds.precreated_fields_.push_back(f_id);
   ds.created_layers_null_defn_before_field_ = true;
   OGRSpatialReference srs_dst;
   srs_dst.importFromEPSG(3857);
-  char* dst_wkt = nullptr;
-  srs_dst.exportToWkt(&dst_wkt);
-  std::string dst_srs_opt = std::string("DST_SRSWKT=") + dst_wkt;
-  CPLFree(dst_wkt);
-  const char* copy_opts[] = {dst_srs_opt.c_str(), "COPY_MD=YES", nullptr};
+  char* dst_wkt_raw = nullptr;
+  ASSERT_EQ(OGRERR_NONE, srs_dst.exportToWkt(&dst_wkt_raw));
+  const std::unique_ptr<char, CplFreeDeleter> dst_wkt(dst_wkt_raw);
+  CPLStringList copy_opts;
+  copy_opts.SetNameValue("DST_SRSWKT", dst_wkt.get());
+  copy_opts.SetNameValue("COPY_MD", "YES");
 
-  OGRLayerH hCopied = GDALDatasetCopyLayer(hDS, OGRLayer::ToHandle(&copy_src),
-                                           "CopiedOne", copy_opts);
-  ASSERT_NE(hCopied, nullptr);
-  EXPECT_STREQ(OGRLayer::FromHandle(hCopied)->GetMetadataItem("META_K"),
-               "META_V");
+  OGRLayerH h_copied = GDALDatasetCopyLayer(hDS, OGRLayer::ToHandle(&copy_src),
+                                            "CopiedOne", copy_opts.List());
+  ASSERT_NE(nullptr, h_copied);
+  EXPECT_STREQ("META_V",
+               OGRLayer::FromHandle(h_copied)->GetMetadataItem("META_K"));
   ds.precreated_fields_.clear();
   ds.created_layers_null_defn_before_field_ = false;
 
-  // 2) CopyLayer with transactions enabled on destination layer and multiple
-  // geom fields
+  // 2. CopyLayer with transactions enabled on destination layer and multiple
+  // geom fields.
   CustomLayer copy_src2("copy_src2", wkbNone);
   OGRGeomFieldDefn gfd1("geom1", wkbPoint);
   OGRGeomFieldDefn gfd2("geom2", wkbPoint);
-  EXPECT_EQ(copy_src2.CreateGeomField(&gfd1, TRUE), OGRERR_NONE);
-  EXPECT_EQ(copy_src2.CreateGeomField(&gfd2, TRUE), OGRERR_NONE);
+  EXPECT_EQ(OGRERR_NONE, copy_src2.CreateGeomField(&gfd1, TRUE));
+  EXPECT_EQ(OGRERR_NONE, copy_src2.CreateGeomField(&gfd2, TRUE));
   auto feat2 = std::make_unique<OGRFeature>(copy_src2.GetLayerDefn());
   feat2->SetFID(10);
   OGRPoint pt2(2.0, 49.0);
   feat2->SetGeomField(0, &pt2);
   feat2->SetGeomField(1, &pt2);
-  EXPECT_EQ(copy_src2.CreateFeature(feat2.get()), OGRERR_NONE);
+  EXPECT_EQ(OGRERR_NONE, copy_src2.CreateFeature(feat2.get()));
 
   ds.allow_create_geom_field_ = true;
   ds.created_layers_support_tx_ = true;
-  ds.created_layers_skip_adding_field_ = true;  // Triggers buggy driver warning
-  EXPECT_NE(ds.CopyLayer(&copy_src2, "CopiedTx", nullptr), nullptr);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    ds.created_layers_skip_adding_field_ = true;  // Triggers driver warning.
+    EXPECT_NE(nullptr, ds.CopyLayer(&copy_src2, "CopiedTx", nullptr));
 
-  // 3) CopyLayer with transactions where CreateFeature fails ->
-  // RollbackTransaction!
-  ds.created_layers_create_feature_err_ = OGRERR_FAILURE;
-  OGRLayer* copied_rollback =
-      ds.CopyLayer(&copy_src2, "CopiedRollback", nullptr);
-  ASSERT_NE(copied_rollback, nullptr);
-  EXPECT_TRUE(static_cast<CustomLayer*>(copied_rollback)->rollback_called_);
-  ds.created_layers_create_feature_err_ = OGRERR_NONE;
-  ds.created_layers_support_tx_ = false;
-  ds.created_layers_skip_adding_field_ = false;
+    // 3. CopyLayer with transactions where CreateFeature fails ->
+    // RollbackTransaction.
+    ds.created_layers_create_feature_err_ = OGRERR_FAILURE;
+    OGRLayer* copied_rollback =
+        ds.CopyLayer(&copy_src2, "CopiedRollback", nullptr);
+    ASSERT_NE(nullptr, copied_rollback);
+    EXPECT_TRUE(static_cast<CustomLayer*>(copied_rollback)->rollback_called_);
+    ds.created_layers_create_feature_err_ = OGRERR_NONE;
+    ds.created_layers_support_tx_ = false;
+    ds.created_layers_skip_adding_field_ = false;
+    CPLErrorReset();
+  }
 
-  // DeleteLayer
-  EXPECT_EQ(GDALDatasetDeleteLayer(hDS, 0), OGRERR_NONE);
-
-  CPLPopErrorHandler();
+  // DeleteLayer.
+  EXPECT_EQ(OGRERR_NONE, GDALDatasetDeleteLayer(hDS, 0));
 }
 
 TEST(GdalDatasetTest, ExecuteSQLDDLAndSelectComprehensive) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    GDALDatasetReleaseResultSet(nullptr, nullptr);
+    EXPECT_EQ(nullptr,
+              GDALDatasetExecuteSQL(nullptr, "SELECT 1", nullptr, nullptr));
+    EXPECT_EQ(OGRERR_FAILURE, GDALDatasetAbortSQL(nullptr));
+    CPLErrorReset();
+  }
 
-  GDALDatasetReleaseResultSet(nullptr, nullptr);
-  EXPECT_EQ(GDALDatasetExecuteSQL(nullptr, "SELECT 1", nullptr, nullptr),
-            nullptr);
-  EXPECT_EQ(GDALDatasetAbortSQL(nullptr), OGRERR_FAILURE);
-
-  EXPECT_TRUE(GDALDataset::IsGenericSQLDialect("OGRSQL"));
-  EXPECT_TRUE(GDALDataset::IsGenericSQLDialect("SQLITE"));
-  EXPECT_FALSE(GDALDataset::IsGenericSQLDialect("NATIVE"));
-  EXPECT_FALSE(GDALDataset::IsGenericSQLDialect(nullptr));
+  EXPECT_EQ(TRUE, GDALDataset::IsGenericSQLDialect("OGRSQL"));
+  EXPECT_EQ(TRUE, GDALDataset::IsGenericSQLDialect("SQLITE"));
+  EXPECT_EQ(FALSE, GDALDataset::IsGenericSQLDialect("NATIVE"));
+  EXPECT_EQ(FALSE, GDALDataset::IsGenericSQLDialect(nullptr));
 
   ExposedDataset ds;
   ds.allow_delete_layer_ = true;
   ds.SetMetadataItem(GDAL_DMD_SUPPORTED_SQL_DIALECTS, "OGRSQL SQLITE CUSTOM");
   GDALDatasetH hDS = GDALDataset::ToHandle(&ds);
 
-  EXPECT_EQ(GDALDatasetAbortSQL(hDS), OGRERR_UNSUPPORTED_OPERATION);
+  EXPECT_EQ(OGRERR_UNSUPPORTED_OPERATION, GDALDatasetAbortSQL(hDS));
 
   auto lyr = std::make_unique<CustomLayer>("tbl", wkbPoint);
   CustomLayer* lyr_ptr = lyr.get();
   ds.layers_.push_back(std::move(lyr));
 
-  // 1.ALTER TABLE ADD [COLUMN] covering all SQL types in
-  // GDALDatasetParseSQLType
-  const char* add_col_stmts[] = {
-      "ALTER TABLE tbl ADD col_int INTEGER",
-      "ALTER TABLE tbl ADD COLUMN col_int_arr INTEGER[]",
-      "ALTER TABLE tbl ADD col_flt FLOAT",
-      "ALTER TABLE tbl ADD col_num NUMERIC(10, 2)",
-      "ALTER TABLE tbl ADD col_flt_arr FLOAT[]",
-      "ALTER TABLE tbl ADD col_str CHARACTER(20)",
-      "ALTER TABLE tbl ADD col_str_arr TEXT[]",
-      "ALTER TABLE tbl ADD col_date DATE",
-      "ALTER TABLE tbl ADD col_time TIME",
-      "ALTER TABLE tbl ADD col_dt TIMESTAMP",
-      "ALTER TABLE tbl ADD col_unk UNKNOWN_TYPE",
-      "ALTER TABLE tbl ADD bad_syntax",
-      "ALTER TABLE no_such_tbl ADD col_x INTEGER",
+  struct SqlCase {
+    const char* sql;
+    CPLErr expected;
   };
-  for (const char* stmt : add_col_stmts) {
-    GDALDatasetExecuteSQL(hDS, stmt, nullptr, "UNSUPPORTED_DIALECT");
-  }
+  auto run_sql_cases = [hDS](std::span<const SqlCase> cases,
+                             const char* dialect = nullptr) {
+    WithQuietHandler quiet;
+    for (const auto& tc : cases) {
+      SCOPED_TRACE(tc.sql);
+      CPLErrorReset();
+      OGRLayerH res = GDALDatasetExecuteSQL(hDS, tc.sql, nullptr, dialect);
+      // An unrecognized dialect emits a CE_Warning before falling back to
+      // OGRSQL; subsequent errors overwrite CPLGetLastErrorType with
+      // CE_Failure.
+      const CPLErr expected_err = (tc.expected == CE_None && dialect != nullptr)
+                                      ? CE_Warning
+                                      : tc.expected;
+      EXPECT_EQ(expected_err, CPLGetLastErrorType());
+      if (res != nullptr) {
+        GDALDatasetReleaseResultSet(hDS, res);
+      }
+    }
+    CPLErrorReset();
+  };
+
+  // 1. ALTER TABLE ADD [COLUMN] covering all SQL types in
+  // GDALDatasetParseSQLType.
+  constexpr std::array<SqlCase, 13> kAddColCases = {{
+      {.sql = "ALTER TABLE tbl ADD col_int INTEGER", .expected = CE_None},
+      {.sql = "ALTER TABLE tbl ADD COLUMN col_int_arr INTEGER[]",
+       .expected = CE_None},
+      {.sql = "ALTER TABLE tbl ADD col_flt FLOAT", .expected = CE_None},
+      {.sql = "ALTER TABLE tbl ADD col_num NUMERIC(10, 2)",
+       .expected = CE_None},
+      {.sql = "ALTER TABLE tbl ADD col_flt_arr FLOAT[]", .expected = CE_None},
+      {.sql = "ALTER TABLE tbl ADD col_str CHARACTER(20)", .expected = CE_None},
+      {.sql = "ALTER TABLE tbl ADD col_str_arr TEXT[]", .expected = CE_None},
+      {.sql = "ALTER TABLE tbl ADD col_date DATE", .expected = CE_None},
+      {.sql = "ALTER TABLE tbl ADD col_time TIME", .expected = CE_None},
+      {.sql = "ALTER TABLE tbl ADD col_dt TIMESTAMP", .expected = CE_None},
+      {.sql = "ALTER TABLE tbl ADD col_unk UNKNOWN_TYPE", .expected = CE_None},
+      {.sql = "ALTER TABLE tbl ADD bad_syntax", .expected = CE_Failure},
+      {.sql = "ALTER TABLE no_such_tbl ADD col_x INTEGER",
+       .expected = CE_Failure},
+  }};
+  run_sql_cases(kAddColCases, "UNSUPPORTED_DIALECT");
   EXPECT_GE(lyr_ptr->GetLayerDefn()->GetFieldCount(), 10);
 
-  // Add Int64 and Boolean subtypes so BuildParseInfo covers them
+  // Add Int64 and Boolean subtypes so BuildParseInfo covers them.
   OGRFieldDefn f_bool("col_bool", OFTInteger);
   f_bool.SetSubType(OFSTBoolean);
-  EXPECT_EQ(lyr_ptr->CreateField(&f_bool, TRUE), OGRERR_NONE);
+  EXPECT_EQ(OGRERR_NONE, lyr_ptr->CreateField(&f_bool, TRUE));
   OGRFieldDefn f_i64("col_i64", OFTInteger64);
-  EXPECT_EQ(lyr_ptr->CreateField(&f_i64, TRUE), OGRERR_NONE);
+  EXPECT_EQ(OGRERR_NONE, lyr_ptr->CreateField(&f_i64, TRUE));
   OGRFieldDefn f_i64_bool("col_i64_bool", OFTInteger64);
   f_i64_bool.SetSubType(OFSTBoolean);
-  EXPECT_EQ(lyr_ptr->CreateField(&f_i64_bool, TRUE), OGRERR_NONE);
+  EXPECT_EQ(OGRERR_NONE, lyr_ptr->CreateField(&f_i64_bool, TRUE));
   lyr_ptr->SetMetadataItem(OLMD_FID64, "YES");
   lyr_ptr->fid_col_ = "ogc_fid";
 
-  // 2. ALTER TABLE RENAME [COLUMN]
-  GDALDatasetExecuteSQL(hDS,
-                        "ALTER TABLE tbl RENAME COLUMN col_unk TO col_ren1",
-                        nullptr, nullptr);
-  GDALDatasetExecuteSQL(hDS, "ALTER TABLE tbl RENAME col_ren1 TO col_ren2",
-                        nullptr, nullptr);
-  GDALDatasetExecuteSQL(hDS, "ALTER TABLE tbl RENAME bad_syntax", nullptr,
-                        nullptr);
-  GDALDatasetExecuteSQL(hDS, "ALTER TABLE no_tbl RENAME a TO b", nullptr,
-                        nullptr);
-  GDALDatasetExecuteSQL(hDS, "ALTER TABLE tbl RENAME no_col TO b", nullptr,
-                        nullptr);
+  // 2. ALTER TABLE RENAME / ALTER / DROP / RENAME TO, CREATE INDEX, DROP INDEX.
+  constexpr std::array<SqlCase, 25> kDdlCases = {{
+      // ALTER TABLE RENAME [COLUMN].
+      {.sql = "ALTER TABLE tbl RENAME COLUMN col_unk TO col_ren1",
+       .expected = CE_None},
+      {.sql = "ALTER TABLE tbl RENAME col_ren1 TO col_ren2",
+       .expected = CE_None},
+      {.sql = "ALTER TABLE tbl RENAME bad_syntax", .expected = CE_Failure},
+      {.sql = "ALTER TABLE no_tbl RENAME a TO b", .expected = CE_Failure},
+      {.sql = "ALTER TABLE tbl RENAME no_col TO b", .expected = CE_Failure},
 
-  // 3. ALTER TABLE ALTER [COLUMN]
-  GDALDatasetExecuteSQL(
-      hDS, "ALTER TABLE tbl ALTER COLUMN col_ren2 TYPE VARCHAR(30)", nullptr,
-      nullptr);
-  // Same type and width -> l_nFlags == 0
-  GDALDatasetExecuteSQL(hDS, "ALTER TABLE tbl ALTER col_ren2 TYPE VARCHAR(30)",
-                        nullptr, nullptr);
-  GDALDatasetExecuteSQL(hDS, "ALTER TABLE tbl ALTER col_ren2 TYPE INTEGER",
-                        nullptr, nullptr);
-  GDALDatasetExecuteSQL(hDS, "ALTER TABLE tbl ALTER bad_syntax", nullptr,
-                        nullptr);
-  GDALDatasetExecuteSQL(hDS, "ALTER TABLE no_tbl ALTER a TYPE INTEGER", nullptr,
-                        nullptr);
-  GDALDatasetExecuteSQL(hDS, "ALTER TABLE tbl ALTER no_col TYPE INTEGER",
-                        nullptr, nullptr);
+      // ALTER TABLE ALTER [COLUMN].
+      {.sql = "ALTER TABLE tbl ALTER COLUMN col_ren2 TYPE VARCHAR(30)",
+       .expected = CE_None},
+      // Same type and width -> l_nFlags == 0.
+      {.sql = "ALTER TABLE tbl ALTER col_ren2 TYPE VARCHAR(30)",
+       .expected = CE_None},
+      {.sql = "ALTER TABLE tbl ALTER col_ren2 TYPE INTEGER",
+       .expected = CE_None},
+      {.sql = "ALTER TABLE tbl ALTER bad_syntax", .expected = CE_Failure},
+      {.sql = "ALTER TABLE no_tbl ALTER a TYPE INTEGER",
+       .expected = CE_Failure},
+      {.sql = "ALTER TABLE tbl ALTER no_col TYPE INTEGER",
+       .expected = CE_Failure},
 
-  // 4. ALTER TABLE DROP [COLUMN]
-  GDALDatasetExecuteSQL(hDS, "ALTER TABLE tbl DROP COLUMN col_ren2", nullptr,
-                        nullptr);
-  GDALDatasetExecuteSQL(hDS, "ALTER TABLE tbl DROP col_dt", nullptr, nullptr);
-  GDALDatasetExecuteSQL(hDS, "ALTER TABLE tbl DROP", nullptr, nullptr);
-  GDALDatasetExecuteSQL(hDS, "ALTER TABLE no_tbl DROP a", nullptr, nullptr);
-  GDALDatasetExecuteSQL(hDS, "ALTER TABLE tbl DROP no_col", nullptr, nullptr);
+      // ALTER TABLE DROP [COLUMN].
+      {.sql = "ALTER TABLE tbl DROP COLUMN col_ren2", .expected = CE_None},
+      {.sql = "ALTER TABLE tbl DROP col_dt", .expected = CE_None},
+      {.sql = "ALTER TABLE tbl DROP", .expected = CE_Failure},
+      {.sql = "ALTER TABLE no_tbl DROP a", .expected = CE_Failure},
+      {.sql = "ALTER TABLE tbl DROP no_col", .expected = CE_Failure},
 
-  // 5. ALTER TABLE RENAME TO and unsupported ALTER TABLE
-  GDALDatasetExecuteSQL(hDS, "ALTER TABLE tbl RENAME TO tbl_renamed", nullptr,
-                        nullptr);
-  GDALDatasetExecuteSQL(hDS, "ALTER TABLE tbl_renamed RENAME TO tbl", nullptr,
-                        nullptr);
-  GDALDatasetExecuteSQL(hDS, "ALTER TABLE no_tbl RENAME TO tbl2", nullptr,
-                        nullptr);
-  GDALDatasetExecuteSQL(hDS, "ALTER TABLE tbl FOOBAR BAZ", nullptr, nullptr);
+      // ALTER TABLE RENAME TO and unsupported ALTER TABLE.
+      {.sql = "ALTER TABLE tbl RENAME TO tbl_renamed", .expected = CE_None},
+      {.sql = "ALTER TABLE tbl_renamed RENAME TO tbl", .expected = CE_None},
+      {.sql = "ALTER TABLE no_tbl RENAME TO tbl2", .expected = CE_Failure},
+      {.sql = "ALTER TABLE tbl FOOBAR BAZ", .expected = CE_Failure},
 
-  // 6. CREATE INDEX and DROP INDEX
-  GDALDatasetExecuteSQL(hDS, "CREATE INDEX bad syntax", nullptr, nullptr);
-  GDALDatasetExecuteSQL(hDS, "CREATE INDEX ON no_tbl USING col_int", nullptr,
-                        nullptr);
-  // Layer without index support
-  GDALDatasetExecuteSQL(hDS, "CREATE INDEX ON tbl USING col_int", nullptr,
-                        nullptr);
-  GDALDatasetExecuteSQL(hDS, "DROP INDEX bad syntax", nullptr, nullptr);
-  GDALDatasetExecuteSQL(hDS, "DROP INDEX ON no_tbl", nullptr, nullptr);
-  GDALDatasetExecuteSQL(hDS, "DROP INDEX ON tbl", nullptr, nullptr);
+      // CREATE INDEX and DROP INDEX when layer lacks index support.
+      {.sql = "CREATE INDEX bad syntax", .expected = CE_Failure},
+      {.sql = "CREATE INDEX ON no_tbl USING col_int", .expected = CE_Failure},
+      {.sql = "CREATE INDEX ON tbl USING col_int", .expected = CE_Failure},
+      {.sql = "DROP INDEX bad syntax", .expected = CE_Failure},
+      {.sql = "DROP INDEX ON no_tbl", .expected = CE_Failure},
+  }};
+  run_sql_cases(kDdlCases);
+  constexpr std::array<SqlCase, 1> kDropIdxUnsupportedCases = {{
+      {.sql = "DROP INDEX ON tbl", .expected = CE_Failure},
+  }};
+  run_sql_cases(kDropIdxUnsupportedCases);
 
-  // Enable index support on tbl
+  // Enable index support on tbl (DummyIndex returns OGRERR_FAILURE without
+  // emitting a CPLError, exercising the silent error return branch).
   lyr_ptr->EnableDummyIndex();
-  GDALDatasetExecuteSQL(hDS, "CREATE INDEX ON tbl USING no_col", nullptr,
-                        nullptr);
-  GDALDatasetExecuteSQL(hDS, "CREATE INDEX ON tbl USING col_int", nullptr,
-                        nullptr);
+  constexpr std::array<SqlCase, 2> kIdxCreateCases = {{
+      {.sql = "CREATE INDEX ON tbl USING no_col", .expected = CE_None},
+      {.sql = "CREATE INDEX ON tbl USING col_int", .expected = CE_None},
+  }};
+  run_sql_cases(kIdxCreateCases);
+
   lyr_ptr->dummy_idx_->create_err_ = OGRERR_FAILURE;
-  CPLErrorReset();
-  GDALDatasetExecuteSQL(hDS, "CREATE INDEX ON tbl USING col_int", nullptr,
-                        nullptr);
+  constexpr std::array<SqlCase, 1> kIdxCreateFailCases = {{
+      {.sql = "CREATE INDEX ON tbl USING col_int", .expected = CE_Failure},
+  }};
+  run_sql_cases(kIdxCreateFailCases);
   lyr_ptr->dummy_idx_->create_err_ = OGRERR_NONE;
 
-  GDALDatasetExecuteSQL(hDS, "DROP INDEX ON tbl USING no_col", nullptr,
-                        nullptr);
-  GDALDatasetExecuteSQL(hDS, "DROP INDEX ON tbl USING col_int", nullptr,
-                        nullptr);
-  GDALDatasetExecuteSQL(hDS, "DROP INDEX ON tbl", nullptr, nullptr);
+  constexpr std::array<SqlCase, 3> kIdxDropCases = {{
+      {.sql = "DROP INDEX ON tbl USING no_col", .expected = CE_None},
+      {.sql = "DROP INDEX ON tbl USING col_int", .expected = CE_None},
+      {.sql = "DROP INDEX ON tbl", .expected = CE_None},
+  }};
+  run_sql_cases(kIdxDropCases);
+
   lyr_ptr->dummy_idx_->drop_err_ = OGRERR_FAILURE;
-  GDALDatasetExecuteSQL(hDS, "DROP INDEX ON tbl", nullptr, nullptr);
+  constexpr std::array<SqlCase, 1> kIdxDropFailCases = {{
+      {.sql = "DROP INDEX ON tbl", .expected = CE_None},
+  }};
+  run_sql_cases(kIdxDropFailCases);
   lyr_ptr->dummy_idx_->drop_err_ = OGRERR_NONE;
 
-  // 7. SELECT, UNION ALL, JOIN, and SQLite dialect
+  // 3. SELECT, UNION ALL, JOIN, and SQLite dialect.
   auto feat = std::make_unique<OGRFeature>(lyr_ptr->GetLayerDefn());
   feat->SetFID(1);
   feat->SetField("col_int", 10);
-  EXPECT_EQ(lyr_ptr->CreateFeature(feat.get()), OGRERR_NONE);
+  EXPECT_EQ(OGRERR_NONE, lyr_ptr->CreateFeature(feat.get()));
 
-  // Preparse error and non-existent table
-  EXPECT_EQ(GDALDatasetExecuteSQL(hDS, "SELECT FROM", nullptr, nullptr),
-            nullptr);
-  EXPECT_EQ(
-      GDALDatasetExecuteSQL(hDS, "SELECT * FROM no_such_tbl", nullptr, nullptr),
-      nullptr);
-
-  // Valid SELECT with WHERE
-  OGRLayerH hRes = GDALDatasetExecuteSQL(
-      hDS, "SELECT *, ogc_fid FROM tbl WHERE col_int = 10", nullptr, nullptr);
-  ASSERT_NE(hRes, nullptr);
-  GDALDatasetReleaseResultSet(hDS, hRes);
-
-  // UNION ALL (valid and failing second leg)
-  OGRLayerH hUnion = GDALDatasetExecuteSQL(
-      hDS, "SELECT col_int FROM tbl UNION ALL SELECT col_int FROM tbl", nullptr,
-      nullptr);
-  ASSERT_NE(hUnion, nullptr);
-  GDALDatasetReleaseResultSet(hDS, hUnion);
-
-  EXPECT_EQ(GDALDatasetExecuteSQL(
-                hDS, "SELECT col_int FROM tbl UNION ALL SELECT * FROM no_tbl",
-                nullptr, nullptr),
-            nullptr);
-
-  // Secondary datasource JOIN failure
-  EXPECT_EQ(GDALDatasetExecuteSQL(
-                hDS,
-                "SELECT * FROM tbl LEFT JOIN '/vsimem/no_ds.json'.l2 "
-                "ON tbl.col_int = l2.id",
-                nullptr, nullptr),
-            nullptr);
-
-  // SQLite dialect
-  OGRLayerH hSqlite =
-      GDALDatasetExecuteSQL(hDS, "SELECT col_int FROM tbl", nullptr, "SQLite");
-  if (hSqlite) {
-    GDALDatasetReleaseResultSet(hDS, hSqlite);
+  // Preparse error and non-existent table.
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr,
+              GDALDatasetExecuteSQL(hDS, "SELECT FROM", nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    EXPECT_EQ(nullptr, GDALDatasetExecuteSQL(hDS, "SELECT * FROM no_such_tbl",
+                                             nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
   }
 
-  // 8. DROP TABLE
-  GDALDatasetExecuteSQL(hDS, "DROP TABLE bad syntax extra", nullptr, nullptr);
-  GDALDatasetExecuteSQL(hDS, "DROP TABLE no_such_tbl", nullptr, nullptr);
-  GDALDatasetExecuteSQL(hDS, "DROP TABLE tbl", nullptr, nullptr);
-  EXPECT_EQ(ds.GetLayerCount(), 0);
+  // Valid SELECT with WHERE.
+  OGRLayerH h_res = GDALDatasetExecuteSQL(
+      hDS, "SELECT *, ogc_fid FROM tbl WHERE col_int = 10", nullptr, nullptr);
+  ASSERT_NE(nullptr, h_res);
+  GDALDatasetReleaseResultSet(hDS, h_res);
 
-  CPLPopErrorHandler();
+  // UNION ALL (valid and failing second leg).
+  OGRLayerH h_union = GDALDatasetExecuteSQL(
+      hDS, "SELECT col_int FROM tbl UNION ALL SELECT col_int FROM tbl", nullptr,
+      nullptr);
+  ASSERT_NE(nullptr, h_union);
+  GDALDatasetReleaseResultSet(hDS, h_union);
+
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr,
+              GDALDatasetExecuteSQL(
+                  hDS, "SELECT col_int FROM tbl UNION ALL SELECT * FROM no_tbl",
+                  nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+
+    // Secondary datasource JOIN failure.
+    EXPECT_EQ(nullptr,
+              GDALDatasetExecuteSQL(hDS,
+                                    "SELECT * FROM tbl LEFT JOIN "
+                                    "'/vsimem/gdaldataset_test/no_ds.json'.l2 "
+                                    "ON tbl.col_int = l2.id",
+                                    nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
+
+  // SQLite dialect (SQLite driver is enabled in //third_party/gdal).
+  OGRLayerH h_sqlite =
+      GDALDatasetExecuteSQL(hDS, "SELECT col_int FROM tbl", nullptr, "SQLite");
+  ASSERT_NE(nullptr, h_sqlite);
+  GDALDatasetReleaseResultSet(hDS, h_sqlite);
+
+  // 4. DROP TABLE.
+  constexpr std::array<SqlCase, 3> kDropTableCases = {{
+      {.sql = "DROP TABLE bad syntax extra", .expected = CE_Failure},
+      {.sql = "DROP TABLE no_such_tbl", .expected = CE_Failure},
+      {.sql = "DROP TABLE tbl", .expected = CE_None},
+  }};
+  run_sql_cases(kDropTableCases);
+  EXPECT_EQ(0, ds.GetLayerCount());
 }
 
 TEST(GdalDatasetTest, StyleTableGetNextFeatureGetFeaturesAndTransactions) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
-  EXPECT_EQ(GDALDatasetGetStyleTable(nullptr), nullptr);
-  GDALDatasetSetStyleTableDirectly(nullptr, nullptr);
-  GDALDatasetSetStyleTable(nullptr, nullptr);
-  GDALDatasetResetReading(nullptr);
-  EXPECT_EQ(
-      GDALDatasetGetNextFeature(nullptr, nullptr, nullptr, nullptr, nullptr),
-      nullptr);
-  EXPECT_EQ(GDALDatasetTestCapability(nullptr, ODsCCreateLayer), 0);
-  EXPECT_EQ(GDALDatasetStartTransaction(nullptr, FALSE), OGRERR_INVALID_HANDLE);
-  EXPECT_EQ(GDALDatasetCommitTransaction(nullptr), OGRERR_INVALID_HANDLE);
-  EXPECT_EQ(GDALDatasetRollbackTransaction(nullptr), OGRERR_INVALID_HANDLE);
-  EXPECT_FALSE(GDALDatasetSetQueryLoggerFunc(nullptr, nullptr, nullptr));
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, GDALDatasetGetStyleTable(nullptr));
+    GDALDatasetSetStyleTableDirectly(nullptr, nullptr);
+    GDALDatasetSetStyleTable(nullptr, nullptr);
+    GDALDatasetResetReading(nullptr);
+    EXPECT_EQ(nullptr, GDALDatasetGetNextFeature(nullptr, nullptr, nullptr,
+                                                 nullptr, nullptr));
+    EXPECT_EQ(0, GDALDatasetTestCapability(nullptr, ODsCCreateLayer));
+    EXPECT_EQ(OGRERR_INVALID_HANDLE,
+              GDALDatasetStartTransaction(nullptr, FALSE));
+    EXPECT_EQ(OGRERR_INVALID_HANDLE, GDALDatasetCommitTransaction(nullptr));
+    EXPECT_EQ(OGRERR_INVALID_HANDLE, GDALDatasetRollbackTransaction(nullptr));
+    EXPECT_FALSE(GDALDatasetSetQueryLoggerFunc(nullptr, nullptr, nullptr));
+    CPLErrorReset();
+  }
 
   ExposedDataset ds;
   GDALDatasetH hDS = GDALDataset::ToHandle(&ds);
 
-  // StyleTable
-  EXPECT_EQ(GDALDatasetGetStyleTable(hDS), nullptr);
+  // 1. StyleTable.
+  EXPECT_EQ(nullptr, GDALDatasetGetStyleTable(hDS));
   OGRStyleTable st;
   st.AddStyle("s1", "PEN(c:#FF0000)");
   GDALDatasetSetStyleTable(hDS, reinterpret_cast<OGRStyleTableH>(&st));
-  EXPECT_NE(GDALDatasetGetStyleTable(hDS), nullptr);
-  // Replace style table
+  EXPECT_NE(nullptr, GDALDatasetGetStyleTable(hDS));
+  // Replace style table.
   GDALDatasetSetStyleTable(hDS, reinterpret_cast<OGRStyleTableH>(&st));
-  auto* st_direct = new OGRStyleTable();
-  GDALDatasetSetStyleTableDirectly(hDS,
-                                   reinterpret_cast<OGRStyleTableH>(st_direct));
-  EXPECT_EQ(ds.GetStyleTable(), st_direct);
+  auto st_direct = std::make_unique<OGRStyleTable>();
+  OGRStyleTable* st_direct_ptr = st_direct.get();
+  GDALDatasetSetStyleTableDirectly(
+      hDS, reinterpret_cast<OGRStyleTableH>(st_direct.release()));
+  EXPECT_EQ(st_direct_ptr, ds.GetStyleTable());
 
-  // Transactions and QueryLogger default implementations
-  EXPECT_EQ(GDALDatasetStartTransaction(hDS, FALSE),
-            OGRERR_UNSUPPORTED_OPERATION);
-  EXPECT_EQ(GDALDatasetCommitTransaction(hDS), OGRERR_UNSUPPORTED_OPERATION);
-  EXPECT_EQ(GDALDatasetRollbackTransaction(hDS), OGRERR_UNSUPPORTED_OPERATION);
+  // 2. Transactions and QueryLogger default implementations.
+  EXPECT_EQ(OGRERR_UNSUPPORTED_OPERATION,
+            GDALDatasetStartTransaction(hDS, FALSE));
+  EXPECT_EQ(OGRERR_UNSUPPORTED_OPERATION, GDALDatasetCommitTransaction(hDS));
+  EXPECT_EQ(OGRERR_UNSUPPORTED_OPERATION, GDALDatasetRollbackTransaction(hDS));
   EXPECT_FALSE(GDALDatasetSetQueryLoggerFunc(hDS, nullptr, nullptr));
-  EXPECT_EQ(GDALDatasetTestCapability(hDS, nullptr), 0);
+  EXPECT_EQ(0, GDALDatasetTestCapability(hDS, nullptr));
 
-  // GetNextFeature and GetFeatures() across 2 layers
+  // 3. GetNextFeature and GetFeatures() across 2 layers.
   auto l1 = std::make_unique<CustomLayer>("l1");
   auto f1 = std::make_unique<OGRFeature>(l1->GetLayerDefn());
   f1->SetFID(1);
-  EXPECT_EQ(l1->CreateFeature(f1.get()), OGRERR_NONE);
+  EXPECT_EQ(OGRERR_NONE, l1->CreateFeature(f1.get()));
 
   auto l2 = std::make_unique<CustomLayer>("l2");
   auto f2 = std::make_unique<OGRFeature>(l2->GetLayerDefn());
   f2->SetFID(2);
-  EXPECT_EQ(l2->CreateFeature(f2.get()), OGRERR_NONE);
+  EXPECT_EQ(OGRERR_NONE, l2->CreateFeature(f2.get()));
 
   CustomLayer* l1_ptr = l1.get();
   ds.layers_.push_back(std::move(l1));
   ds.layers_.push_back(std::move(l2));
 
-  // Case 1: OLCFastFeatureCount is true on all layers
+  // Case 1: OLCFastFeatureCount is true on all layers.
   GDALDatasetResetReading(hDS);
-  OGRLayerH hBelong = nullptr;
+  OGRLayerH h_belong = nullptr;
   double pct = 0.0;
-  OGRFeatureH hFeat1 = GDALDatasetGetNextFeature(hDS, &hBelong, &pct,
-                                                 GDALDummyProgress, nullptr);
-  ASSERT_NE(hFeat1, nullptr);
-  EXPECT_DOUBLE_EQ(pct, 0.5);
-  OGRFeature::DestroyFeature(OGRFeature::FromHandle(hFeat1));
+  OGRFeatureUniquePtr feat1(OGRFeature::FromHandle(GDALDatasetGetNextFeature(
+      hDS, &h_belong, &pct, GDALDummyProgress, nullptr)));
+  ASSERT_NE(nullptr, feat1);
+  EXPECT_DOUBLE_EQ(0.5, pct);
 
-  OGRFeatureH hFeat2 = GDALDatasetGetNextFeature(hDS, &hBelong, &pct,
-                                                 GDALDummyProgress, nullptr);
-  ASSERT_NE(hFeat2, nullptr);
-  EXPECT_DOUBLE_EQ(pct, 1.0);
-  OGRFeature::DestroyFeature(OGRFeature::FromHandle(hFeat2));
+  OGRFeatureUniquePtr feat2(OGRFeature::FromHandle(GDALDatasetGetNextFeature(
+      hDS, &h_belong, &pct, GDALDummyProgress, nullptr)));
+  ASSERT_NE(nullptr, feat2);
+  EXPECT_DOUBLE_EQ(1.0, pct);
 
-  // EOF reached
-  EXPECT_EQ(GDALDatasetGetNextFeature(hDS, &hBelong, &pct, GDALDummyProgress,
-                                      nullptr),
-            nullptr);
-  // Subsequent call after EOF (nCurrentLayerIdx < 0)
-  EXPECT_EQ(GDALDatasetGetNextFeature(hDS, &hBelong, &pct, GDALDummyProgress,
-                                      nullptr),
-            nullptr);
+  // EOF reached.
+  EXPECT_EQ(nullptr, GDALDatasetGetNextFeature(hDS, &h_belong, &pct,
+                                               GDALDummyProgress, nullptr));
+  // Subsequent call after EOF (nCurrentLayerIdx < 0).
+  EXPECT_EQ(nullptr, GDALDatasetGetNextFeature(hDS, &h_belong, &pct,
+                                               GDALDummyProgress, nullptr));
 
-  // Case 2: OLCFastFeatureCount is false on l1 -> nTotalFeatures < 0
+  // Case 2: OLCFastFeatureCount is false on l1 -> nTotalFeatures < 0.
   l1_ptr->fast_feature_count_ = false;
   GDALDatasetResetReading(hDS);
   for (int i = 0; i < 2; ++i) {
-    OGRFeatureH hf = GDALDatasetGetNextFeature(hDS, &hBelong, &pct,
-                                               GDALDummyProgress, nullptr);
-    ASSERT_NE(hf, nullptr);
-    OGRFeature::DestroyFeature(OGRFeature::FromHandle(hf));
+    OGRFeatureUniquePtr hf(OGRFeature::FromHandle(GDALDatasetGetNextFeature(
+        hDS, &h_belong, &pct, GDALDummyProgress, nullptr)));
+    ASSERT_NE(nullptr, hf);
   }
 
-  // Case 3: GetFeatures() range-for loop
+  // Case 3: GetFeatures() range-for loop.
   int feat_count = 0;
   for (auto&& pair : ds.GetFeatures()) {
-    EXPECT_NE(pair.feature, nullptr);
-    EXPECT_NE(pair.layer, nullptr);
+    EXPECT_NE(nullptr, pair.feature);
+    EXPECT_NE(nullptr, pair.layer);
     ++feat_count;
   }
-  EXPECT_EQ(feat_count, 2);
-
-  CPLPopErrorHandler();
+  EXPECT_EQ(2, feat_count);
 }
 
 TEST(GdalDatasetTest, ReadWriteMutexAndParentLockSharing) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
   ExposedDataset parent;
   parent.eAccess = GA_Update;
   parent.RasterInitialize(4, 4);
   parent.SetBand(1, new CustomBand(&parent, 1));
 
   parent.InitRWLock();
-  EXPECT_EQ(parent.EnterReadWrite(GF_Read), TRUE);
+  EXPECT_EQ(TRUE, parent.EnterReadWrite(GF_Read));
   parent.TemporarilyDropReadWriteLock();
   parent.ReacquireReadWriteLock();
   parent.LeaveReadWrite();
@@ -1807,11 +2065,11 @@ TEST(GdalDatasetTest, ReadWriteMutexAndParentLockSharing) {
   EXPECT_TRUE(parent.AcquireMutex());
   parent.ReleaseMutex();
 
-  // Child sharing lock with parent
+  // Child sharing lock with parent.
   ExposedDataset child;
   child.ShareLockWithParentDataset(&parent);
   child.InitRWLock();
-  EXPECT_EQ(child.EnterReadWrite(GF_Write), TRUE);
+  EXPECT_EQ(TRUE, child.EnterReadWrite(GF_Write));
   child.TemporarilyDropReadWriteLock();
   child.ReacquireReadWriteLock();
   child.LeaveReadWrite();
@@ -1819,39 +2077,39 @@ TEST(GdalDatasetTest, ReadWriteMutexAndParentLockSharing) {
   child.ReleaseMutex();
   child.DisableReadWriteMutex();
 
-  // Standalone dataset with GDAL_ENABLE_READ_WRITE_MUTEX=NO
+  // Standalone dataset with GDAL_ENABLE_READ_WRITE_MUTEX=NO.
   {
     CPLConfigOptionSetter no_mutex("GDAL_ENABLE_READ_WRITE_MUTEX", "NO", false);
     ExposedDataset ds_nomutex;
     ds_nomutex.eAccess = GA_Update;
-    EXPECT_EQ(ds_nomutex.EnterReadWrite(GF_Write), FALSE);
+    EXPECT_EQ(FALSE, ds_nomutex.EnterReadWrite(GF_Write));
   }
-
-  CPLPopErrorHandler();
 }
 
 TEST(GdalDatasetTest, FieldDomainsRelationshipsCompressionAndClearStats) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    GDALDatasetClearStatistics(nullptr);
+    EXPECT_EQ(nullptr, GDALDatasetGetFieldDomainNames(nullptr, nullptr));
+    EXPECT_EQ(nullptr, GDALDatasetGetFieldDomain(nullptr, "d"));
+    EXPECT_FALSE(GDALDatasetAddFieldDomain(nullptr, nullptr, nullptr));
+    EXPECT_FALSE(GDALDatasetDeleteFieldDomain(nullptr, "d", nullptr));
+    EXPECT_FALSE(GDALDatasetUpdateFieldDomain(nullptr, nullptr, nullptr));
 
-  GDALDatasetClearStatistics(nullptr);
-  EXPECT_EQ(GDALDatasetGetFieldDomainNames(nullptr, nullptr), nullptr);
-  EXPECT_EQ(GDALDatasetGetFieldDomain(nullptr, "d"), nullptr);
-  EXPECT_FALSE(GDALDatasetAddFieldDomain(nullptr, nullptr, nullptr));
-  EXPECT_FALSE(GDALDatasetDeleteFieldDomain(nullptr, "d", nullptr));
-  EXPECT_FALSE(GDALDatasetUpdateFieldDomain(nullptr, nullptr, nullptr));
+    EXPECT_EQ(nullptr, GDALDatasetGetRelationshipNames(nullptr, nullptr));
+    EXPECT_EQ(nullptr, GDALDatasetGetRelationship(nullptr, "r"));
+    EXPECT_FALSE(GDALDatasetAddRelationship(nullptr, nullptr, nullptr));
+    EXPECT_FALSE(GDALDatasetDeleteRelationship(nullptr, "r", nullptr));
+    EXPECT_FALSE(GDALDatasetUpdateRelationship(nullptr, nullptr, nullptr));
 
-  EXPECT_EQ(GDALDatasetGetRelationshipNames(nullptr, nullptr), nullptr);
-  EXPECT_EQ(GDALDatasetGetRelationship(nullptr, "r"), nullptr);
-  EXPECT_FALSE(GDALDatasetAddRelationship(nullptr, nullptr, nullptr));
-  EXPECT_FALSE(GDALDatasetDeleteRelationship(nullptr, "r", nullptr));
-  EXPECT_FALSE(GDALDatasetUpdateRelationship(nullptr, nullptr, nullptr));
-
-  EXPECT_EQ(GDALDatasetGetCompressionFormats(nullptr, 0, 0, 1, 1, 1, nullptr),
-            nullptr);
-  EXPECT_EQ(GDALDatasetReadCompressedData(nullptr, "JPEG", 0, 0, 1, 1, 1,
-                                          nullptr, nullptr, nullptr, nullptr),
-            CE_Failure);
+    EXPECT_EQ(nullptr, GDALDatasetGetCompressionFormats(nullptr, 0, 0, 1, 1, 1,
+                                                        nullptr));
+    EXPECT_EQ(CE_Failure, GDALDatasetReadCompressedData(
+                              nullptr, "JPEG", 0, 0, 1, 1, 1, nullptr, nullptr,
+                              nullptr, nullptr));
+    CPLErrorReset();
+  }
 
   ExposedDataset ds;
   ds.RasterInitialize(4, 4);
@@ -1859,119 +2117,150 @@ TEST(GdalDatasetTest, FieldDomainsRelationshipsCompressionAndClearStats) {
   ds.SetBand(2, new CustomBand(&ds, 2));
   GDALDatasetH hDS = GDALDataset::ToHandle(&ds);
 
-  // ClearStatistics without and with RootGroup
-  EXPECT_EQ(ds.GetRootGroup(), nullptr);
+  // 1. ClearStatistics without and with RootGroup.
+  EXPECT_EQ(nullptr, ds.GetRootGroup());
   GDALDatasetClearStatistics(hDS);
   ds.root_group_ = std::make_shared<DummyGroup>();
   GDALDatasetClearStatistics(hDS);
   EXPECT_TRUE(ds.root_group_->cleared_);
 
-  // RawBinaryLayout
+  // 2. RawBinaryLayout.
   GDALDataset::RawBinaryLayout layout;
   EXPECT_FALSE(ds.GetRawBinaryLayout(layout));
 
-  // SetEnableOverviews / AreOverviewsEnabled / IsAllBands
+  // 3. SetEnableOverviews / AreOverviewsEnabled / IsAllBands.
   EXPECT_TRUE(ds.AreOverviewsEnabled());
   ds.SetEnableOverviews(false);
   EXPECT_FALSE(ds.AreOverviewsEnabled());
   ds.SetEnableOverviews(true);
 
-  int bands_ok[] = {1, 2};
-  int bands_bad[] = {2, 1};
+  constexpr std::array<int, 2> kBandsOk = {1, 2};
+  constexpr std::array<int, 2> kBandsBad = {2, 1};
   EXPECT_TRUE(ds.IsAllBands(2, nullptr));
-  EXPECT_TRUE(ds.IsAllBands(2, bands_ok));
+  EXPECT_TRUE(ds.IsAllBands(2, kBandsOk.data()));
   EXPECT_FALSE(ds.IsAllBands(1, nullptr));
-  EXPECT_FALSE(ds.IsAllBands(2, bands_bad));
+  EXPECT_FALSE(ds.IsAllBands(2, kBandsBad.data()));
 
-  // FieldDomains: populate m_oMapFieldDomains to test GetFieldDomainNames &
-  // GetFieldDomain
-  OGRField min_val;
+  // 4. FieldDomains: populate m_oMapFieldDomains to test GetFieldDomainNames
+  // and GetFieldDomain.
+  OGRField min_val = {};
   min_val.Integer = 0;
-  OGRField max_val;
+  OGRField max_val = {};
   max_val.Integer = 10;
   auto range_dom = std::make_unique<OGRRangeFieldDomain>(
       "dom1", "desc", OFTInteger, OFSTNone, min_val, true, max_val, true);
-  OGRFieldDomainH hDom = OGRFieldDomain::ToHandle(range_dom.get());
+  OGRFieldDomainH h_dom = OGRFieldDomain::ToHandle(range_dom.get());
 
-  char* reason = nullptr;
-  EXPECT_FALSE(GDALDatasetAddFieldDomain(hDS, hDom, &reason));
-  EXPECT_NE(reason, nullptr);
-  CPLFree(reason);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    char* raw_reason = nullptr;
+    EXPECT_FALSE(GDALDatasetAddFieldDomain(hDS, h_dom, &raw_reason));
+    std::unique_ptr<char, CplFreeDeleter> reason(raw_reason);
+    EXPECT_NE(nullptr, reason);
 
-  EXPECT_FALSE(GDALDatasetUpdateFieldDomain(hDS, hDom, &reason));
-  EXPECT_NE(reason, nullptr);
-  CPLFree(reason);
+    raw_reason = nullptr;
+    EXPECT_FALSE(GDALDatasetUpdateFieldDomain(hDS, h_dom, &raw_reason));
+    reason.reset(raw_reason);
+    EXPECT_NE(nullptr, reason);
 
-  EXPECT_FALSE(GDALDatasetDeleteFieldDomain(hDS, "dom1", &reason));
-  EXPECT_NE(reason, nullptr);
-  CPLFree(reason);
+    raw_reason = nullptr;
+    EXPECT_FALSE(GDALDatasetDeleteFieldDomain(hDS, "dom1", &raw_reason));
+    reason.reset(raw_reason);
+    EXPECT_NE(nullptr, reason);
+    CPLErrorReset();
+  }
 
   ds.m_oMapFieldDomains["dom1"] = std::move(range_dom);
-  char** dom_names = GDALDatasetGetFieldDomainNames(hDS, nullptr);
-  EXPECT_EQ(CSLCount(dom_names), 1);
-  CSLDestroy(dom_names);
-  EXPECT_NE(GDALDatasetGetFieldDomain(hDS, "dom1"), nullptr);
-  EXPECT_EQ(GDALDatasetGetFieldDomain(hDS, "no_such_dom"), nullptr);
+  const StringListPtr dom_names(GDALDatasetGetFieldDomainNames(hDS, nullptr),
+                                CSLDestroy);
+  EXPECT_EQ(1U, CslToVector(dom_names.get()).size());
+  EXPECT_NE(nullptr, GDALDatasetGetFieldDomain(hDS, "dom1"));
+  EXPECT_EQ(nullptr, GDALDatasetGetFieldDomain(hDS, "no_such_dom"));
 
-  // Relationships
-  EXPECT_EQ(GDALDatasetGetRelationshipNames(hDS, nullptr), nullptr);
-  EXPECT_EQ(GDALDatasetGetRelationship(hDS, "rel1"), nullptr);
+  // 5. Relationships.
+  EXPECT_EQ(nullptr, GDALDatasetGetRelationshipNames(hDS, nullptr));
+  EXPECT_EQ(nullptr, GDALDatasetGetRelationship(hDS, "rel1"));
   GDALRelationship rel("rel1", "left_t", "right_t",
                        GDALRelationshipCardinality::GRC_ONE_TO_MANY);
-  GDALRelationshipH hRel = GDALRelationship::ToHandle(&rel);
+  GDALRelationshipH h_rel = GDALRelationship::ToHandle(&rel);
 
-  EXPECT_FALSE(GDALDatasetAddRelationship(hDS, hRel, &reason));
-  EXPECT_NE(reason, nullptr);
-  CPLFree(reason);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    char* raw_reason = nullptr;
+    EXPECT_FALSE(GDALDatasetAddRelationship(hDS, h_rel, &raw_reason));
+    std::unique_ptr<char, CplFreeDeleter> reason(raw_reason);
+    EXPECT_NE(nullptr, reason);
 
-  EXPECT_FALSE(GDALDatasetUpdateRelationship(hDS, hRel, &reason));
-  EXPECT_NE(reason, nullptr);
-  CPLFree(reason);
+    raw_reason = nullptr;
+    EXPECT_FALSE(GDALDatasetUpdateRelationship(hDS, h_rel, &raw_reason));
+    reason.reset(raw_reason);
+    EXPECT_NE(nullptr, reason);
 
-  EXPECT_FALSE(GDALDatasetDeleteRelationship(hDS, "rel1", &reason));
-  EXPECT_NE(reason, nullptr);
-  CPLFree(reason);
+    raw_reason = nullptr;
+    EXPECT_FALSE(GDALDatasetDeleteRelationship(hDS, "rel1", &raw_reason));
+    reason.reset(raw_reason);
+    EXPECT_NE(nullptr, reason);
+    CPLErrorReset();
+  }
 
-  // CompressionFormats and ReadCompressedData
-  EXPECT_EQ(GDALDatasetGetCompressionFormats(hDS, 0, 0, 4, 4, 2, nullptr),
-            nullptr);
-  EXPECT_EQ(GDALDatasetReadCompressedData(hDS, "JPEG", 0, 0, 4, 4, 2, nullptr,
-                                          nullptr, nullptr, nullptr),
-            CE_Failure);
+  // 6. CompressionFormats and ReadCompressedData.
+  EXPECT_EQ(nullptr,
+            GDALDatasetGetCompressionFormats(hDS, 0, 0, 4, 4, 2, nullptr));
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure,
+              GDALDatasetReadCompressedData(hDS, "JPEG", 0, 0, 4, 4, 2, nullptr,
+                                            nullptr, nullptr, nullptr));
+    CPLErrorReset();
+  }
 
-  // CanBeCloned and Clone
+  // 7. CanBeCloned and Clone.
   EXPECT_FALSE(ds.CanBeCloned(GDAL_OF_RASTER, true));
   ds.m_bCanBeReopened = true;
   EXPECT_TRUE(ds.CanBeCloned(GDAL_OF_RASTER, true));
   EXPECT_FALSE(ds.CanBeCloned(GDAL_OF_VECTOR, true));
-  EXPECT_EQ(ds.Clone(GDAL_OF_RASTER, true), nullptr);
-
-  CPLPopErrorHandler();
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, ds.Clone(GDAL_OF_RASTER, true));
+    CPLErrorReset();
+  }
 }
 
 TEST(GdalDatasetTest, GeolocationToPixelLineGetExtentAndBuildFilename) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
-  EXPECT_EQ(GDALDatasetGeolocationToPixelLine(nullptr, 0, 0, nullptr, nullptr,
-                                              nullptr, nullptr),
-            CE_Failure);
-  EXPECT_EQ(GDALGetExtent(nullptr, nullptr, nullptr), CE_Failure);
-  EXPECT_EQ(GDALGetExtentWGS84LongLat(nullptr, nullptr), CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure,
+              GDALDatasetGeolocationToPixelLine(nullptr, 0, 0, nullptr, nullptr,
+                                                nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, GDALGetExtent(nullptr, nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, GDALGetExtentWGS84LongLat(nullptr, nullptr));
+    CPLErrorReset();
+  }
 
   ExposedDataset ds;
   ds.RasterInitialize(10, 10);
   GDALDatasetH hDS = GDALDataset::ToHandle(&ds);
 
-  // Without georeferencing, GeolocationToPixelLine and GetExtent fail
-  double px = 0.0, line = 0.0;
-  EXPECT_EQ(GDALDatasetGeolocationToPixelLine(hDS, 0, 0, nullptr, &px, &line,
-                                              nullptr),
-            CE_Failure);
+  // Without georeferencing, GeolocationToPixelLine and GetExtent fail.
+  double px = 0.0;
+  double line = 0.0;
   OGREnvelope env;
-  EXPECT_EQ(GDALGetExtent(hDS, &env, nullptr), CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, GDALDatasetGeolocationToPixelLine(
+                              hDS, 0, 0, nullptr, &px, &line, nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    EXPECT_EQ(CE_Failure, GDALGetExtent(hDS, &env, nullptr));
+    CPLErrorReset();
+  }
 
-  // Set WGS84 SRS and GeoTransform on ds
+  // Set WGS84 SRS and GeoTransform on ds.
   ds.use_custom_srs_ = true;
   ds.custom_srs_ = std::make_unique<OGRSpatialReference>();
   ds.custom_srs_->SetWellKnownGeogCS("WGS84");
@@ -1980,40 +2269,39 @@ TEST(GdalDatasetTest, GeolocationToPixelLineGetExtentAndBuildFilename) {
   ds.custom_gt_ = GDALGeoTransform(10.0, 1.0, 0.0, 50.0, 0.0, -1.0);
 
   // GeolocationToPixelLine with null SRS, TRADITIONAL_GIS_ORDER,
-  // AUTHORITY_COMPLIANT, and OAMS_CUSTOM
-  EXPECT_EQ(GDALDatasetGeolocationToPixelLine(hDS, 15.0, 45.0, nullptr, &px,
-                                              &line, nullptr),
-            CE_None);
-  EXPECT_NEAR(px, 5.0, 1e-5);
-  EXPECT_NEAR(line, 5.0, 1e-5);
+  // AUTHORITY_COMPLIANT, and OAMS_CUSTOM.
+  EXPECT_EQ(CE_None, GDALDatasetGeolocationToPixelLine(hDS, 15.0, 45.0, nullptr,
+                                                       &px, &line, nullptr));
+  EXPECT_NEAR(5.0, px, 1e-5);
+  EXPECT_NEAR(5.0, line, 1e-5);
 
   OGRSpatialReference srs_trad;
   srs_trad.SetWellKnownGeogCS("WGS84");
   srs_trad.SetAxisMappingStrategy(OAMS_TRADITIONAL_GIS_ORDER);
-  EXPECT_EQ(ds.GeolocationToPixelLine(15.0, 45.0, &srs_trad, &px, &line),
-            CE_None);
+  EXPECT_EQ(CE_None,
+            ds.GeolocationToPixelLine(15.0, 45.0, &srs_trad, &px, &line));
 
   OGRSpatialReference srs_auth;
   srs_auth.importFromEPSG(4326);
   srs_auth.SetAxisMappingStrategy(OAMS_AUTHORITY_COMPLIANT);
-  EXPECT_EQ(ds.GeolocationToPixelLine(45.0, 15.0, &srs_auth, &px, &line),
-            CE_None);
+  EXPECT_EQ(CE_None,
+            ds.GeolocationToPixelLine(45.0, 15.0, &srs_auth, &px, &line));
 
   OGRSpatialReference srs_custom;
   srs_custom.SetWellKnownGeogCS("WGS84");
   srs_custom.SetDataAxisToSRSAxisMapping({1, 2});
-  EXPECT_EQ(ds.GeolocationToPixelLine(15.0, 45.0, &srs_custom, &px, &line),
-            CE_None);
+  EXPECT_EQ(CE_None,
+            ds.GeolocationToPixelLine(15.0, 45.0, &srs_custom, &px, &line));
 
-  // GetExtent and GetExtentWGS84LongLat on raster dataset
-  EXPECT_EQ(GDALGetExtent(hDS, &env, nullptr), CE_None);
-  EXPECT_DOUBLE_EQ(env.MinX, 10.0);
-  EXPECT_DOUBLE_EQ(env.MaxX, 20.0);
-  EXPECT_EQ(GDALGetExtentWGS84LongLat(hDS, &env), CE_None);
+  // GetExtent and GetExtentWGS84LongLat on raster dataset.
+  EXPECT_EQ(CE_None, GDALGetExtent(hDS, &env, nullptr));
+  EXPECT_DOUBLE_EQ(10.0, env.MinX);
+  EXPECT_DOUBLE_EQ(20.0, env.MaxX);
+  EXPECT_EQ(CE_None, GDALGetExtentWGS84LongLat(hDS, &env));
 
-  // GetExtent and TestCapability(GDsCFastGetExtent) on vector dataset
+  // GetExtent and TestCapability(GDsCFastGetExtent) on vector dataset.
   ExposedDataset vec_ds;
-  EXPECT_EQ(vec_ds.TestCapability(GDsCFastGetExtent), TRUE);
+  EXPECT_EQ(TRUE, vec_ds.TestCapability(GDsCFastGetExtent));
   auto vl1 = std::make_unique<CustomLayer>("vl1", wkbPoint, &srs_trad);
   vl1->extent_.MinX = 1.0;
   vl1->extent_.MaxX = 5.0;
@@ -2021,105 +2309,134 @@ TEST(GdalDatasetTest, GeolocationToPixelLineGetExtentAndBuildFilename) {
   vl1->extent_.MaxY = 6.0;
   CustomLayer* vl1_ptr = vl1.get();
   vec_ds.layers_.push_back(std::move(vl1));
-  EXPECT_EQ(vec_ds.TestCapability(GDsCFastGetExtent), TRUE);
+  EXPECT_EQ(TRUE, vec_ds.TestCapability(GDsCFastGetExtent));
   vl1_ptr->fast_get_extent_ = false;
-  EXPECT_EQ(vec_ds.TestCapability(GDsCFastGetExtent), FALSE);
-  EXPECT_EQ(vec_ds.GetExtent(&env, nullptr), CE_None);
-  EXPECT_DOUBLE_EQ(env.MinX, 1.0);
-  EXPECT_DOUBLE_EQ(env.MaxY, 6.0);
+  EXPECT_EQ(FALSE, vec_ds.TestCapability(GDsCFastGetExtent));
+  EXPECT_EQ(CE_None, vec_ds.GetExtent(&env, nullptr));
+  EXPECT_DOUBLE_EQ(1.0, env.MinX);
+  EXPECT_DOUBLE_EQ(6.0, env.MaxY);
 
-  // BuildFilename
-  EXPECT_EQ(GDALDataset::BuildFilename("foo.tif", "/ref/dir", false),
-            "foo.tif");
-  EXPECT_EQ(GDALDataset::BuildFilename("../foo.tif", "/abc/def", true),
-            "/abc/foo.tif");
-  EXPECT_EQ(GDALDataset::BuildFilename("GTIFF_DIR:1:rel.tif", "/abc", true),
-            "GTIFF_DIR:1:/abc/rel.tif");
-  EXPECT_EQ(GDALDataset::BuildFilename("NITF_IM:0:rel.ntf", "/abc", true),
-            "NITF_IM:0:/abc/rel.ntf");
-  EXPECT_EQ(GDALDataset::BuildFilename("NITF_IM:0:z:/rel.ntf", "/abc", true),
-            "NITF_IM:0:z:/rel.ntf");
-  EXPECT_EQ(
-      GDALDataset::BuildFilename("RASTERLITE:rel.db,table=t", "/abc", true),
-      "RASTERLITE:/abc/rel.db,table=t");
-  EXPECT_EQ(GDALDataset::BuildFilename("TILEDB:\"rel.tdb\":arr", "/abc", true),
-            "TILEDB:\"/abc/rel.tdb\":arr");
-
-  CPLPopErrorHandler();
+  // BuildFilename (requires GTiff driver registration for GTIFF_DIR:
+  // subdatasets).
+  GDALRegister_GTiff();
+  struct BuildFilenameCase {
+    const char* psz_filename;
+    const char* psz_ref_dir;
+    bool relative_to_ref_dir;
+    std::string_view expected;
+  };
+  constexpr BuildFilenameCase kBuildFilenameCases[] = {
+      {.psz_filename = "foo.tif",
+       .psz_ref_dir = "/ref/dir",
+       .relative_to_ref_dir = false,
+       .expected = "foo.tif"},
+      {.psz_filename = "../foo.tif",
+       .psz_ref_dir = "/abc/def",
+       .relative_to_ref_dir = true,
+       .expected = "/abc/foo.tif"},
+      {.psz_filename = "GTIFF_DIR:1:rel.tif",
+       .psz_ref_dir = "/abc",
+       .relative_to_ref_dir = true,
+       .expected = "GTIFF_DIR:1:/abc/rel.tif"},
+      {.psz_filename = "NITF_IM:0:rel.ntf",
+       .psz_ref_dir = "/abc",
+       .relative_to_ref_dir = true,
+       .expected = "NITF_IM:0:/abc/rel.ntf"},
+      {.psz_filename = "NITF_IM:0:z:/rel.ntf",
+       .psz_ref_dir = "/abc",
+       .relative_to_ref_dir = true,
+       .expected = "NITF_IM:0:z:/rel.ntf"},
+      {.psz_filename = "RASTERLITE:rel.db,table=t",
+       .psz_ref_dir = "/abc",
+       .relative_to_ref_dir = true,
+       .expected = "RASTERLITE:/abc/rel.db,table=t"},
+      {.psz_filename = "TILEDB:\"rel.tdb\":arr",
+       .psz_ref_dir = "/abc",
+       .relative_to_ref_dir = true,
+       .expected = "TILEDB:\"/abc/rel.tdb\":arr"},
+  };
+  for (const auto& tc : kBuildFilenameCases) {
+    EXPECT_EQ(tc.expected,
+              GDALDataset::BuildFilename(tc.psz_filename, tc.psz_ref_dir,
+                                         tc.relative_to_ref_dir));
+  }
 }
 
 TEST(GdalDatasetTest, AsMDArrayComprehensive) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
-  // 1. Error cases: 0 bands, non-uniform data types, invalid DIM_ORDER
-  ExposedDataset ds_empty;
-  EXPECT_EQ(ds_empty.AsMDArray(), nullptr);
-
-  ExposedDataset ds_mixed;
-  ds_mixed.RasterInitialize(4, 4);
-  ds_mixed.SetBand(1, new CustomBand(&ds_mixed, 1, GDT_Byte));
-  ds_mixed.SetBand(2, new CustomBand(&ds_mixed, 2, GDT_UInt16));
-  EXPECT_EQ(ds_mixed.AsMDArray(), nullptr);
-
-  ExposedDataset ds_bad_opt;
-  ds_bad_opt.RasterInitialize(4, 4);
-  ds_bad_opt.SetBand(1, new CustomBand(&ds_bad_opt, 1, GDT_Byte));
-  const char* bad_dim_opts[] = {"DIM_ORDER=INVALID", nullptr};
-  EXPECT_EQ(ds_bad_opt.AsMDArray(bad_dim_opts), nullptr);
-
-  // 2. Int64 and UInt64 nodata datasets
+  // 1. Error cases: 0 bands, non-uniform data types, invalid DIM_ORDER.
   {
-    auto* ds_i64 = new ExposedDataset();
+    WithQuietHandler quiet;
+    CPLErrorReset();
+
+    ExposedDataset ds_empty;
+    EXPECT_EQ(nullptr, ds_empty.AsMDArray());
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+
+    ExposedDataset ds_mixed;
+    ds_mixed.RasterInitialize(4, 4);
+    ds_mixed.SetBand(1, new CustomBand(&ds_mixed, 1, GDT_Byte));
+    ds_mixed.SetBand(2, new CustomBand(&ds_mixed, 2, GDT_UInt16));
+    EXPECT_EQ(nullptr, ds_mixed.AsMDArray());
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+
+    ExposedDataset ds_bad_opt;
+    ds_bad_opt.RasterInitialize(4, 4);
+    ds_bad_opt.SetBand(1, new CustomBand(&ds_bad_opt, 1, GDT_Byte));
+    constexpr std::array<const char*, 2> kBadDimOpts = {"DIM_ORDER=INVALID",
+                                                        nullptr};
+    EXPECT_EQ(nullptr, ds_bad_opt.AsMDArray(kBadDimOpts.data()));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
+
+  // 2. Int64 and UInt64 nodata datasets.
+  {
+    ExposedDatasetPtr ds_i64(std::make_unique<ExposedDataset>().release());
     ds_i64->RasterInitialize(4, 4);
-    auto* b = new CustomBand(ds_i64, 1, GDT_Int64);
+    auto* b = new CustomBand(ds_i64.get(), 1, GDT_Int64);
     b->has_nodata_ = true;
     b->nodata_val_ = -999;
     ds_i64->SetBand(1, b);
-    // SRS with North/East (EPSG:4326 authority compliant -> mapping {1,2} or
-    // {2,1})
+    // SRS with North/East (EPSG:4326 authority compliant -> mapping {2, 1}).
     ds_i64->use_custom_srs_ = true;
     ds_i64->custom_srs_ = std::make_unique<OGRSpatialReference>();
     ds_i64->custom_srs_->importFromEPSG(4326);
     ds_i64->custom_srs_->SetDataAxisToSRSAxisMapping({2, 1});
-    const char* idx_opts[] = {"BAND_INDEXING_VAR_ITEM={Index}", nullptr};
-    auto md = ds_i64->AsMDArray(idx_opts);
-    ASSERT_NE(md, nullptr);
-    EXPECT_NE(md->GetRawNoDataValue(), nullptr);
-    EXPECT_NE(md->GetSpatialRef(), nullptr);
-    md.reset();
-    GDALClose(ds_i64);
+    constexpr std::array<const char*, 2> kIdxOpts = {
+        "BAND_INDEXING_VAR_ITEM={Index}", nullptr};
+    auto md = ds_i64->AsMDArray(kIdxOpts.data());
+    ASSERT_NE(nullptr, md);
+    EXPECT_NE(nullptr, md->GetRawNoDataValue());
+    EXPECT_NE(nullptr, md->GetSpatialRef());
   }
 
   {
-    auto* ds_u64 = new ExposedDataset();
+    ExposedDatasetPtr ds_u64(std::make_unique<ExposedDataset>().release());
     ds_u64->RasterInitialize(4, 4);
-    auto* b = new CustomBand(ds_u64, 1, GDT_UInt64);
+    auto* b = new CustomBand(ds_u64.get(), 1, GDT_UInt64);
     b->has_nodata_ = true;
     b->nodata_val_ = 999;
     ds_u64->SetBand(1, b);
-    // SRS with East/North (projected EPSG:32631 -> mapping {1,2})
+    // SRS with East/North (projected EPSG:32631 -> mapping {1, 2}).
     ds_u64->use_custom_srs_ = true;
     ds_u64->custom_srs_ = std::make_unique<OGRSpatialReference>();
     ds_u64->custom_srs_->importFromEPSG(32631);
     ds_u64->custom_srs_->SetAxisMappingStrategy(OAMS_TRADITIONAL_GIS_ORDER);
-    const char* ci_opts[] = {"BAND_INDEXING_VAR_ITEM={ColorInterpretation}",
-                             "DIM_ORDER=Y,X,Band", nullptr};
-    auto md = ds_u64->AsMDArray(ci_opts);
-    ASSERT_NE(md, nullptr);
-    EXPECT_NE(md->GetRawNoDataValue(), nullptr);
-    EXPECT_NE(md->GetSpatialRef(), nullptr);
-    EXPECT_EQ(md->GetBlockSize().size(), 3U);
-    md.reset();
-    GDALClose(ds_u64);
+    constexpr std::array<const char*, 3> kCiOpts = {
+        "BAND_INDEXING_VAR_ITEM={ColorInterpretation}", "DIM_ORDER=Y,X,Band",
+        nullptr};
+    auto md = ds_u64->AsMDArray(kCiOpts.data());
+    ASSERT_NE(nullptr, md);
+    EXPECT_NE(nullptr, md->GetRawNoDataValue());
+    EXPECT_NE(nullptr, md->GetSpatialRef());
+    EXPECT_EQ(3U, md->GetBlockSize().size());
   }
 
-  // 3. Multi-band Byte dataset testing all BAND_INDEXING_VAR_ITEM / TYPE
-  // options,
-  //    GeoTransform indexing vars, Offset/Scale/Unit/Attributes, Read & Write
-  auto* ds_mb = new ExposedDataset();
+  // 3. Multi-band Byte dataset testing BAND_INDEXING_VAR_ITEM / TYPE options,
+  // GeoTransform indexing vars, Offset/Scale/Unit/Attributes, Read & Write.
+  ExposedDatasetPtr ds_mb(std::make_unique<ExposedDataset>().release());
   ds_mb->eAccess = GA_Update;
-  ds_mb->SetDescription("/vsimem/md_test.bin");
+  ds_mb->SetDescription("/vsimem/gdaldataset_test/md_test.bin");
   ds_mb->SetMetadataItem("ATTR1", "VAL1");
   ds_mb->RasterInitialize(4, 4);
   ds_mb->has_custom_gt_ = true;
@@ -2128,7 +2445,7 @@ TEST(GdalDatasetTest, AsMDArrayComprehensive) {
   ds_mb->custom_srs_ = std::make_unique<OGRSpatialReference>();
   ds_mb->custom_srs_->SetWellKnownGeogCS("WGS84");
 
-  auto* mb1 = new CustomBand(ds_mb, 1, GDT_Byte, 2, 2);
+  auto* mb1 = new CustomBand(ds_mb.get(), 1, GDT_Byte, 2, 2);
   mb1->unit_ = "m";
   mb1->has_nodata_ = true;
   mb1->nodata_val_ = 255.0;
@@ -2138,7 +2455,7 @@ TEST(GdalDatasetTest, AsMDArrayComprehensive) {
   mb1->scale_val_ = 2.5;
   mb1->SetMetadataItem("WAVELENGTH", "550");
 
-  auto* mb2 = new CustomBand(ds_mb, 2, GDT_Byte, 2, 2);
+  auto* mb2 = new CustomBand(ds_mb.get(), 2, GDT_Byte, 2, 2);
   mb2->unit_ = "m";
   mb2->has_nodata_ = true;
   mb2->nodata_val_ = 255.0;
@@ -2151,54 +2468,57 @@ TEST(GdalDatasetTest, AsMDArrayComprehensive) {
   ds_mb->SetBand(1, mb1);
   ds_mb->SetBand(2, mb2);
 
-  // Default ({Description})
+  // Default ({Description}).
   {
     auto md = ds_mb->AsMDArray(nullptr);
-    ASSERT_NE(md, nullptr);
+    ASSERT_NE(nullptr, md);
     EXPECT_TRUE(md->IsWritable());
-    EXPECT_EQ(md->GetFilename(), "/vsimem/md_test.bin");
-    EXPECT_EQ(md->GetDimensions().size(), 3U);
-    EXPECT_EQ(md->GetDataType().GetNumericDataType(), GDT_Byte);
-    EXPECT_EQ(md->GetUnit(), "m");
-    EXPECT_NE(md->GetRawNoDataValue(), nullptr);
+    EXPECT_EQ("/vsimem/gdaldataset_test/md_test.bin", md->GetFilename());
+    EXPECT_EQ(3U, md->GetDimensions().size());
+    EXPECT_EQ(GDT_Byte, md->GetDataType().GetNumericDataType());
+    EXPECT_EQ("m", md->GetUnit());
+    EXPECT_NE(nullptr, md->GetRawNoDataValue());
     bool has_val = false;
     GDALDataType st_dt = GDT_Byte;
-    EXPECT_DOUBLE_EQ(md->GetOffset(&has_val, &st_dt), 1.5);
+    EXPECT_DOUBLE_EQ(1.5, md->GetOffset(&has_val, &st_dt));
     EXPECT_TRUE(has_val);
-    EXPECT_DOUBLE_EQ(md->GetScale(&has_val, &st_dt), 2.5);
+    EXPECT_DOUBLE_EQ(2.5, md->GetScale(&has_val, &st_dt));
     EXPECT_TRUE(has_val);
-    EXPECT_NE(md->GetSpatialRef(), nullptr);
-    EXPECT_EQ(md->GetBlockSize().size(), 3U);
-    EXPECT_EQ(md->GetAttributes(nullptr).size(), 1U);
+    EXPECT_NE(nullptr, md->GetSpatialRef());
+    EXPECT_EQ(3U, md->GetBlockSize().size());
+    EXPECT_EQ(1U, md->GetAttributes(nullptr).size());
 
-    // Read with positive steps
-    GUInt64 start[3] = {0, 0, 0};
-    size_t count[3] = {2, 2, 2};
-    GInt64 step[3] = {1, 1, 1};
-    GPtrDiff_t stride[3] = {4, 2, 1};
-    GByte buf[8] = {0};
-    EXPECT_TRUE(md->Read(start, count, step, stride, md->GetDataType(), buf));
-    EXPECT_TRUE(md->Write(start, count, step, stride, md->GetDataType(), buf));
+    // Read and write with positive steps.
+    constexpr std::array<GUInt64, 3> kStart = {0, 0, 0};
+    constexpr std::array<size_t, 3> kCount = {2, 2, 2};
+    constexpr std::array<GInt64, 3> kStep = {1, 1, 1};
+    constexpr std::array<GPtrDiff_t, 3> kStride = {4, 2, 1};
+    std::vector<GByte> buf(8, 0);
+    EXPECT_TRUE(md->Read(kStart.data(), kCount.data(), kStep.data(),
+                         kStride.data(), md->GetDataType(), buf.data()));
+    EXPECT_TRUE(md->Write(kStart.data(), kCount.data(), kStep.data(),
+                          kStride.data(), md->GetDataType(), buf.data()));
 
-    // Read with negative steps in Y and X
-    GUInt64 start_neg[3] = {0, 1, 1};
-    GInt64 step_neg[3] = {1, -1, -1};
-    EXPECT_TRUE(
-        md->Read(start_neg, count, step_neg, stride, md->GetDataType(), buf));
+    // Read with negative steps in Y and X.
+    constexpr std::array<GUInt64, 3> kStartNeg = {0, 1, 1};
+    constexpr std::array<GInt64, 3> kStepNeg = {1, -1, -1};
+    EXPECT_TRUE(md->Read(kStartNeg.data(), kCount.data(), kStepNeg.data(),
+                         kStride.data(), md->GetDataType(), buf.data()));
   }
 
-  // Custom metadata item with String, Integer, Real, and {None}
-  const char* types[] = {"String", "Integer", "Real"};
-  for (const char* t : types) {
-    const char* opts[] = {"BAND_INDEXING_VAR_ITEM=WAVELENGTH",
-                          CPLSPrintf("BAND_INDEXING_VAR_TYPE=%s", t), nullptr};
-    EXPECT_NE(ds_mb->AsMDArray(opts), nullptr);
+  // Custom metadata item with String, Integer, Real, and {None}.
+  constexpr std::array<const char*, 3> kVarTypes = {"String", "Integer",
+                                                    "Real"};
+  for (const char* type_name : kVarTypes) {
+    CPLStringList opts;
+    opts.SetNameValue("BAND_INDEXING_VAR_ITEM", "WAVELENGTH");
+    opts.SetNameValue("BAND_INDEXING_VAR_TYPE", type_name);
+    EXPECT_NE(nullptr, ds_mb->AsMDArray(opts.List()));
   }
-  const char* none_opts[] = {"BAND_INDEXING_VAR_ITEM={None}", nullptr};
-  EXPECT_NE(ds_mb->AsMDArray(none_opts), nullptr);
-
-  GDALClose(ds_mb);
-  CPLPopErrorHandler();
+  CPLStringList none_opts;
+  none_opts.SetNameValue("BAND_INDEXING_VAR_ITEM", "{None}");
+  EXPECT_NE(nullptr, ds_mb->AsMDArray(none_opts.List()));
 }
 
 }  // namespace
+}  // namespace autotest2

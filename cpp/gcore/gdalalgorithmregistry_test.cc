@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests gcore/gdalalgorithmregistry.cpp.
+// Tests GDALAlgorithmRegistry and GDALGlobalAlgorithmRegistry
+// (gcore/gdalalgorithmregistry.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdalalgorithmregistry.cpp
 
 #include <memory>
 #include <string>
@@ -20,12 +24,17 @@
 
 #include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_cstringlist.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/gcore/gdal.h"
 #include "third_party/gdal/gcore/gdalalgorithm.h"
 #include "third_party/gdal/port/cpl_error.h"
 #include "third_party/gdal/port/cpl_string.h"
 
+namespace autotest2 {
 namespace {
+
+using ::testing::ElementsAre;
 
 class DummySubAlg final : public GDALAlgorithm {
  public:
@@ -63,20 +72,27 @@ TEST(GdalalgorithmregistryTest, CustomAndGlobalRegistry) {
   EXPECT_TRUE(reg.Register<DummyTopAlg>());
 
   // Duplicate name and duplicate alias registration should fail.
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_FALSE(reg.Register<DummyTopAlg>());
-  GDALAlgorithmRegistry::AlgInfo dup_alias_info;
-  dup_alias_info.m_name = "other_name";
-  dup_alias_info.m_aliases = {"alias1"};
-  dup_alias_info.m_creationFunc = []() -> std::unique_ptr<GDALAlgorithm> {
-    return std::make_unique<DummyTopAlg>();
-  };
-  EXPECT_FALSE(reg.Register(dup_alias_info));
-  CPLPopErrorHandler();
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_FALSE(reg.Register<DummyTopAlg>());
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
 
-  EXPECT_THAT(reg.GetNames(), testing::ElementsAre("dummy_top"));
+    CPLErrorReset();
+    GDALAlgorithmRegistry::AlgInfo dup_alias_info;
+    dup_alias_info.m_name = "other_name";
+    dup_alias_info.m_aliases = {"alias1"};
+    dup_alias_info.m_creationFunc = []() -> std::unique_ptr<GDALAlgorithm> {
+      return std::make_unique<DummyTopAlg>();
+    };
+    EXPECT_FALSE(reg.Register(dup_alias_info));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
 
-  // Instantiate by primary name, hidden alias, visible alias, and missing name.
+  EXPECT_THAT(reg.GetNames(), ElementsAre("dummy_top"));
+
+  // Instantiate by primary name, visible alias, hidden alias, and missing name.
   EXPECT_NE(nullptr, reg.Instantiate("dummy_top"));
   EXPECT_NE(nullptr, reg.Instantiate("alias1"));
   EXPECT_NE(nullptr, reg.Instantiate("hidden_alias1"));
@@ -106,7 +122,8 @@ TEST(GdalalgorithmregistryTest, CustomAndGlobalRegistry) {
   EXPECT_FALSE(global_reg.HasDeclaredSubAlgorithm({}));
   EXPECT_FALSE(global_reg.HasDeclaredSubAlgorithm({"nonexistent_group"}));
 
-  auto sub_names = global_reg.GetDeclaredSubAlgorithmNames({"custom_group"});
+  const auto sub_names =
+      global_reg.GetDeclaredSubAlgorithmNames({"custom_group"});
   EXPECT_GE(sub_names.size(), 2u);
 
   EXPECT_NE(nullptr,
@@ -121,34 +138,53 @@ TEST(GdalalgorithmregistryTest, CustomAndGlobalRegistry) {
   EXPECT_NE(nullptr, global_reg.Instantiate("custom_group"));
 
   // C API.
-  GDALAlgorithmRegistryH h_reg = GDALGetGlobalAlgorithmRegistry();
+  std::unique_ptr<GDALAlgorithmRegistryHS,
+                  decltype(&GDALAlgorithmRegistryRelease)>
+      h_reg(GDALGetGlobalAlgorithmRegistry(), GDALAlgorithmRegistryRelease);
   ASSERT_NE(nullptr, h_reg);
 
-  char** names = GDALAlgorithmRegistryGetAlgNames(h_reg);
-  CSLDestroy(names);
+  StringListPtr names(GDALAlgorithmRegistryGetAlgNames(h_reg.get()),
+                      CSLDestroy);
+  EXPECT_EQ(nullptr, names);
 
-  GDALAlgorithmH h_alg =
-      GDALAlgorithmRegistryInstantiateAlg(h_reg, "custom_group");
+  std::unique_ptr<GDALAlgorithmHS, decltype(&GDALAlgorithmRelease)> h_alg(
+      GDALAlgorithmRegistryInstantiateAlg(h_reg.get(), "custom_group"),
+      GDALAlgorithmRelease);
   ASSERT_NE(nullptr, h_alg);
-  GDALAlgorithmRelease(h_alg);
 
   const char* path[] = {"custom_group", "custom_leaf", nullptr};
-  GDALAlgorithmH h_alg_path =
-      GDALAlgorithmRegistryInstantiateAlgFromPath(h_reg, path);
+  std::unique_ptr<GDALAlgorithmHS, decltype(&GDALAlgorithmRelease)> h_alg_path(
+      GDALAlgorithmRegistryInstantiateAlgFromPath(h_reg.get(), path),
+      GDALAlgorithmRelease);
   ASSERT_NE(nullptr, h_alg_path);
-  GDALAlgorithmRelease(h_alg_path);
 
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(nullptr, GDALAlgorithmRegistryGetAlgNames(nullptr));
-  EXPECT_EQ(nullptr, GDALAlgorithmRegistryInstantiateAlg(nullptr, "raster"));
-  EXPECT_EQ(nullptr, GDALAlgorithmRegistryInstantiateAlg(h_reg, nullptr));
-  EXPECT_EQ(nullptr,
-            GDALAlgorithmRegistryInstantiateAlgFromPath(nullptr, path));
-  EXPECT_EQ(nullptr,
-            GDALAlgorithmRegistryInstantiateAlgFromPath(h_reg, nullptr));
-  CPLPopErrorHandler();
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, GDALAlgorithmRegistryGetAlgNames(nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
 
-  GDALAlgorithmRegistryRelease(h_reg);
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, GDALAlgorithmRegistryInstantiateAlg(nullptr, "raster"));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+
+    CPLErrorReset();
+    EXPECT_EQ(nullptr,
+              GDALAlgorithmRegistryInstantiateAlg(h_reg.get(), nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+
+    CPLErrorReset();
+    EXPECT_EQ(nullptr,
+              GDALAlgorithmRegistryInstantiateAlgFromPath(nullptr, path));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, GDALAlgorithmRegistryInstantiateAlgFromPath(h_reg.get(),
+                                                                   nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
 }
 
 }  // namespace
+}  // namespace autotest2

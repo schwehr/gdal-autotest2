@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,38 +12,57 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests gcore/gdalrelationship.cpp.
+// Tests table relationship C API (gcore/gdalrelationship.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdalrelationship.cpp
+
+#include <array>
 
 #include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_cstringlist.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/gcore/gdal.h"
-#include "third_party/gdal/gcore/gdal_priv.h"
 #include "third_party/gdal/port/cpl_error.h"
 #include "third_party/gdal/port/cpl_string.h"
 
+namespace autotest2 {
 namespace {
 
-TEST(GdalrelationshipTest, CreateGetSetAndDestroy) {
+using ::testing::ElementsAre;
+
+TEST(GdalRelationshipTest, CreateGetSetAndDestroy) {
   // Null pointer checks on creation and getters.
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(nullptr,
-            GDALRelationshipCreate(nullptr, "left", "right", GRC_ONE_TO_MANY));
-  EXPECT_EQ(nullptr,
-            GDALRelationshipCreate("rel", nullptr, "right", GRC_ONE_TO_MANY));
-  EXPECT_EQ(nullptr,
-            GDALRelationshipCreate("rel", "left", nullptr, GRC_ONE_TO_MANY));
-  EXPECT_EQ(nullptr, GDALRelationshipGetName(nullptr));
-  EXPECT_EQ(nullptr, GDALRelationshipGetLeftTableName(nullptr));
-  EXPECT_EQ(nullptr, GDALRelationshipGetRightTableName(nullptr));
-  EXPECT_EQ(nullptr, GDALRelationshipGetMappingTableName(nullptr));
-  EXPECT_EQ(nullptr, GDALRelationshipGetLeftTableFields(nullptr));
-  EXPECT_EQ(nullptr, GDALRelationshipGetRightTableFields(nullptr));
-  EXPECT_EQ(nullptr, GDALRelationshipGetLeftMappingTableFields(nullptr));
-  EXPECT_EQ(nullptr, GDALRelationshipGetRightMappingTableFields(nullptr));
-  EXPECT_EQ(nullptr, GDALRelationshipGetForwardPathLabel(nullptr));
-  EXPECT_EQ(nullptr, GDALRelationshipGetBackwardPathLabel(nullptr));
-  EXPECT_EQ(nullptr, GDALRelationshipGetRelatedTableType(nullptr));
-  CPLPopErrorHandler();
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, GDALRelationshipCreate(nullptr, "left", "right",
+                                              GRC_ONE_TO_MANY));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+    EXPECT_EQ(nullptr,
+              GDALRelationshipCreate("rel", nullptr, "right", GRC_ONE_TO_MANY));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+    EXPECT_EQ(nullptr,
+              GDALRelationshipCreate("rel", "left", nullptr, GRC_ONE_TO_MANY));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, GDALRelationshipGetName(nullptr));
+    EXPECT_EQ(nullptr, GDALRelationshipGetLeftTableName(nullptr));
+    EXPECT_EQ(nullptr, GDALRelationshipGetRightTableName(nullptr));
+    EXPECT_EQ(nullptr, GDALRelationshipGetMappingTableName(nullptr));
+    EXPECT_EQ(nullptr, GDALRelationshipGetLeftTableFields(nullptr));
+    EXPECT_EQ(nullptr, GDALRelationshipGetRightTableFields(nullptr));
+    EXPECT_EQ(nullptr, GDALRelationshipGetLeftMappingTableFields(nullptr));
+    EXPECT_EQ(nullptr, GDALRelationshipGetRightMappingTableFields(nullptr));
+    EXPECT_EQ(nullptr, GDALRelationshipGetForwardPathLabel(nullptr));
+    EXPECT_EQ(nullptr, GDALRelationshipGetBackwardPathLabel(nullptr));
+    EXPECT_EQ(nullptr, GDALRelationshipGetRelatedTableType(nullptr));
+    CPLErrorReset();
+  }
 
   GDALDestroyRelationship(nullptr);
 
@@ -51,6 +70,7 @@ TEST(GdalrelationshipTest, CreateGetSetAndDestroy) {
   GDALRelationshipH rel = GDALRelationshipCreate(
       "building_furniture", "buildings", "furniture", GRC_MANY_TO_MANY);
   ASSERT_NE(nullptr, rel);
+  absl::Cleanup destroy_rel = [rel] { GDALDestroyRelationship(rel); };
 
   EXPECT_STREQ("building_furniture", GDALRelationshipGetName(rel));
   EXPECT_EQ(GRC_MANY_TO_MANY, GDALRelationshipGetCardinality(rel));
@@ -64,39 +84,39 @@ TEST(GdalrelationshipTest, CreateGetSetAndDestroy) {
                GDALRelationshipGetMappingTableName(rel));
 
   // Left and right table fields.
-  const char* left_fields[] = {"bldg_id", "zone_id", nullptr};
-  GDALRelationshipSetLeftTableFields(rel, left_fields);
-  char** got_left = GDALRelationshipGetLeftTableFields(rel);
+  constexpr std::array<const char*, 3> kLeftFields = {"bldg_id", "zone_id",
+                                                      nullptr};
+  static_assert(kLeftFields.back() == nullptr);
+  GDALRelationshipSetLeftTableFields(rel, kLeftFields.data());
+  StringListPtr got_left(GDALRelationshipGetLeftTableFields(rel), CSLDestroy);
   ASSERT_NE(nullptr, got_left);
-  EXPECT_EQ(2, CSLCount(got_left));
-  EXPECT_STREQ("bldg_id", got_left[0]);
-  EXPECT_STREQ("zone_id", got_left[1]);
-  CSLDestroy(got_left);
+  EXPECT_THAT(CslToVector(got_left.get()), ElementsAre("bldg_id", "zone_id"));
 
-  const char* right_fields[] = {"furn_id", nullptr};
-  GDALRelationshipSetRightTableFields(rel, right_fields);
-  char** got_right = GDALRelationshipGetRightTableFields(rel);
+  constexpr std::array<const char*, 2> kRightFields = {"furn_id", nullptr};
+  static_assert(kRightFields.back() == nullptr);
+  GDALRelationshipSetRightTableFields(rel, kRightFields.data());
+  StringListPtr got_right(GDALRelationshipGetRightTableFields(rel), CSLDestroy);
   ASSERT_NE(nullptr, got_right);
-  EXPECT_EQ(1, CSLCount(got_right));
-  EXPECT_STREQ("furn_id", got_right[0]);
-  CSLDestroy(got_right);
+  EXPECT_THAT(CslToVector(got_right.get()), ElementsAre("furn_id"));
 
   // Left and right mapping table fields.
-  const char* left_map_fields[] = {"map_bldg_id", nullptr};
-  GDALRelationshipSetLeftMappingTableFields(rel, left_map_fields);
-  char** got_left_map = GDALRelationshipGetLeftMappingTableFields(rel);
+  constexpr std::array<const char*, 2> kLeftMapFields = {"map_bldg_id",
+                                                         nullptr};
+  static_assert(kLeftMapFields.back() == nullptr);
+  GDALRelationshipSetLeftMappingTableFields(rel, kLeftMapFields.data());
+  StringListPtr got_left_map(GDALRelationshipGetLeftMappingTableFields(rel),
+                             CSLDestroy);
   ASSERT_NE(nullptr, got_left_map);
-  EXPECT_EQ(1, CSLCount(got_left_map));
-  EXPECT_STREQ("map_bldg_id", got_left_map[0]);
-  CSLDestroy(got_left_map);
+  EXPECT_THAT(CslToVector(got_left_map.get()), ElementsAre("map_bldg_id"));
 
-  const char* right_map_fields[] = {"map_furn_id", nullptr};
-  GDALRelationshipSetRightMappingTableFields(rel, right_map_fields);
-  char** got_right_map = GDALRelationshipGetRightMappingTableFields(rel);
+  constexpr std::array<const char*, 2> kRightMapFields = {"map_furn_id",
+                                                          nullptr};
+  static_assert(kRightMapFields.back() == nullptr);
+  GDALRelationshipSetRightMappingTableFields(rel, kRightMapFields.data());
+  StringListPtr got_right_map(GDALRelationshipGetRightMappingTableFields(rel),
+                              CSLDestroy);
   ASSERT_NE(nullptr, got_right_map);
-  EXPECT_EQ(1, CSLCount(got_right_map));
-  EXPECT_STREQ("map_furn_id", got_right_map[0]);
-  CSLDestroy(got_right_map);
+  EXPECT_THAT(CslToVector(got_right_map.get()), ElementsAre("map_furn_id"));
 
   // Type.
   EXPECT_EQ(GRT_ASSOCIATION, GDALRelationshipGetType(rel));
@@ -116,8 +136,7 @@ TEST(GdalrelationshipTest, CreateGetSetAndDestroy) {
   EXPECT_STREQ("", GDALRelationshipGetRelatedTableType(rel));
   GDALRelationshipSetRelatedTableType(rel, "attributes");
   EXPECT_STREQ("attributes", GDALRelationshipGetRelatedTableType(rel));
-
-  GDALDestroyRelationship(rel);
 }
 
 }  // namespace
+}  // namespace autotest2

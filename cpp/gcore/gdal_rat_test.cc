@@ -1,4 +1,4 @@
-// Copyright 2018 Google Inc. All Rights Reserved.
+// Copyright 2018 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,30 +12,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// RAT == Raster Attribute Table
+// Tests GDALRasterAttributeTable and GDALDefaultRasterAttributeTable
+// (gcore/gdal_rat.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdal_rat.cpp
 
 #include "third_party/gdal/gcore/gdal_rat.h"
 
+#include <array>
+#include <cstddef>
 #include <cstdio>
-#include <cstring>
+#include <cstdlib>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/gcore/gdal.h"
 #include "third_party/gdal/gcore/gdal_priv.h"
 #include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
-#include "third_party/gdal/port/cpl_json.h"
 #include "third_party/gdal/port/cpl_minixml.h"
-#include "third_party/gdal/port/cpl_string.h"
+#include "third_party/gdal/port/cpl_port.h"
+#include "third_party/json_c/json.h"
 
-extern "C" int json_object_put(struct json_object* obj);
-
-namespace gdal {
+namespace autotest2 {
 namespace {
+
+using ::testing::HasSubstr;
 
 // Custom subclass of GDALRasterAttributeTable that delegates cell storage to
 // an internal GDALDefaultRasterAttributeTable while allowing us to test
@@ -172,7 +181,7 @@ class CustomBaseRAT : public GDALRasterAttributeTable {
 };
 
 TEST(GdalRatTest, NullPointerCAPIValidation) {
-  CPLPushErrorHandler(CPLQuietErrorHandler);
+  WithQuietHandler quiet;
   GDALDestroyRasterAttributeTable(nullptr);
   EXPECT_EQ(0, GDALRATGetColumnCount(nullptr));
   EXPECT_EQ(nullptr, GDALRATGetNameOfCol(nullptr, 0));
@@ -187,7 +196,7 @@ TEST(GdalRatTest, NullPointerCAPIValidation) {
   EXPECT_EQ(0.0, GDALRATGetValueAsDouble(nullptr, 0, 0));
   EXPECT_FALSE(GDALRATGetValueAsBoolean(nullptr, 0, 0));
 
-  GDALRATDateTime dt;
+  GDALRATDateTime dt{};
   EXPECT_EQ(CE_Failure, GDALRATGetValueAsDateTime(nullptr, 0, 0, &dt));
   GDALDefaultRasterAttributeTable valid_rat;
   EXPECT_EQ(CE_Failure,
@@ -230,7 +239,8 @@ TEST(GdalRatTest, NullPointerCAPIValidation) {
 
   EXPECT_FALSE(GDALRATChangesAreWrittenToFile(nullptr));
   EXPECT_EQ(CE_Failure, GDALRATSetLinearBinning(nullptr, 0.0, 1.0));
-  double r0 = 0.0, bs = 0.0;
+  double r0 = 0.0;
+  double bs = 0.0;
   EXPECT_FALSE(GDALRATGetLinearBinning(nullptr, &r0, &bs));
   EXPECT_FALSE(GDALRATGetLinearBinning(
       GDALRasterAttributeTable::ToHandle(&valid_rat), nullptr, &bs));
@@ -248,13 +258,13 @@ TEST(GdalRatTest, NullPointerCAPIValidation) {
   EXPECT_EQ(nullptr, GDALRATClone(nullptr));
   EXPECT_EQ(nullptr, GDALRATSerializeJSON(nullptr));
   GDALRATRemoveStatistics(nullptr);
-  CPLPopErrorHandler();
+  CPLErrorReset();
 }
 
 TEST(GdalRatTest, AllTypesGetAndSetAndConversions) {
-  CPLPushErrorHandler(CPLQuietErrorHandler);
   GDALRasterAttributeTableH hRAT = GDALCreateRasterAttributeTable();
   ASSERT_NE(nullptr, hRAT);
+  absl::Cleanup rat_cleaner = [hRAT] { GDALDestroyRasterAttributeTable(hRAT); };
 
   EXPECT_EQ(CE_None,
             GDALRATCreateColumn(hRAT, "int_col", GFT_Integer, GFU_Generic));
@@ -297,29 +307,13 @@ TEST(GdalRatTest, AllTypesGetAndSetAndConversions) {
   GDALRATSetValueAsString(hRAT, 0, 4, "2025-06-15T12:30:45.500+02:15");
   GDALRATSetValueAsString(hRAT, 0, 5, "POINT (10 20)");
 
-  // Out-of-bounds SetValue checks for all types.
-  auto* poRAT = GDALRasterAttributeTable::FromHandle(hRAT);
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(-1, 0, "x"));
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(99, 0, "x"));
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(0, -1, "x"));
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(0, 99, "x"));
+  size_t wkb_size = 0;
+  const GByte* wkb_data = GDALRATGetValueAsWKBGeometry(hRAT, 0, 5, &wkb_size);
+  ASSERT_NE(nullptr, wkb_data);
+  EXPECT_GT(wkb_size, 0U);
+  const std::vector<GByte> saved_wkb(wkb_data, wkb_data + wkb_size);
 
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(-1, 0, 1));
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(99, 0, 1));
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(0, -1, 1));
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(0, 99, 1));
-
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(-1, 0, 1.0));
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(99, 0, 1.0));
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(0, -1, 1.0));
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(0, 99, 1.0));
-
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(-1, 0, true));
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(99, 0, true));
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(0, -1, true));
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(0, 99, true));
-
-  GDALRATDateTime dt;
+  GDALRATDateTime dt{};
   dt.bIsValid = true;
   dt.nYear = 2024;
   dt.nMonth = 1;
@@ -330,158 +324,192 @@ TEST(GdalRatTest, AllTypesGetAndSetAndConversions) {
   dt.nTimeZoneHour = 0;
   dt.nTimeZoneMinute = 0;
   dt.bPositiveTimeZone = false;
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(-1, 4, dt));
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(99, 4, dt));
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(0, -1, dt));
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(0, 99, dt));
 
-  size_t wkb_size = 0;
-  const GByte* wkb_data = GDALRATGetValueAsWKBGeometry(hRAT, 0, 5, &wkb_size);
-  ASSERT_NE(nullptr, wkb_data);
-  EXPECT_GT(wkb_size, 0U);
-  std::vector<GByte> saved_wkb(wkb_data, wkb_data + wkb_size);
-
-  EXPECT_EQ(CE_Failure,
-            poRAT->SetValue(-1, 5, saved_wkb.data(), saved_wkb.size()));
-  EXPECT_EQ(CE_Failure,
-            poRAT->SetValue(99, 5, saved_wkb.data(), saved_wkb.size()));
-  EXPECT_EQ(CE_Failure,
-            poRAT->SetValue(0, -1, saved_wkb.data(), saved_wkb.size()));
-  EXPECT_EQ(CE_Failure,
-            poRAT->SetValue(0, 99, saved_wkb.data(), saved_wkb.size()));
+  // Out-of-bounds SetValue checks for all types.
+  auto* poRAT = GDALRasterAttributeTable::FromHandle(hRAT);
+  {
+    WithQuietHandler quiet;
+    for (int bad_idx : {-1, 99}) {
+      EXPECT_EQ(CE_Failure, poRAT->SetValue(bad_idx, 0, "x"));
+      EXPECT_EQ(CE_Failure, poRAT->SetValue(0, bad_idx, "x"));
+      EXPECT_EQ(CE_Failure, poRAT->SetValue(bad_idx, 0, 1));
+      EXPECT_EQ(CE_Failure, poRAT->SetValue(0, bad_idx, 1));
+      EXPECT_EQ(CE_Failure, poRAT->SetValue(bad_idx, 0, 1.0));
+      EXPECT_EQ(CE_Failure, poRAT->SetValue(0, bad_idx, 1.0));
+      EXPECT_EQ(CE_Failure, poRAT->SetValue(bad_idx, 0, true));
+      EXPECT_EQ(CE_Failure, poRAT->SetValue(0, bad_idx, true));
+      EXPECT_EQ(CE_Failure, poRAT->SetValue(bad_idx, 4, dt));
+      EXPECT_EQ(CE_Failure, poRAT->SetValue(0, bad_idx, dt));
+      EXPECT_EQ(CE_Failure, poRAT->SetValue(bad_idx, 5, saved_wkb.data(),
+                                            saved_wkb.size()));
+      EXPECT_EQ(CE_Failure, poRAT->SetValue(0, bad_idx, saved_wkb.data(),
+                                            saved_wkb.size()));
+    }
+    CPLErrorReset();
+  }
 
   // Set values via int, double, boolean, DateTime, WKBGeometry across
-  // compatible and incompatible columns on row 1, plus auto-expanding row 2!
+  // compatible and incompatible columns on row 1, plus auto-expanding row 2.
   GDALRATSetValueAsInt(hRAT, 1, 0, 10);
   GDALRATSetValueAsInt(hRAT, 1, 1, 20);
   GDALRATSetValueAsInt(hRAT, 1, 2, 30);
   GDALRATSetValueAsInt(hRAT, 1, 3, 1);
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(1, 4, 1));  // Incompatible DateTime
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(1, 5, 1));  // Incompatible WKB
+  {
+    WithQuietHandler quiet;
+    EXPECT_EQ(CE_Failure, poRAT->SetValue(1, 4, 1));  // Incompatible DateTime
+    EXPECT_EQ(CE_Failure, poRAT->SetValue(1, 5, 1));  // Incompatible WKB
+    CPLErrorReset();
+  }
 
-  GDALRATSetValueAsDouble(hRAT, 2, 0, 11.5);  // Auto-expands to 3 rows!
+  GDALRATSetValueAsDouble(hRAT, 2, 0, 11.5);  // Auto-expands to 3 rows.
   EXPECT_EQ(3, GDALRATGetRowCount(hRAT));
   GDALRATSetValueAsDouble(hRAT, 2, 1, 22.5);
   GDALRATSetValueAsDouble(hRAT, 2, 2, 33.5);
   GDALRATSetValueAsDouble(hRAT, 2, 3, 0.0);
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(2, 4, 1.0));
-  EXPECT_EQ(CE_Failure, poRAT->SetValue(2, 5, 1.0));
+  {
+    WithQuietHandler quiet;
+    EXPECT_EQ(CE_Failure, poRAT->SetValue(2, 4, 1.0));
+    EXPECT_EQ(CE_Failure, poRAT->SetValue(2, 5, 1.0));
+    CPLErrorReset();
+  }
 
   EXPECT_EQ(CE_None, GDALRATSetValueAsBoolean(hRAT, 3, 0, true));  // Row 3
   EXPECT_EQ(CE_None, GDALRATSetValueAsBoolean(hRAT, 3, 1, true));
   EXPECT_EQ(CE_None, GDALRATSetValueAsBoolean(hRAT, 3, 2, false));
   EXPECT_EQ(CE_None, GDALRATSetValueAsBoolean(hRAT, 3, 3, true));
-  EXPECT_EQ(CE_Failure, GDALRATSetValueAsBoolean(hRAT, 3, 4, true));
-  EXPECT_EQ(CE_Failure, GDALRATSetValueAsBoolean(hRAT, 3, 5, true));
+  {
+    WithQuietHandler quiet;
+    EXPECT_EQ(CE_Failure, GDALRATSetValueAsBoolean(hRAT, 3, 4, true));
+    EXPECT_EQ(CE_Failure, GDALRATSetValueAsBoolean(hRAT, 3, 5, true));
+    CPLErrorReset();
+  }
 
   EXPECT_EQ(CE_None, GDALRATSetValueAsDateTime(hRAT, 4, 4, &dt));  // Row 4
   EXPECT_EQ(CE_None,
             GDALRATSetValueAsDateTime(hRAT, 4, 2, &dt));  // Into String
-  EXPECT_EQ(CE_Failure, GDALRATSetValueAsDateTime(hRAT, 4, 0, &dt));
+  {
+    WithQuietHandler quiet;
+    EXPECT_EQ(CE_Failure, GDALRATSetValueAsDateTime(hRAT, 4, 0, &dt));
+    CPLErrorReset();
+  }
 
   EXPECT_EQ(CE_None, GDALRATSetValueAsWKBGeometry(hRAT, 5, 5, saved_wkb.data(),
                                                   saved_wkb.size()));
   EXPECT_EQ(CE_None, GDALRATSetValueAsWKBGeometry(hRAT, 5, 2, saved_wkb.data(),
                                                   saved_wkb.size()));
   EXPECT_EQ(CE_None, GDALRATSetValueAsWKBGeometry(hRAT, 1, 5, nullptr, 0));
-  EXPECT_EQ(CE_Failure, GDALRATSetValueAsWKBGeometry(
-                            hRAT, 5, 0, saved_wkb.data(), saved_wkb.size()));
+  {
+    WithQuietHandler quiet;
+    EXPECT_EQ(CE_Failure, GDALRATSetValueAsWKBGeometry(
+                              hRAT, 5, 0, saved_wkb.data(), saved_wkb.size()));
+    CPLErrorReset();
+  }
 
   // Read values back in all types across all columns.
-  for (int col = 0; col < 6; ++col) {
-    (void)GDALRATGetValueAsString(hRAT, 0, col);
-    (void)GDALRATGetValueAsInt(hRAT, 0, col);
-    (void)GDALRATGetValueAsDouble(hRAT, 0, col);
-    (void)GDALRATGetValueAsBoolean(hRAT, 0, col);
-    GDALRATDateTime out_dt;
-    (void)GDALRATGetValueAsDateTime(hRAT, 0, col, &out_dt);
-    size_t out_sz = 0;
-    (void)GDALRATGetValueAsWKBGeometry(hRAT, 0, col, &out_sz);
-  }
-  // Also test GetValueAsWKBGeometry on empty WKB (row 1, col 5) and invalid WKT
-  // string (row 1, col 2).
-  size_t empty_sz = 99;
-  EXPECT_EQ(nullptr, GDALRATGetValueAsWKBGeometry(hRAT, 1, 5, &empty_sz));
-  EXPECT_EQ(0U, empty_sz);
-  EXPECT_EQ(nullptr, GDALRATGetValueAsWKBGeometry(hRAT, 1, 2, &empty_sz));
+  {
+    WithQuietHandler quiet;
+    for (int col = 0; col < 6; ++col) {
+      (void)GDALRATGetValueAsString(hRAT, 0, col);
+      (void)GDALRATGetValueAsInt(hRAT, 0, col);
+      (void)GDALRATGetValueAsDouble(hRAT, 0, col);
+      (void)GDALRATGetValueAsBoolean(hRAT, 0, col);
+      GDALRATDateTime out_dt{};
+      (void)GDALRATGetValueAsDateTime(hRAT, 0, col, &out_dt);
+      size_t out_sz = 0;
+      (void)GDALRATGetValueAsWKBGeometry(hRAT, 0, col, &out_sz);
+    }
+    // Also test GetValueAsWKBGeometry on empty WKB (row 1, col 5) and invalid
+    // WKT string (row 1, col 2).
+    size_t empty_sz = 99;
+    EXPECT_EQ(nullptr, GDALRATGetValueAsWKBGeometry(hRAT, 1, 5, &empty_sz));
+    EXPECT_EQ(0U, empty_sz);
+    EXPECT_EQ(nullptr, GDALRATGetValueAsWKBGeometry(hRAT, 1, 2, &empty_sz));
 
-  // Out-of-bounds GetValueAs* checks.
-  for (int bad_idx : {-1, 99}) {
-    EXPECT_STREQ("", GDALRATGetValueAsString(hRAT, bad_idx, 0));
-    EXPECT_STREQ("", GDALRATGetValueAsString(hRAT, 0, bad_idx));
-    EXPECT_EQ(0, GDALRATGetValueAsInt(hRAT, bad_idx, 0));
-    EXPECT_EQ(0, GDALRATGetValueAsInt(hRAT, 0, bad_idx));
-    EXPECT_EQ(0.0, GDALRATGetValueAsDouble(hRAT, bad_idx, 0));
-    EXPECT_EQ(0.0, GDALRATGetValueAsDouble(hRAT, 0, bad_idx));
-    EXPECT_FALSE(GDALRATGetValueAsBoolean(hRAT, bad_idx, 0));
-    EXPECT_FALSE(GDALRATGetValueAsBoolean(hRAT, 0, bad_idx));
-    GDALRATDateTime out_dt;
-    EXPECT_EQ(CE_Failure, GDALRATGetValueAsDateTime(hRAT, bad_idx, 0, &out_dt));
-    EXPECT_EQ(CE_Failure, GDALRATGetValueAsDateTime(hRAT, 0, bad_idx, &out_dt));
-    size_t out_sz = 0;
-    EXPECT_EQ(nullptr, GDALRATGetValueAsWKBGeometry(hRAT, bad_idx, 0, &out_sz));
-    EXPECT_EQ(nullptr, GDALRATGetValueAsWKBGeometry(hRAT, 0, bad_idx, &out_sz));
+    // Out-of-bounds GetValueAs* checks.
+    for (int bad_idx : {-1, 99}) {
+      EXPECT_STREQ("", GDALRATGetValueAsString(hRAT, bad_idx, 0));
+      EXPECT_STREQ("", GDALRATGetValueAsString(hRAT, 0, bad_idx));
+      EXPECT_EQ(0, GDALRATGetValueAsInt(hRAT, bad_idx, 0));
+      EXPECT_EQ(0, GDALRATGetValueAsInt(hRAT, 0, bad_idx));
+      EXPECT_EQ(0.0, GDALRATGetValueAsDouble(hRAT, bad_idx, 0));
+      EXPECT_EQ(0.0, GDALRATGetValueAsDouble(hRAT, 0, bad_idx));
+      EXPECT_FALSE(GDALRATGetValueAsBoolean(hRAT, bad_idx, 0));
+      EXPECT_FALSE(GDALRATGetValueAsBoolean(hRAT, 0, bad_idx));
+      GDALRATDateTime out_dt{};
+      EXPECT_EQ(CE_Failure,
+                GDALRATGetValueAsDateTime(hRAT, bad_idx, 0, &out_dt));
+      EXPECT_EQ(CE_Failure,
+                GDALRATGetValueAsDateTime(hRAT, 0, bad_idx, &out_dt));
+      size_t out_sz = 0;
+      EXPECT_EQ(nullptr,
+                GDALRATGetValueAsWKBGeometry(hRAT, bad_idx, 0, &out_sz));
+      EXPECT_EQ(nullptr,
+                GDALRATGetValueAsWKBGeometry(hRAT, 0, bad_idx, &out_sz));
+    }
+    CPLErrorReset();
   }
-
-  GDALDestroyRasterAttributeTable(hRAT);
-  CPLPopErrorHandler();
 }
 
 TEST(GdalRatTest, DateTimeAndWKBStaticHelpers) {
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  GDALRATDateTime dt;
-  EXPECT_FALSE(GDALRasterAttributeTable::StringToDateTime("invalid", dt));
-  EXPECT_STREQ("", GDALRasterAttributeTable::DateTimeToString(dt).c_str());
+  GDALRATDateTime dt{};
+  {
+    WithQuietHandler quiet;
+    EXPECT_FALSE(GDALRasterAttributeTable::StringToDateTime("invalid", dt));
+    CPLErrorReset();
+  }
+  EXPECT_EQ("", GDALRasterAttributeTable::DateTimeToString(dt));
 
   // UTC Z timezone with integer seconds.
   EXPECT_TRUE(
       GDALRasterAttributeTable::StringToDateTime("2025-12-31T23:59:05Z", dt));
-  EXPECT_STREQ("2025-12-31T23:59:05.000+00:00",
-               GDALRasterAttributeTable::DateTimeToString(dt).c_str());
+  EXPECT_EQ("2025-12-31T23:59:05.000+00:00",
+            GDALRasterAttributeTable::DateTimeToString(dt));
 
   // Negative timezone with fractional seconds.
   EXPECT_TRUE(GDALRasterAttributeTable::StringToDateTime(
       "2025-12-31T23:59:05.250-05:30", dt));
-  EXPECT_STREQ("2025-12-31T23:59:05.250-05:30",
-               GDALRasterAttributeTable::DateTimeToString(dt).c_str());
+  EXPECT_EQ("2025-12-31T23:59:05.250-05:30",
+            GDALRasterAttributeTable::DateTimeToString(dt));
 
   // Positive timezone with 00:00 and bPositiveTimeZone = true / false.
   dt.nTimeZoneHour = 0;
   dt.nTimeZoneMinute = 0;
   dt.bPositiveTimeZone = true;
   dt.fSecond = 10.0f;
-  EXPECT_STREQ("2025-12-31T23:59:10.000+00:00",
-               GDALRasterAttributeTable::DateTimeToString(dt).c_str());
+  EXPECT_EQ("2025-12-31T23:59:10.000+00:00",
+            GDALRasterAttributeTable::DateTimeToString(dt));
   dt.nTimeZoneHour = 1;
   dt.nTimeZoneMinute = 30;
-  EXPECT_STREQ("2025-12-31T23:59:10.000+01:30",
-               GDALRasterAttributeTable::DateTimeToString(dt).c_str());
+  EXPECT_EQ("2025-12-31T23:59:10.000+01:30",
+            GDALRasterAttributeTable::DateTimeToString(dt));
 
   // No timezone in parsed string (TZFlag <= 2).
   EXPECT_TRUE(
       GDALRasterAttributeTable::StringToDateTime("2025-12-31T23:59:10", dt));
-  EXPECT_STREQ("2025-12-31T23:59:10.000-00:00",
-               GDALRasterAttributeTable::DateTimeToString(dt).c_str());
+  EXPECT_EQ("2025-12-31T23:59:10.000-00:00",
+            GDALRasterAttributeTable::DateTimeToString(dt));
 
   // WKT/WKB helpers.
-  EXPECT_STREQ("",
-               GDALRasterAttributeTable::WKBGeometryToWKT(nullptr, 0).c_str());
-  const GByte bad_wkb[] = {0x99, 0x99, 0x99};
-  EXPECT_STREQ("",
-               GDALRasterAttributeTable::WKBGeometryToWKT(bad_wkb, 3).c_str());
-  EXPECT_TRUE(GDALRasterAttributeTable::WKTGeometryToWKB("").empty());
-  EXPECT_TRUE(GDALRasterAttributeTable::WKTGeometryToWKB("NOT_A_WKT").empty());
+  EXPECT_EQ("", GDALRasterAttributeTable::WKBGeometryToWKT(nullptr, 0));
+  constexpr std::array<GByte, 3> kBadWkb = {0x99, 0x99, 0x99};
+  {
+    WithQuietHandler quiet;
+    EXPECT_EQ("", GDALRasterAttributeTable::WKBGeometryToWKT(kBadWkb.data(),
+                                                             kBadWkb.size()));
+    EXPECT_TRUE(GDALRasterAttributeTable::WKTGeometryToWKB("").empty());
+    EXPECT_TRUE(
+        GDALRasterAttributeTable::WKTGeometryToWKB("NOT_A_WKT").empty());
+    CPLErrorReset();
+  }
 
-  auto wkb = GDALRasterAttributeTable::WKTGeometryToWKB("POINT (3 4)");
+  const std::vector<GByte> wkb =
+      GDALRasterAttributeTable::WKTGeometryToWKB("POINT (3 4)");
   EXPECT_FALSE(wkb.empty());
-  EXPECT_STREQ("POINT (3 4)", GDALRasterAttributeTable::WKBGeometryToWKT(
-                                  wkb.data(), wkb.size())
-                                  .c_str());
-  CPLPopErrorHandler();
+  EXPECT_EQ("POINT (3 4)",
+            GDALRasterAttributeTable::WKBGeometryToWKT(wkb.data(), wkb.size()));
 }
 
 TEST(GdalRatTest, ValuesIOAndProtectedHelpers) {
-  CPLPushErrorHandler(CPLQuietErrorHandler);
   CustomBaseRAT rat;
   rat.CreateColumn("int_col", GFT_Integer, GFU_Generic);
   rat.CreateColumn("real_col", GFT_Real, GFU_Generic);
@@ -512,11 +540,17 @@ TEST(GdalRatTest, ValuesIOAndProtectedHelpers) {
   EXPECT_EQ(100, ivals_read[0]);
   EXPECT_EQ(200, ivals_read[1]);
 
-  const char* svals_in[2] = {"hello", "world"};
-  EXPECT_EQ(CE_None, GDALRATValuesIOAsString(hRAT, GF_Write, 2, 3, 2,
-                                             const_cast<char**>(svals_in)));
+  char s0[] = "hello";
+  char s1[] = "world";
+  char* svals_in[2] = {s0, s1};
+  EXPECT_EQ(CE_None,
+            GDALRATValuesIOAsString(hRAT, GF_Write, 2, 3, 2, svals_in));
   EXPECT_EQ(10, rat.GetRowCount());
   char* svals_out[2] = {nullptr, nullptr};
+  absl::Cleanup svals_cleaner = [&svals_out] {
+    CPLFree(svals_out[0]);
+    CPLFree(svals_out[1]);
+  };
   EXPECT_EQ(CE_None,
             GDALRATValuesIOAsString(hRAT, GF_Read, 2, 3, 2, svals_out));
   EXPECT_STREQ("hello", svals_out[0]);
@@ -534,7 +568,7 @@ TEST(GdalRatTest, ValuesIOAndProtectedHelpers) {
   EXPECT_TRUE(bvals_read[0]);
   EXPECT_FALSE(bvals_read[1]);
 
-  GDALRATDateTime dt_vals[2];
+  GDALRATDateTime dt_vals[2] = {};
   dt_vals[0].bIsValid = true;
   dt_vals[0].nYear = 2025;
   dt_vals[0].nMonth = 3;
@@ -542,18 +576,23 @@ TEST(GdalRatTest, ValuesIOAndProtectedHelpers) {
   dt_vals[1].bIsValid = false;
   EXPECT_EQ(CE_None,
             GDALRATValuesIOAsDateTime(hRAT, GF_Write, 4, 5, 2, dt_vals));
-  GDALRATDateTime dt_read[2];
+  GDALRATDateTime dt_read[2] = {};
   EXPECT_EQ(CE_None,
             GDALRATValuesIOAsDateTime(hRAT, GF_Read, 4, 5, 2, dt_read));
   EXPECT_TRUE(dt_read[0].bIsValid);
   EXPECT_EQ(2025, dt_read[0].nYear);
 
-  auto wkb = GDALRasterAttributeTable::WKTGeometryToWKB("POINT (5 6)");
+  std::vector<GByte> wkb =
+      GDALRasterAttributeTable::WKTGeometryToWKB("POINT (5 6)");
   GByte* wkb_in[2] = {wkb.data(), nullptr};
   size_t wkb_sizes_in[2] = {wkb.size(), 0};
   EXPECT_EQ(CE_None, GDALRATValuesIOAsWKBGeometry(hRAT, GF_Write, 5, 6, 2,
                                                   wkb_in, wkb_sizes_in));
   GByte* wkb_out[2] = {nullptr, nullptr};
+  absl::Cleanup wkb_cleaner = [&wkb_out] {
+    CPLFree(wkb_out[0]);
+    CPLFree(wkb_out[1]);
+  };
   size_t wkb_sizes_out[2] = {0, 0};
   EXPECT_EQ(CE_None, GDALRATValuesIOAsWKBGeometry(hRAT, GF_Read, 5, 6, 2,
                                                   wkb_out, wkb_sizes_out));
@@ -565,34 +604,42 @@ TEST(GdalRatTest, ValuesIOAndProtectedHelpers) {
 
   // Out-of-bounds iStartRow + iLength > GetRowCount() for all 6 ValuesIO
   // overloads.
-  EXPECT_EQ(CE_Failure,
-            GDALRATValuesIOAsDouble(hRAT, GF_Read, 1, 100, 1, dvals));
-  EXPECT_EQ(CE_Failure,
-            GDALRATValuesIOAsInteger(hRAT, GF_Read, 0, 100, 1, ivals));
-  EXPECT_EQ(CE_Failure,
-            GDALRATValuesIOAsString(hRAT, GF_Read, 2, 100, 1, svals_out));
-  EXPECT_EQ(CE_Failure,
-            GDALRATValuesIOAsBoolean(hRAT, GF_Read, 3, 100, 1, bvals));
-  EXPECT_EQ(CE_Failure,
-            GDALRATValuesIOAsDateTime(hRAT, GF_Read, 4, 100, 1, dt_vals));
-  EXPECT_EQ(CE_Failure, GDALRATValuesIOAsWKBGeometry(hRAT, GF_Read, 5, 100, 1,
-                                                     wkb_out, wkb_sizes_out));
+  {
+    WithQuietHandler quiet;
+    EXPECT_EQ(CE_Failure,
+              GDALRATValuesIOAsDouble(hRAT, GF_Read, 1, 100, 1, dvals));
+    EXPECT_EQ(CE_Failure,
+              GDALRATValuesIOAsInteger(hRAT, GF_Read, 0, 100, 1, ivals));
+    EXPECT_EQ(CE_Failure,
+              GDALRATValuesIOAsString(hRAT, GF_Read, 2, 100, 1, svals_out));
+    EXPECT_EQ(CE_Failure,
+              GDALRATValuesIOAsBoolean(hRAT, GF_Read, 3, 100, 1, bvals));
+    EXPECT_EQ(CE_Failure,
+              GDALRATValuesIOAsDateTime(hRAT, GF_Read, 4, 100, 1, dt_vals));
+    EXPECT_EQ(CE_Failure, GDALRATValuesIOAsWKBGeometry(hRAT, GF_Read, 5, 100, 1,
+                                                       wkb_out, wkb_sizes_out));
+    CPLErrorReset();
+  }
 
   // Test error propagation on GF_Write inside ValuesIO loops (fail_set_).
-  rat.fail_set_ = true;
-  EXPECT_EQ(CE_Failure,
-            GDALRATValuesIOAsDouble(hRAT, GF_Write, 1, 0, 1, dvals));
-  EXPECT_EQ(CE_Failure,
-            GDALRATValuesIOAsInteger(hRAT, GF_Write, 0, 0, 1, ivals));
-  EXPECT_EQ(CE_Failure, GDALRATValuesIOAsString(hRAT, GF_Write, 2, 0, 1,
-                                                const_cast<char**>(svals_in)));
-  EXPECT_EQ(CE_Failure,
-            GDALRATValuesIOAsBoolean(hRAT, GF_Write, 3, 0, 1, bvals));
-  EXPECT_EQ(CE_Failure,
-            GDALRATValuesIOAsDateTime(hRAT, GF_Write, 4, 0, 1, dt_vals));
-  EXPECT_EQ(CE_Failure, GDALRATValuesIOAsWKBGeometry(hRAT, GF_Write, 5, 0, 1,
-                                                     wkb_in, wkb_sizes_in));
-  rat.fail_set_ = false;
+  {
+    WithQuietHandler quiet;
+    rat.fail_set_ = true;
+    EXPECT_EQ(CE_Failure,
+              GDALRATValuesIOAsDouble(hRAT, GF_Write, 1, 0, 1, dvals));
+    EXPECT_EQ(CE_Failure,
+              GDALRATValuesIOAsInteger(hRAT, GF_Write, 0, 0, 1, ivals));
+    EXPECT_EQ(CE_Failure,
+              GDALRATValuesIOAsString(hRAT, GF_Write, 2, 0, 1, svals_in));
+    EXPECT_EQ(CE_Failure,
+              GDALRATValuesIOAsBoolean(hRAT, GF_Write, 3, 0, 1, bvals));
+    EXPECT_EQ(CE_Failure,
+              GDALRATValuesIOAsDateTime(hRAT, GF_Write, 4, 0, 1, dt_vals));
+    EXPECT_EQ(CE_Failure, GDALRATValuesIOAsWKBGeometry(hRAT, GF_Write, 5, 0, 1,
+                                                       wkb_in, wkb_sizes_in));
+    rat.fail_set_ = false;
+    CPLErrorReset();
+  }
 
   // Test protected helper methods on CustomBaseRAT:
   // 1. ValuesIOBooleanFromIntoInt
@@ -611,8 +658,12 @@ TEST(GdalRatTest, ValuesIOAndProtectedHelpers) {
   EXPECT_FALSE(dt_read[1].bIsValid);
   // Invalid datetime string in col 2 yields an invalid DateTime on GF_Read.
   rat.SetValue(0, 2, "not_a_datetime");
-  EXPECT_EQ(CE_None,
-            rat.ValuesIODateTimeFromIntoString(GF_Read, 2, 0, 1, dt_read));
+  {
+    WithQuietHandler quiet;
+    EXPECT_EQ(CE_None,
+              rat.ValuesIODateTimeFromIntoString(GF_Read, 2, 0, 1, dt_read));
+    CPLErrorReset();
+  }
   EXPECT_FALSE(dt_read[0].bIsValid);
 
   // 3. ValuesIOWKBGeometryFromIntoString
@@ -621,27 +672,36 @@ TEST(GdalRatTest, ValuesIOAndProtectedHelpers) {
   EXPECT_EQ(CE_None, rat.ValuesIOWKBGeometryFromIntoString(
                          GF_Read, 2, 0, 2, wkb_out, wkb_sizes_out));
   CPLFree(wkb_out[0]);
+  wkb_out[0] = nullptr;
   // Invalid WKB on write writes empty string.
-  const GByte bad_wkb[] = {0x99, 0x99};
-  GByte* bad_wkb_in[1] = {const_cast<GByte*>(bad_wkb)};
-  size_t bad_wkb_sz[1] = {sizeof(bad_wkb)};
-  EXPECT_EQ(CE_None, rat.ValuesIOWKBGeometryFromIntoString(
-                         GF_Write, 2, 0, 1, bad_wkb_in, bad_wkb_sz));
-  // Invalid WKT in col 2 yields nullptr WKB on GF_Read.
-  rat.SetValue(0, 2, "not_a_wkt");
-  EXPECT_EQ(CE_None, rat.ValuesIOWKBGeometryFromIntoString(
-                         GF_Read, 2, 0, 1, wkb_out, wkb_sizes_out));
+  std::array<GByte, 2> bad_wkb = {0x99, 0x99};
+  GByte* bad_wkb_in[1] = {bad_wkb.data()};
+  size_t bad_wkb_sz[1] = {bad_wkb.size()};
+  {
+    WithQuietHandler quiet;
+    EXPECT_EQ(CE_None, rat.ValuesIOWKBGeometryFromIntoString(
+                           GF_Write, 2, 0, 1, bad_wkb_in, bad_wkb_sz));
+    // Invalid WKT in col 2 yields nullptr WKB on GF_Read.
+    rat.SetValue(0, 2, "not_a_wkt");
+    EXPECT_EQ(CE_None, rat.ValuesIOWKBGeometryFromIntoString(
+                           GF_Read, 2, 0, 1, wkb_out, wkb_sizes_out));
+    CPLErrorReset();
+  }
   EXPECT_EQ(nullptr, wkb_out[0]);
 
   // Base fallback methods on CustomBaseRAT.
   rat.use_base_fallbacks_ = true;
   EXPECT_EQ(-1, rat.GetRowOfValue(1.0));
   EXPECT_EQ(-1, rat.GetRowOfValue(1));
-  EXPECT_EQ(CE_Failure, rat.CreateColumn("x", GFT_Integer, GFU_Generic));
-  EXPECT_EQ(CE_Failure, rat.SetLinearBinning(0.0, 1.0));
-  double r0 = 0.0, bs = 0.0;
+  {
+    WithQuietHandler quiet;
+    EXPECT_EQ(CE_Failure, rat.CreateColumn("x", GFT_Integer, GFU_Generic));
+    EXPECT_EQ(CE_Failure, rat.SetLinearBinning(0.0, 1.0));
+    CPLErrorReset();
+  }
+  double r0 = 0.0;
+  double bs = 0.0;
   EXPECT_FALSE(rat.GetLinearBinning(&r0, &bs));
-  CPLPopErrorHandler();
 }
 
 TEST(GdalRatTest, AnalyseColumnsAndGetRowOfValue) {
@@ -651,7 +711,8 @@ TEST(GdalRatTest, AnalyseColumnsAndGetRowOfValue) {
     rat.CreateColumn("val", GFT_Integer, GFU_Generic);
     rat.SetRowCount(5);
     GDALRasterAttributeTableH hRAT = GDALRasterAttributeTable::ToHandle(&rat);
-    double r0 = 0.0, bs = 0.0;
+    double r0 = 0.0;
+    double bs = 0.0;
     EXPECT_FALSE(GDALRATGetLinearBinning(hRAT, &r0, &bs));
     EXPECT_EQ(CE_None, GDALRATSetLinearBinning(hRAT, 10.0, 2.0));
     EXPECT_TRUE(GDALRATGetLinearBinning(hRAT, &r0, &bs));
@@ -701,7 +762,6 @@ TEST(GdalRatTest, AnalyseColumnsAndGetRowOfValue) {
 }
 
 TEST(GdalRatTest, ColorTableAndStatisticsAndTableType) {
-  CPLPushErrorHandler(CPLQuietErrorHandler);
   GDALDefaultRasterAttributeTable rat;
   GDALRasterAttributeTableH hRAT = GDALRasterAttributeTable::ToHandle(&rat);
 
@@ -711,10 +771,10 @@ TEST(GdalRatTest, ColorTableAndStatisticsAndTableType) {
   EXPECT_FALSE(GDALRATChangesAreWrittenToFile(hRAT));
 
   GDALColorTable ct;
-  GDALColorEntry e0 = {10, 20, 30, 255};
-  GDALColorEntry e1 = {40, 50, 60, 128};
-  ct.SetColorEntry(0, &e0);
-  ct.SetColorEntry(1, &e1);
+  constexpr GDALColorEntry kEntry0 = {10, 20, 30, 255};
+  constexpr GDALColorEntry kEntry1 = {40, 50, 60, 128};
+  ct.SetColorEntry(0, &kEntry0);
+  ct.SetColorEntry(1, &kEntry1);
 
   EXPECT_EQ(CE_None, GDALRATInitializeFromColorTable(
                          hRAT, GDALColorTable::ToHandle(&ct)));
@@ -722,6 +782,7 @@ TEST(GdalRatTest, ColorTableAndStatisticsAndTableType) {
 
   GDALColorTableH hCTOut = GDALRATTranslateToColorTable(hRAT, -1);
   ASSERT_NE(nullptr, hCTOut);
+  absl::Cleanup ct_cleaner = [hCTOut] { GDALDestroyColorTable(hCTOut); };
   EXPECT_EQ(2, GDALGetColorEntryCount(hCTOut));
   const GDALColorEntry* pe1 = GDALGetColorEntry(hCTOut, 1);
   ASSERT_NE(nullptr, pe1);
@@ -729,7 +790,6 @@ TEST(GdalRatTest, ColorTableAndStatisticsAndTableType) {
   EXPECT_EQ(50, pe1->c2);
   EXPECT_EQ(60, pe1->c3);
   EXPECT_EQ(128, pe1->c4);
-  GDALDestroyColorTable(hCTOut);
 
   // Add statistics columns and remove them.
   rat.CreateColumn("Histogram", GFT_Real, GFU_Generic);
@@ -737,7 +797,7 @@ TEST(GdalRatTest, ColorTableAndStatisticsAndTableType) {
   rat.CreateColumn("RedMin", GFT_Integer, GFU_RedMin);
   rat.CreateColumn("RedMax", GFT_Integer, GFU_RedMax);
   rat.CreateColumn("Name", GFT_String, GFU_Name);
-  int cols_before = rat.GetColumnCount();
+  const int cols_before = rat.GetColumnCount();
   GDALRATRemoveStatistics(hRAT);
   EXPECT_LT(rat.GetColumnCount(), cols_before);
   EXPECT_EQ(-1, rat.GetColOfUsage(GFU_PixelCount));
@@ -746,11 +806,9 @@ TEST(GdalRatTest, ColorTableAndStatisticsAndTableType) {
   // TranslateToColorTable on RAT without color columns returns nullptr.
   GDALDefaultRasterAttributeTable empty_rat;
   EXPECT_EQ(nullptr, empty_rat.TranslateToColorTable());
-  CPLPopErrorHandler();
 }
 
 TEST(GdalRatTest, SerializeXMLAndJSONAndDumpReadableAndClone) {
-  CPLPushErrorHandler(CPLQuietErrorHandler);
   GDALDefaultRasterAttributeTable rat;
   rat.SetTableType(GRTT_ATHEMATIC);
   rat.SetLinearBinning(1.0, 0.5);
@@ -777,15 +835,29 @@ TEST(GdalRatTest, SerializeXMLAndJSONAndDumpReadableAndClone) {
   GDALRasterAttributeTableH hRAT = GDALRasterAttributeTable::ToHandle(&rat);
   GDALRasterAttributeTableH hClone = GDALRATClone(hRAT);
   ASSERT_NE(nullptr, hClone);
+  absl::Cleanup clone_cleaner = [hClone] {
+    GDALDestroyRasterAttributeTable(hClone);
+  };
   EXPECT_EQ(6, GDALRATGetColumnCount(hClone));
   EXPECT_EQ(2, GDALRATGetRowCount(hClone));
-  GDALDestroyRasterAttributeTable(hClone);
 
-  // DumpReadable to tmpfile
-  FILE* fp = std::tmpfile();
-  ASSERT_NE(nullptr, fp);
-  GDALRATDumpReadable(hRAT, fp);
-  std::fclose(fp);
+  // DumpReadable to in-memory stream
+  {
+    char* dump_buf_raw = nullptr;
+    size_t dump_size = 0;
+    FILE* dump_fp = open_memstream(&dump_buf_raw, &dump_size);
+    ASSERT_NE(nullptr, dump_fp);
+    absl::Cleanup dump_closer = [&dump_fp, &dump_buf_raw] {
+      if (dump_fp != nullptr) {
+        EXPECT_EQ(0, fclose(dump_fp));
+      }
+      std::free(dump_buf_raw);
+    };
+    GDALRATDumpReadable(hRAT, dump_fp);
+    EXPECT_EQ(0, fclose(dump_fp));
+    dump_fp = nullptr;
+    EXPECT_THAT(std::string_view(dump_buf_raw, dump_size), HasSubstr("row0"));
+  }
 
   // Serialize to XML and XMLInit round-trip
   CPLXMLTreeCloser xml(rat.Serialize());
@@ -794,7 +866,8 @@ TEST(GdalRatTest, SerializeXMLAndJSONAndDumpReadableAndClone) {
   GDALDefaultRasterAttributeTable rat2;
   EXPECT_EQ(CE_None, rat2.XMLInit(xml.get(), ""));
   EXPECT_EQ(GRTT_THEMATIC, rat2.GetTableType());
-  double r0 = 0.0, bs = 0.0;
+  double r0 = 0.0;
+  double bs = 0.0;
   EXPECT_TRUE(rat2.GetLinearBinning(&r0, &bs));
   EXPECT_DOUBLE_EQ(1.0, r0);
   EXPECT_DOUBLE_EQ(0.5, bs);
@@ -809,13 +882,12 @@ TEST(GdalRatTest, SerializeXMLAndJSONAndDumpReadableAndClone) {
   // SerializeJSON
   json_object* jsobj = static_cast<json_object*>(GDALRATSerializeJSON(hRAT));
   ASSERT_NE(nullptr, jsobj);
-  json_object_put(jsobj);
+  absl::Cleanup json_cleaner = [jsobj] { json_object_put(jsobj); };
 
   // Empty RAT Serialize returns nullptr.
   GDALDefaultRasterAttributeTable empty_rat;
   EXPECT_EQ(nullptr, empty_rat.Serialize());
-  CPLPopErrorHandler();
 }
 
 }  // namespace
-}  // namespace gdal
+}  // namespace autotest2

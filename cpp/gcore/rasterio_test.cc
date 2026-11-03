@@ -1,6 +1,4 @@
-// Tests gcore/rasterio.cpp.
-//
-// Copyright 2014 Google Inc. All Rights Reserved.
+// Copyright 2014 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,28 +11,89 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Tests gcore/rasterio.cpp.
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/rasterio.cpp
 
 #include <algorithm>
-#include <cmath>
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
-#include <memory>
 #include <vector>
 
 #include "testing/base/public/gunit.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/gcore/gdal.h"
 #include "third_party/gdal/gcore/gdal_cpp_functions.h"
+#include "third_party/gdal/gcore/gdal_frmts.h"
 #include "third_party/gdal/gcore/gdal_priv.h"
+#include "third_party/gdal/gcore/gdal_rasterblock.h"
 #include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
 #include "third_party/gdal/port/cpl_float.h"
-#include "third_party/gdal/port/cpl_string.h"
-#include "third_party/gdal/port/cpl_vsi.h"
+#include "third_party/gdal/port/cpl_port.h"
 
+namespace autotest2 {
 namespace {
 
-class TestDataset;
+class TestDataset : public GDALDataset {
+ public:
+  TestDataset(int nXSize, int nYSize) {
+    nRasterXSize = nXSize;
+    nRasterYSize = nYSize;
+    eAccess = GA_Update;
+  }
+
+  ~TestDataset() override { FlushCache(true); }
+
+  void AddTestBand(GDALRasterBand* poBand) {
+    SetBand(GetRasterCount() + 1, poBand);
+  }
+
+  CPLErr CallBlockBasedRasterIO(GDALRWFlag eRWFlag, int nXOff, int nYOff,
+                                int nXSize, int nYSize, void* pData,
+                                int nBufXSize, int nBufYSize,
+                                GDALDataType eBufType, int nBandCount,
+                                const int* panBandMap, GSpacing nPixelSpace,
+                                GSpacing nLineSpace, GSpacing nBandSpace,
+                                GDALRasterIOExtraArg* psExtraArg) {
+    return GDALDataset::BlockBasedRasterIO(
+        eRWFlag, nXOff, nYOff, nXSize, nYSize, pData, nBufXSize, nBufYSize,
+        eBufType, nBandCount, panBandMap, nPixelSpace, nLineSpace, nBandSpace,
+        psExtraArg);
+  }
+
+  CPLErr CallRasterIOResampled(GDALRWFlag eRWFlag, int nXOff, int nYOff,
+                               int nXSize, int nYSize, void* pData,
+                               int nBufXSize, int nBufYSize,
+                               GDALDataType eBufType, int nBandCount,
+                               const int* panBandMap, GSpacing nPixelSpace,
+                               GSpacing nLineSpace, GSpacing nBandSpace,
+                               GDALRasterIOExtraArg* psExtraArg) {
+    return GDALDataset::RasterIOResampled(eRWFlag, nXOff, nYOff, nXSize, nYSize,
+                                          pData, nBufXSize, nBufYSize, eBufType,
+                                          nBandCount, panBandMap, nPixelSpace,
+                                          nLineSpace, nBandSpace, psExtraArg);
+  }
+
+  CPLErr CallTryOverviewRasterIO(GDALRWFlag eRWFlag, int nXOff, int nYOff,
+                                 int nXSize, int nYSize, void* pData,
+                                 int nBufXSize, int nBufYSize,
+                                 GDALDataType eBufType, int nBandCount,
+                                 const int* panBandMap, GSpacing nPixelSpace,
+                                 GSpacing nLineSpace, GSpacing nBandSpace,
+                                 GDALRasterIOExtraArg* psExtraArg,
+                                 int* pbTried) {
+    return GDALDataset::TryOverviewRasterIO(
+        eRWFlag, nXOff, nYOff, nXSize, nYSize, pData, nBufXSize, nBufYSize,
+        eBufType, nBandCount, panBandMap, nPixelSpace, nLineSpace, nBandSpace,
+        psExtraArg, pbTried);
+  }
+};
 
 class TestRasterBand : public GDALRasterBand {
  public:
@@ -42,7 +101,7 @@ class TestRasterBand : public GDALRasterBand {
                  int nYSize, int nBXSize, int nBYSize,
                  bool virtual_zero = false)
       : virtual_zero_(virtual_zero) {
-    poDS = reinterpret_cast<GDALDataset*>(poDSIn);
+    poDS = poDSIn;
     nBand = nBandIn;
     eDataType = eDT;
     nRasterXSize = nXSize;
@@ -54,8 +113,8 @@ class TestRasterBand : public GDALRasterBand {
       InitBlockInfo();
     }
     if (!virtual_zero_ && nXSize > 0 && nYSize > 0) {
-      const size_t dt_size = GDALGetDataTypeSizeBytes(eDT);
-      data_.resize(static_cast<size_t>(nXSize) * nYSize * dt_size, 0);
+      const std::size_t dt_size = GDALGetDataTypeSizeBytes(eDT);
+      data_.resize(static_cast<std::size_t>(nXSize) * nYSize * dt_size, 0);
     }
   }
 
@@ -89,8 +148,9 @@ class TestRasterBand : public GDALRasterBand {
     if (fail_read_block_) {
       return CE_Failure;
     }
-    const int dt_size = GDALGetDataTypeSizeBytes(eDataType);
-    memset(pImage, 0, static_cast<size_t>(nBlockXSize) * nBlockYSize * dt_size);
+    const std::size_t dt_size = GDALGetDataTypeSizeBytes(eDataType);
+    std::memset(pImage, 0,
+                static_cast<std::size_t>(nBlockXSize) * nBlockYSize * dt_size);
     if (virtual_zero_) {
       return CE_None;
     }
@@ -105,13 +165,13 @@ class TestRasterBand : public GDALRasterBand {
       return CE_None;
     }
     for (int y = 0; y < y_valid; ++y) {
-      const size_t src_offset =
-          (static_cast<size_t>(y0 + y) * nRasterXSize + x0) * dt_size;
-      const size_t nbytes = static_cast<size_t>(x_valid) * dt_size;
+      const std::size_t src_offset =
+          (static_cast<std::size_t>(y0 + y) * nRasterXSize + x0) * dt_size;
+      const std::size_t nbytes = static_cast<std::size_t>(x_valid) * dt_size;
       if (src_offset + nbytes <= data_.size()) {
-        memcpy(static_cast<GByte*>(pImage) +
-                   static_cast<size_t>(y) * nBlockXSize * dt_size,
-               data_.data() + src_offset, nbytes);
+        std::memcpy(static_cast<GByte*>(pImage) +
+                        static_cast<std::size_t>(y) * nBlockXSize * dt_size,
+                    data_.data() + src_offset, nbytes);
       }
     }
     return CE_None;
@@ -124,7 +184,7 @@ class TestRasterBand : public GDALRasterBand {
     if (virtual_zero_) {
       return CE_None;
     }
-    const int dt_size = GDALGetDataTypeSizeBytes(eDataType);
+    const std::size_t dt_size = GDALGetDataTypeSizeBytes(eDataType);
     const int x0 = nBlockXOff * nBlockXSize;
     const int y0 = nBlockYOff * nBlockYSize;
     if (x0 >= nRasterXSize || y0 >= nRasterYSize) {
@@ -136,14 +196,14 @@ class TestRasterBand : public GDALRasterBand {
       return CE_None;
     }
     for (int y = 0; y < y_valid; ++y) {
-      const size_t dst_offset =
-          (static_cast<size_t>(y0 + y) * nRasterXSize + x0) * dt_size;
-      const size_t nbytes = static_cast<size_t>(x_valid) * dt_size;
+      const std::size_t dst_offset =
+          (static_cast<std::size_t>(y0 + y) * nRasterXSize + x0) * dt_size;
+      const std::size_t nbytes = static_cast<std::size_t>(x_valid) * dt_size;
       if (dst_offset + nbytes <= data_.size()) {
-        memcpy(data_.data() + dst_offset,
-               static_cast<const GByte*>(pImage) +
-                   static_cast<size_t>(y) * nBlockXSize * dt_size,
-               nbytes);
+        std::memcpy(data_.data() + dst_offset,
+                    static_cast<const GByte*>(pImage) +
+                        static_cast<std::size_t>(y) * nBlockXSize * dt_size,
+                    nbytes);
       }
     }
     return CE_None;
@@ -248,73 +308,19 @@ class TestRasterBand : public GDALRasterBand {
   GDALSuggestedBlockAccessPattern access_pattern_ = GSBAP_UNKNOWN;
 };
 
-class TestDataset : public GDALDataset {
- public:
-  TestDataset(int nXSize, int nYSize) {
-    nRasterXSize = nXSize;
-    nRasterYSize = nYSize;
-    eAccess = GA_Update;
-  }
-
-  ~TestDataset() override { FlushCache(true); }
-
-  void AddTestBand(GDALRasterBand* poBand) {
-    SetBand(GetRasterCount() + 1, poBand);
-  }
-
-  CPLErr CallBlockBasedRasterIO(GDALRWFlag eRWFlag, int nXOff, int nYOff,
-                                int nXSize, int nYSize, void* pData,
-                                int nBufXSize, int nBufYSize,
-                                GDALDataType eBufType, int nBandCount,
-                                const int* panBandMap, GSpacing nPixelSpace,
-                                GSpacing nLineSpace, GSpacing nBandSpace,
-                                GDALRasterIOExtraArg* psExtraArg) {
-    return GDALDataset::BlockBasedRasterIO(
-        eRWFlag, nXOff, nYOff, nXSize, nYSize, pData, nBufXSize, nBufYSize,
-        eBufType, nBandCount, panBandMap, nPixelSpace, nLineSpace, nBandSpace,
-        psExtraArg);
-  }
-
-  CPLErr CallRasterIOResampled(GDALRWFlag eRWFlag, int nXOff, int nYOff,
-                               int nXSize, int nYSize, void* pData,
-                               int nBufXSize, int nBufYSize,
-                               GDALDataType eBufType, int nBandCount,
-                               const int* panBandMap, GSpacing nPixelSpace,
-                               GSpacing nLineSpace, GSpacing nBandSpace,
-                               GDALRasterIOExtraArg* psExtraArg) {
-    return GDALDataset::RasterIOResampled(eRWFlag, nXOff, nYOff, nXSize, nYSize,
-                                          pData, nBufXSize, nBufYSize, eBufType,
-                                          nBandCount, panBandMap, nPixelSpace,
-                                          nLineSpace, nBandSpace, psExtraArg);
-  }
-
-  CPLErr CallTryOverviewRasterIO(GDALRWFlag eRWFlag, int nXOff, int nYOff,
-                                 int nXSize, int nYSize, void* pData,
-                                 int nBufXSize, int nBufYSize,
-                                 GDALDataType eBufType, int nBandCount,
-                                 const int* panBandMap, GSpacing nPixelSpace,
-                                 GSpacing nLineSpace, GSpacing nBandSpace,
-                                 GDALRasterIOExtraArg* psExtraArg,
-                                 int* pbTried) {
-    return GDALDataset::TryOverviewRasterIO(
-        eRWFlag, nXOff, nYOff, nXSize, nYSize, pData, nBufXSize, nBufYSize,
-        eBufType, nBandCount, panBandMap, nPixelSpace, nLineSpace, nBandSpace,
-        psExtraArg, pbTried);
-  }
-};
-
 int CPL_STDCALL FailingProgressCallback(double dfComplete,
                                         const char* /*pszMessage*/,
                                         void* pProgressArg) {
-  double threshold = pProgressArg ? *static_cast<double*>(pProgressArg) : 0.0;
+  const double threshold =
+      pProgressArg ? *static_cast<double*>(pProgressArg) : 0.0;
   return dfComplete >= threshold ? FALSE : TRUE;
 }
 
 TEST(RasterIoTest, GdalSwapWords) {
   // GdalSwapWords takes a block size of number of bytes (2, 4 or 8), a number
-  // of blocks to swap and the number of bytes to advance.  If the number of
-  // bytes to advance is 0, then the number of blocks must be 1.  This
-  // function allows for gaps between swaps.
+  // of blocks to swap and the number of bytes to advance. If the number of
+  // bytes to advance is 0, then the number of blocks must be 1. This function
+  // allows for gaps between swaps.
   // It only checks the input values for validity if DEBUG is defined.
 
   // Swapping single 2 byte value.
@@ -388,9 +394,14 @@ TEST(RasterIoTest, GdalSwapWordsExtended) {
   GDALSwapWords(nullptr, 4, 0, 4);
 
   // WordCount > 0 with nullptr (emits error via VALIDATE_POINTER0)
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  GDALSwapWords(nullptr, 4, 1, 4);
-  CPLPopErrorHandler();
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    GDALSwapWords(nullptr, 4, 1, 4);
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    EXPECT_EQ(CPLE_ObjectNull, CPLGetLastErrorNo());
+    CPLErrorReset();
+  }
 
   // Aligned and unaligned 4-byte and 8-byte swaps
   alignas(8) char aligned4[17] = "12345678abcdefgh";
@@ -415,7 +426,7 @@ TEST(RasterIoTest, GdalSwapWordsExtended) {
   GDALSwapWords(aligned8 + 1, 8, 2, 8);
 
   // GDALSwapWordsEx
-  alignas(8) uint16_t ex_buf[4] = {0x0102, 0x0304, 0x0506, 0x0708};
+  alignas(8) std::uint16_t ex_buf[4] = {0x0102, 0x0304, 0x0506, 0x0708};
   GDALSwapWordsEx(ex_buf, 2, 4, 2);
   EXPECT_EQ(0x0201, ex_buf[0]);
   EXPECT_EQ(0x0403, ex_buf[1]);
@@ -424,28 +435,50 @@ TEST(RasterIoTest, GdalSwapWordsExtended) {
 }
 
 TEST(RasterIoTest, GdalCopyWordsAllTypesAndStrides) {
-  const GDALDataType kAllTypes[] = {
-      GDT_Byte,    GDT_Int8,     GDT_UInt16,   GDT_Int16,
-      GDT_UInt32,  GDT_Int32,    GDT_UInt64,   GDT_Int64,
-      GDT_Float16, GDT_Float32,  GDT_Float64,  GDT_CInt16,
-      GDT_CInt32,  GDT_CFloat16, GDT_CFloat32, GDT_CFloat64,
-  };
+  constexpr auto kAllTypes = std::to_array<GDALDataType>({
+      GDT_Byte,
+      GDT_Int8,
+      GDT_UInt16,
+      GDT_Int16,
+      GDT_UInt32,
+      GDT_Int32,
+      GDT_UInt64,
+      GDT_Int64,
+      GDT_Float16,
+      GDT_Float32,
+      GDT_Float64,
+      GDT_CInt16,
+      GDT_CInt32,
+      GDT_CFloat16,
+      GDT_CFloat32,
+      GDT_CFloat64,
+  });
 
   // Prepare an aligned source buffer of 40 elements for each type, containing
   // normal values, negative values, large values, Inf, -Inf, NaN.
   constexpr int kCount = 40;
-  const double kTestValues[12] = {
-      0.0,   1.0,   -1.0,    42.5,    127.0,   128.0,
-      255.0, 256.0, 32767.0, 32768.0, 65535.0, -32768.0,
-  };
+  constexpr auto kTestValues = std::to_array<double>({
+      0.0,
+      1.0,
+      -1.0,
+      42.5,
+      127.0,
+      128.0,
+      255.0,
+      256.0,
+      32767.0,
+      32768.0,
+      65535.0,
+      -32768.0,
+  });
 
-  alignas(16) GByte src_buf[kCount * 32];
-  alignas(16) GByte dst_buf[kCount * 32];
+  alignas(16) GByte src_buf[kCount * 32] = {};
+  alignas(16) GByte dst_buf[kCount * 32] = {};
 
   // Populate initial double buffer with interesting values including Inf/NaN.
-  alignas(16) double init_doubles[kCount * 2];
+  alignas(16) double init_doubles[kCount * 2] = {};
   for (int i = 0; i < kCount * 2; ++i) {
-    if (i < 12) {
+    if (i < static_cast<int>(kTestValues.size())) {
       init_doubles[i] = kTestValues[i];
     } else if (i == 12) {
       init_doubles[i] = std::numeric_limits<double>::infinity();
@@ -472,12 +505,12 @@ TEST(RasterIoTest, GdalCopyWordsAllTypesAndStrides) {
       const int dst_size = GDALGetDataTypeSizeBytes(dst_dt);
 
       // 1. Packed stride (nWordCount = 40 -> exercises SIMD + scalar tail)
-      memset(dst_buf, 0, sizeof(dst_buf));
+      std::memset(dst_buf, 0, sizeof(dst_buf));
       GDALCopyWords(src_buf, src_dt, src_size, dst_buf, dst_dt, dst_size,
                     kCount);
 
       // 2. Non-packed stride (2x size -> exercises GDALCopyWordsGenericT path)
-      memset(dst_buf, 0, sizeof(dst_buf));
+      std::memset(dst_buf, 0, sizeof(dst_buf));
       GDALCopyWords64(src_buf, src_dt, src_size * 2, dst_buf, dst_dt,
                       dst_size * 2, 12);
 
@@ -512,35 +545,49 @@ TEST(RasterIoTest, GdalCopyWordsAllTypesAndStrides) {
   GDALCopyWords64(src_buf + 1, GDT_Int32, 5, dst_buf + 1, GDT_Float64, 9, 8);
 
   // Test GDT_Unknown / GDT_TypeCount error handling
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  GDALCopyWords64(src_buf, GDT_Unknown, 1, dst_buf, GDT_Byte, 1, 4);
-  GDALCopyWords64(src_buf, GDT_Byte, 1, dst_buf, GDT_TypeCount, 1, 4);
-  CPLPopErrorHandler();
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    GDALCopyWords64(src_buf, GDT_Unknown, 1, dst_buf, GDT_Byte, 1, 4);
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    EXPECT_EQ(CPLE_NotSupported, CPLGetLastErrorNo());
+    CPLErrorReset();
+    GDALCopyWords64(src_buf, GDT_Byte, 1, dst_buf, GDT_TypeCount, 1, 4);
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    EXPECT_EQ(CPLE_NotSupported, CPLGetLastErrorNo());
+    CPLErrorReset();
+  }
 }
 
 TEST(RasterIoTest, GdalCopyBitsAndExpandPackedBits) {
   // GDALCopyBits
-  const GByte src_bits[4] = {0b10110011, 0b01011010, 0b11110000, 0b00001111};
-  GByte dst_bits[4] = {0, 0, 0, 0};
-  GDALCopyBits(src_bits, 0, 4, dst_bits, 0, 4, 4, 8);
-  EXPECT_EQ(src_bits[0], dst_bits[0]);
-  EXPECT_EQ(src_bits[1], dst_bits[1]);
+  constexpr std::array<GByte, 4> kSrcBits = {0b10110011, 0b01011010, 0b11110000,
+                                             0b00001111};
+  std::array<GByte, 4> dst_bits = {0, 0, 0, 0};
+  GDALCopyBits(kSrcBits.data(), 0, 4, dst_bits.data(), 0, 4, 4, 8);
+  EXPECT_EQ(kSrcBits[0], dst_bits[0]);
+  EXPECT_EQ(kSrcBits[1], dst_bits[1]);
 
   // With offset and step != bit_count
-  memset(dst_bits, 0xFF, sizeof(dst_bits));
-  GDALCopyBits(src_bits, 2, 6, dst_bits, 1, 5, 3, 4);
+  dst_bits.fill(0xFF);
+  GDALCopyBits(kSrcBits.data(), 2, 6, dst_bits.data(), 1, 5, 3, 4);
 
   // Nullptr check
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  GDALCopyBits(nullptr, 0, 1, dst_bits, 0, 1, 1, 1);
-  CPLPopErrorHandler();
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    GDALCopyBits(nullptr, 0, 1, dst_bits.data(), 0, 1, 1, 1);
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    EXPECT_EQ(CPLE_ObjectNull, CPLGetLastErrorNo());
+    CPLErrorReset();
+  }
 
   // GDALExpandPackedBitsToByteAt0Or255 and GDALExpandPackedBitsToByteAt0Or1
   // Use 149 bits (18 whole bytes + 5 trailing bits) to exercise SSE2 (16
   // bytes), whole-byte cleanup (2 bytes), and trailing bits (5 bits).
-  constexpr size_t kNumBits = 149;
+  constexpr std::size_t kNumBits = 149;
   std::vector<GByte> packed((kNumBits + 7) / 8);
-  for (size_t i = 0; i < packed.size(); ++i) {
+  for (std::size_t i = 0; i < packed.size(); ++i) {
     packed[i] = static_cast<GByte>((i * 73 + 0xA5) & 0xFF);
   }
   std::vector<GByte> out_255(kNumBits, 123);
@@ -549,7 +596,7 @@ TEST(RasterIoTest, GdalCopyBitsAndExpandPackedBits) {
   GDALExpandPackedBitsToByteAt0Or255(packed.data(), out_255.data(), kNumBits);
   GDALExpandPackedBitsToByteAt0Or1(packed.data(), out_1.data(), kNumBits);
 
-  for (size_t i = 0; i < kNumBits; ++i) {
+  for (std::size_t i = 0; i < kNumBits; ++i) {
     const bool bit = (packed[i / 8] & (1 << (7 - (i % 8)))) != 0;
     EXPECT_EQ(bit ? 255 : 0, out_255[i]) << "at bit " << i;
     EXPECT_EQ(bit ? 1 : 0, out_1[i]) << "at bit " << i;
@@ -557,12 +604,12 @@ TEST(RasterIoTest, GdalCopyBitsAndExpandPackedBits) {
 }
 
 TEST(RasterIoTest, GdalCopyRasterIOExtraArg) {
-  GDALRasterIOExtraArg dst;
+  GDALRasterIOExtraArg dst = {};
   GDALCopyRasterIOExtraArg(&dst, nullptr);
   EXPECT_EQ(GRIORA_NearestNeighbour, dst.eResampleAlg);
-  EXPECT_FALSE(dst.bFloatingPointWindowValidity);
+  EXPECT_EQ(FALSE, dst.bFloatingPointWindowValidity);
 
-  GDALRasterIOExtraArg src;
+  GDALRasterIOExtraArg src = {};
   INIT_RASTERIO_EXTRA_ARG(src);
   src.eResampleAlg = GRIORA_Bilinear;
   src.bFloatingPointWindowValidity = TRUE;
@@ -571,16 +618,16 @@ TEST(RasterIoTest, GdalCopyRasterIOExtraArg) {
   src.dfXSize = 10.5;
   src.dfYSize = 20.5;
   src.nVersion = 2;
-  src.bUseOnlyThisScale = true;
+  src.bUseOnlyThisScale = TRUE;
 
   GDALCopyRasterIOExtraArg(&dst, &src);
   EXPECT_EQ(GRIORA_Bilinear, dst.eResampleAlg);
-  EXPECT_TRUE(dst.bFloatingPointWindowValidity);
+  EXPECT_EQ(TRUE, dst.bFloatingPointWindowValidity);
   EXPECT_DOUBLE_EQ(1.25, dst.dfXOff);
   EXPECT_DOUBLE_EQ(2.5, dst.dfYOff);
   EXPECT_DOUBLE_EQ(10.5, dst.dfXSize);
   EXPECT_DOUBLE_EQ(20.5, dst.dfYSize);
-  EXPECT_TRUE(dst.bUseOnlyThisScale);
+  EXPECT_EQ(TRUE, dst.bUseOnlyThisScale);
 }
 
 TEST(RasterIoTest, GdalBufferHasOnlyNoData) {
@@ -623,14 +670,14 @@ TEST(RasterIoTest, GdalBufferHasOnlyNoData) {
         buf.data(), static_cast<double>(sample_val), 4, 4, 4, 2, bits, fmt));
   };
 
-  test_int_type(uint8_t{42}, 8, GSF_UNSIGNED_INT);
-  test_int_type(int8_t{-42}, 8, GSF_SIGNED_INT);
-  test_int_type(uint16_t{1000}, 16, GSF_UNSIGNED_INT);
-  test_int_type(int16_t{-1000}, 16, GSF_SIGNED_INT);
-  test_int_type(uint32_t{100000}, 32, GSF_UNSIGNED_INT);
-  test_int_type(int32_t{-100000}, 32, GSF_SIGNED_INT);
-  test_int_type(uint64_t{100000}, 64, GSF_UNSIGNED_INT);
-  test_int_type(int64_t{-100000}, 64, GSF_SIGNED_INT);
+  test_int_type(std::uint8_t{42}, 8, GSF_UNSIGNED_INT);
+  test_int_type(std::int8_t{-42}, 8, GSF_SIGNED_INT);
+  test_int_type(std::uint16_t{1000}, 16, GSF_UNSIGNED_INT);
+  test_int_type(std::int16_t{-1000}, 16, GSF_SIGNED_INT);
+  test_int_type(std::uint32_t{100000}, 32, GSF_UNSIGNED_INT);
+  test_int_type(std::int32_t{-100000}, 32, GSF_SIGNED_INT);
+  test_int_type(std::uint64_t{100000}, 64, GSF_UNSIGNED_INT);
+  test_int_type(std::int64_t{-100000}, 64, GSF_SIGNED_INT);
 
   // Floating point (16, 32, 64) with finite value and NaN
   {
@@ -669,15 +716,19 @@ TEST(RasterIoTest, GdalBufferHasOnlyNoData) {
 
 TEST(RasterIoTest, GdalDeinterleaveAndTranspose2D) {
   // GDALDeinterleave: 3-component and 4-component Byte, UInt16, and Float32
-  constexpr size_t kIters = 35;
+  constexpr std::size_t kIters = 35;
   {
-    alignas(16) GByte src3[kIters * 3 + 4];
-    for (size_t i = 0; i < sizeof(src3); ++i) src3[i] = static_cast<GByte>(i);
-    alignas(16) GByte d0[kIters], d1[kIters], d2[kIters];
+    alignas(16) GByte src3[kIters * 3 + 4] = {};
+    for (std::size_t i = 0; i < sizeof(src3); ++i) {
+      src3[i] = static_cast<GByte>(i);
+    }
+    alignas(16) GByte d0[kIters] = {};
+    alignas(16) GByte d1[kIters] = {};
+    alignas(16) GByte d2[kIters] = {};
     void* dsts3[3] = {d0, d1, d2};
     // Aligned
     GDALDeinterleave(src3, GDT_Byte, 3, dsts3, GDT_Byte, kIters);
-    for (size_t i = 0; i < kIters; ++i) {
+    for (std::size_t i = 0; i < kIters; ++i) {
       EXPECT_EQ(src3[3 * i + 0], d0[i]);
       EXPECT_EQ(src3[3 * i + 1], d1[i]);
       EXPECT_EQ(src3[3 * i + 2], d2[i]);
@@ -686,19 +737,24 @@ TEST(RasterIoTest, GdalDeinterleaveAndTranspose2D) {
     GDALDeinterleave(src3 + 1, GDT_Byte, 3, dsts3, GDT_Byte, kIters);
   }
   {
-    alignas(16) GByte src4[kIters * 4];
-    for (size_t i = 0; i < sizeof(src4); ++i) src4[i] = static_cast<GByte>(i);
-    alignas(16) GByte d0[kIters], d1[kIters], d2[kIters], d3[kIters];
+    alignas(16) GByte src4[kIters * 4] = {};
+    for (std::size_t i = 0; i < sizeof(src4); ++i) {
+      src4[i] = static_cast<GByte>(i);
+    }
+    alignas(16) GByte d0[kIters] = {};
+    alignas(16) GByte d1[kIters] = {};
+    alignas(16) GByte d2[kIters] = {};
+    alignas(16) GByte d3[kIters] = {};
     void* dsts4[4] = {d0, d1, d2, d3};
     GDALDeinterleave(src4, GDT_Byte, 4, dsts4, GDT_Byte, kIters);
-    for (size_t i = 0; i < kIters; ++i) {
+    for (std::size_t i = 0; i < kIters; ++i) {
       EXPECT_EQ(src4[4 * i + 0], d0[i]);
       EXPECT_EQ(src4[4 * i + 3], d3[i]);
     }
   }
   {
-    std::vector<uint16_t> src_u16(kIters * 4, 7);
-    std::vector<uint16_t> d0(kIters), d1(kIters), d2(kIters), d3(kIters);
+    std::vector<std::uint16_t> src_u16(kIters * 4, 7);
+    std::vector<std::uint16_t> d0(kIters), d1(kIters), d2(kIters), d3(kIters);
     void* dsts[4] = {d0.data(), d1.data(), d2.data(), d3.data()};
     GDALDeinterleave(src_u16.data(), GDT_UInt16, 3, dsts, GDT_UInt16, kIters);
     GDALDeinterleave(src_u16.data(), GDT_UInt16, 4, dsts, GDT_UInt16, kIters);
@@ -712,37 +768,51 @@ TEST(RasterIoTest, GdalDeinterleaveAndTranspose2D) {
 
   // GDALTranspose2D special Byte paths: height=2, height=4, height=10
   {
-    constexpr size_t kW = 36;
-    std::vector<uint8_t> src_h2(kW * 2);
-    for (size_t i = 0; i < src_h2.size(); ++i)
-      src_h2[i] = static_cast<uint8_t>(i);
-    std::vector<uint8_t> dst_h2(kW * 2, 0);
+    constexpr std::size_t kW = 36;
+    std::vector<std::uint8_t> src_h2(kW * 2);
+    for (std::size_t i = 0; i < src_h2.size(); ++i) {
+      src_h2[i] = static_cast<std::uint8_t>(i);
+    }
+    std::vector<std::uint8_t> dst_h2(kW * 2, 0);
     GDALTranspose2D(src_h2.data(), GDT_Byte, dst_h2.data(), GDT_Byte, kW, 2);
     EXPECT_EQ(src_h2[1 * kW + 3], dst_h2[3 * 2 + 1]);
 
-    std::vector<uint8_t> src_h4(kW * 4);
-    for (size_t i = 0; i < src_h4.size(); ++i)
-      src_h4[i] = static_cast<uint8_t>(i);
-    std::vector<uint8_t> dst_h4(kW * 4, 0);
+    std::vector<std::uint8_t> src_h4(kW * 4);
+    for (std::size_t i = 0; i < src_h4.size(); ++i) {
+      src_h4[i] = static_cast<std::uint8_t>(i);
+    }
+    std::vector<std::uint8_t> dst_h4(kW * 4, 0);
     GDALTranspose2D(src_h4.data(), GDT_Byte, dst_h4.data(), GDT_Byte, kW, 4);
     EXPECT_EQ(src_h4[2 * kW + 5], dst_h4[5 * 4 + 2]);
 
-    std::vector<uint8_t> src_h10(10 * 10, 9);
-    std::vector<uint8_t> dst_h10(10 * 10, 0);
+    std::vector<std::uint8_t> src_h10(10 * 10, 9);
+    std::vector<std::uint8_t> dst_h10(10 * 10, 0);
     GDALTranspose2D(src_h10.data(), GDT_Byte, dst_h10.data(), GDT_Byte, 10, 10);
     EXPECT_EQ(9, dst_h10[55]);
   }
 
   // GDALTranspose2D across all 16x16 data type combinations
-  const GDALDataType kAllTypes[] = {
-      GDT_Byte,    GDT_Int8,     GDT_UInt16,   GDT_Int16,
-      GDT_UInt32,  GDT_Int32,    GDT_UInt64,   GDT_Int64,
-      GDT_Float16, GDT_Float32,  GDT_Float64,  GDT_CInt16,
-      GDT_CInt32,  GDT_CFloat16, GDT_CFloat32, GDT_CFloat64,
-  };
-  alignas(16) GByte t_src[3 * 3 * 16];
-  alignas(16) GByte t_dst[3 * 3 * 16];
-  memset(t_src, 1, sizeof(t_src));
+  constexpr auto kAllTypes = std::to_array<GDALDataType>({
+      GDT_Byte,
+      GDT_Int8,
+      GDT_UInt16,
+      GDT_Int16,
+      GDT_UInt32,
+      GDT_Int32,
+      GDT_UInt64,
+      GDT_Int64,
+      GDT_Float16,
+      GDT_Float32,
+      GDT_Float64,
+      GDT_CInt16,
+      GDT_CInt32,
+      GDT_CFloat16,
+      GDT_CFloat32,
+      GDT_CFloat64,
+  });
+  alignas(16) GByte t_src[3 * 3 * 16] = {};
+  alignas(16) GByte t_dst[3 * 3 * 16] = {};
+  std::memset(t_src, 1, sizeof(t_src));
   for (GDALDataType s_dt : kAllTypes) {
     for (GDALDataType d_dt : kAllTypes) {
       GDALTranspose2D(t_src, s_dt, t_dst, d_dt, 3, 3);
@@ -785,24 +855,28 @@ TEST(RasterIoTest, BestOverviewLevelAndOverviewRasterIO) {
   base_band->AddOverview(ovr2);
   base_band->AddOverview(ovr3);
 
-  // 1. bUseOnlyThisScale = true -> returns -1
+  // 1. bUseOnlyThisScale = TRUE -> returns -1
   {
-    int xoff = 0, yoff = 0, xsize = 100, ysize = 100;
-    GDALRasterIOExtraArg extra;
+    int xoff = 0;
+    int yoff = 0;
+    int xsize = 100;
+    int ysize = 100;
+    GDALRasterIOExtraArg extra = {};
     INIT_RASTERIO_EXTRA_ARG(extra);
     extra.nVersion = 2;
-    extra.bUseOnlyThisScale = true;
+    extra.bUseOnlyThisScale = TRUE;
     EXPECT_EQ(-1, GDALBandGetBestOverviewLevel2(base_band, xoff, yoff, xsize,
                                                 ysize, 25, 25, &extra));
   }
 
-  // 2. Request 50x50 -> selects overview 2 (exact match)
+  // 2. Request 50x50 -> selects overview 2 (exact match).
   {
-    int xoff = 10, yoff = 20, xsize = 90, ysize = 80;
-    CPLPushErrorHandler(CPLQuietErrorHandler);
+    int xoff = 10;
+    int yoff = 20;
+    int xsize = 90;
+    int ysize = 80;
     int lvl = GDALBandGetBestOverviewLevel(base_band, xoff, yoff, xsize, ysize,
                                            45, 40);
-    CPLPopErrorHandler();
     EXPECT_EQ(2, lvl);
     EXPECT_EQ(5, xoff);
     EXPECT_EQ(10, yoff);
@@ -810,10 +884,13 @@ TEST(RasterIoTest, BestOverviewLevelAndOverviewRasterIO) {
     EXPECT_EQ(40, ysize);
   }
 
-  // 3. Request with bFloatingPointWindowValidity = true and non-nearest
+  // 3. Request with bFloatingPointWindowValidity = TRUE and non-nearest
   {
-    int xoff = 0, yoff = 0, xsize = 100, ysize = 100;
-    GDALRasterIOExtraArg extra;
+    int xoff = 0;
+    int yoff = 0;
+    int xsize = 100;
+    int ysize = 100;
+    GDALRasterIOExtraArg extra = {};
     INIT_RASTERIO_EXTRA_ARG(extra);
     extra.bFloatingPointWindowValidity = TRUE;
     extra.dfXOff = 4.0;
@@ -832,16 +909,19 @@ TEST(RasterIoTest, BestOverviewLevelAndOverviewRasterIO) {
     ysize = 80;
     INIT_RASTERIO_EXTRA_ARG(extra);
     extra.eResampleAlg = GRIORA_Bilinear;
-    CPLSetConfigOption("GDAL_OVERVIEW_OVERSAMPLING_THRESHOLD", "1.5");
-    EXPECT_EQ(3, GDALBandGetBestOverviewLevel2(base_band, xoff, yoff, xsize,
-                                               ysize, 20, 20, &extra));
-    CPLSetConfigOption("GDAL_OVERVIEW_OVERSAMPLING_THRESHOLD", nullptr);
-    EXPECT_TRUE(extra.bFloatingPointWindowValidity);
+    {
+      CPLConfigOptionSetter threshold_setter(
+          "GDAL_OVERVIEW_OVERSAMPLING_THRESHOLD", "1.5",
+          /*bSetOnlyIfUndefined=*/false);
+      EXPECT_EQ(3, GDALBandGetBestOverviewLevel2(base_band, xoff, yoff, xsize,
+                                                 ysize, 20, 20, &extra));
+    }
+    EXPECT_EQ(TRUE, extra.bFloatingPointWindowValidity);
   }
 
   // 4. OverviewRasterIO and TryOverviewRasterIO on band and dataset
   {
-    GDALRasterIOExtraArg extra;
+    GDALRasterIOExtraArg extra = {};
     INIT_RASTERIO_EXTRA_ARG(extra);
     std::vector<GByte> buf(25 * 25, 0);
     EXPECT_EQ(CE_None, base_band->CallOverviewRasterIO(
@@ -858,45 +938,49 @@ TEST(RasterIoTest, BestOverviewLevelAndOverviewRasterIO) {
     EXPECT_EQ(CE_None, base_band->CallTryOverviewRasterIO(
                            GF_Read, 0, 0, 100, 100, buf.data(), 25, 25,
                            GDT_Byte, 1, 25, &extra, &bTried));
-    EXPECT_TRUE(bTried);
+    EXPECT_EQ(TRUE, bTried);
 
     EXPECT_EQ(CE_None, base_band->CallTryOverviewRasterIO(
                            GF_Read, 0, 0, 100, 100, buf.data(), 100, 100,
                            GDT_Byte, 1, 100, &extra, &bTried));
-    EXPECT_FALSE(bTried);
+    EXPECT_EQ(FALSE, bTried);
 
-    const int band_map[1] = {1};
+    constexpr int kBandMap[1] = {1};
     EXPECT_EQ(CE_None, ds.CallTryOverviewRasterIO(
                            GF_Read, 0, 0, 100, 100, buf.data(), 25, 25,
-                           GDT_Byte, 1, band_map, 1, 25, 0, &extra, &bTried));
-    EXPECT_TRUE(bTried);
+                           GDT_Byte, 1, kBandMap, 1, 25, 0, &extra, &bTried));
+    EXPECT_EQ(TRUE, bTried);
 
     EXPECT_EQ(CE_None, ds.CallTryOverviewRasterIO(
                            GF_Read, 0, 0, 100, 100, buf.data(), 100, 100,
-                           GDT_Byte, 1, band_map, 1, 100, 0, &extra, &bTried));
-    EXPECT_FALSE(bTried);
+                           GDT_Byte, 1, kBandMap, 1, 100, 0, &extra, &bTried));
+    EXPECT_EQ(FALSE, bTried);
   }
 }
 
 TEST(RasterIoTest, IRasterIOCases1And2AndErrors) {
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
   // Error case: eFlushBlockErr != CE_None on write
   {
     TestDataset ds(10, 10);
     auto* band = new TestRasterBand(&ds, 1, GDT_Byte, 10, 10, 10, 10);
     ds.AddTestBand(band);
     GByte val[100] = {5};
-    GDALRasterIOExtraArg extra;
+    GDALRasterIOExtraArg extra = {};
     INIT_RASTERIO_EXTRA_ARG(extra);
     EXPECT_EQ(CE_None, band->CallIRasterIO(GF_Write, 0, 0, 10, 10, val, 10, 10,
                                            GDT_Byte, 1, 10, &extra));
     band->SetFailWriteBlock(true);
-    EXPECT_TRUE(GDALRasterBlock::FlushCacheBlock(TRUE));
+    EXPECT_EQ(TRUE, GDALRasterBlock::FlushCacheBlock(TRUE));
     band->SetFailWriteBlock(false);
     // Next write sees eFlushBlockErr != CE_None
-    EXPECT_EQ(CE_Failure, band->CallIRasterIO(GF_Write, 0, 0, 10, 10, val, 1, 1,
-                                              GDT_Byte, 1, 1, &extra));
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_EQ(CE_Failure, band->CallIRasterIO(GF_Write, 0, 0, 10, 10, val, 1,
+                                                1, GDT_Byte, 1, 1, &extra));
+      EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+      CPLErrorReset();
+    }
   }
 
   // Error case: invalid block size
@@ -906,10 +990,16 @@ TEST(RasterIoTest, IRasterIOCases1And2AndErrors) {
     ds.AddTestBand(band);
     band->SetInvalidBlockSize();
     GByte val = 0;
-    GDALRasterIOExtraArg extra;
+    GDALRasterIOExtraArg extra = {};
     INIT_RASTERIO_EXTRA_ARG(extra);
-    EXPECT_EQ(CE_Failure, band->CallIRasterIO(GF_Read, 0, 0, 1, 1, &val, 1, 1,
-                                              GDT_Byte, 1, 1, &extra));
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_EQ(CE_Failure, band->CallIRasterIO(GF_Read, 0, 0, 1, 1, &val, 1, 1,
+                                                GDT_Byte, 1, 1, &extra));
+      EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+      CPLErrorReset();
+    }
   }
 
   // Case 1: nBlockXSize == GetXSize(), packed buffer, 1:1
@@ -919,7 +1009,7 @@ TEST(RasterIoTest, IRasterIOCases1And2AndErrors) {
     TestDataset ds(10, 10);
     auto* band = new TestRasterBand(&ds, 1, GDT_Byte, 10, 10, 10, 4);
     ds.AddTestBand(band);
-    GDALRasterIOExtraArg extra;
+    GDALRasterIOExtraArg extra = {};
     INIT_RASTERIO_EXTRA_ARG(extra);
 
     std::vector<GByte> write_buf(10 * 10, 42);
@@ -934,7 +1024,7 @@ TEST(RasterIoTest, IRasterIOCases1And2AndErrors) {
     EXPECT_EQ(42, read_buf[99]);
 
     // Type conversion in Case 1 (read and write as UInt16)
-    std::vector<uint16_t> u16_buf(10 * 10, 123);
+    std::vector<std::uint16_t> u16_buf(10 * 10, 123);
     EXPECT_EQ(CE_None,
               band->CallIRasterIO(GF_Write, 0, 0, 10, 10, u16_buf.data(), 10,
                                   10, GDT_UInt16, 2, 20, &extra));
@@ -948,16 +1038,27 @@ TEST(RasterIoTest, IRasterIOCases1And2AndErrors) {
     double stop_at = 0.0;
     extra.pfnProgress = FailingProgressCallback;
     extra.pProgressData = &stop_at;
-    EXPECT_EQ(CE_Failure,
-              band->CallIRasterIO(GF_Read, 0, 0, 10, 10, read_buf.data(), 10,
-                                  10, GDT_Byte, 1, 10, &extra));
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_EQ(CE_Failure,
+                band->CallIRasterIO(GF_Read, 0, 0, 10, 10, read_buf.data(), 10,
+                                    10, GDT_Byte, 1, 10, &extra));
+      CPLErrorReset();
+    }
     INIT_RASTERIO_EXTRA_ARG(extra);
 
     // Block lock failure in Case 1
     band->SetFailGetLockedBlock(true, true);
-    EXPECT_EQ(CE_Failure,
-              band->CallIRasterIO(GF_Read, 0, 0, 10, 10, read_buf.data(), 10,
-                                  10, GDT_Byte, 1, 10, &extra));
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_EQ(CE_Failure,
+                band->CallIRasterIO(GF_Read, 0, 0, 10, 10, read_buf.data(), 10,
+                                    10, GDT_Byte, 1, 10, &extra));
+      EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+      CPLErrorReset();
+    }
     band->SetFailGetLockedBlock(false);
   }
 
@@ -967,13 +1068,15 @@ TEST(RasterIoTest, IRasterIOCases1And2AndErrors) {
     auto* band = new TestRasterBand(&ds, 1, GDT_Byte, 300, 300, 64, 64);
     ds.AddTestBand(band);
     std::fill(band->raw_data().begin(), band->raw_data().end(), 99);
-    GDALRasterIOExtraArg extra;
+    GDALRasterIOExtraArg extra = {};
     INIT_RASTERIO_EXTRA_ARG(extra);
     GByte out[4] = {1, 1, 1, 1};
-    CPLSetConfigOption("GDAL_NO_COSTLY_OVERVIEW", "YES");
-    EXPECT_EQ(CE_None, band->CallIRasterIO(GF_Read, 0, 0, 300, 300, out, 2, 2,
-                                           GDT_Byte, 1, 2, &extra));
-    CPLSetConfigOption("GDAL_NO_COSTLY_OVERVIEW", nullptr);
+    {
+      CPLConfigOptionSetter no_costly_ovr("GDAL_NO_COSTLY_OVERVIEW", "YES",
+                                          /*bSetOnlyIfUndefined=*/false);
+      EXPECT_EQ(CE_None, band->CallIRasterIO(GF_Read, 0, 0, 300, 300, out, 2, 2,
+                                             GDT_Byte, 1, 2, &extra));
+    }
     EXPECT_EQ(0, out[0]);
   }
 
@@ -983,7 +1086,7 @@ TEST(RasterIoTest, IRasterIOCases1And2AndErrors) {
     TestDataset ds(10, 10);
     auto* band = new TestRasterBand(&ds, 1, GDT_Byte, 10, 10, 4, 4);
     ds.AddTestBand(band);
-    GDALRasterIOExtraArg extra;
+    GDALRasterIOExtraArg extra = {};
     INIT_RASTERIO_EXTRA_ARG(extra);
 
     std::vector<GByte> buf(10 * 10, 55);
@@ -995,7 +1098,7 @@ TEST(RasterIoTest, IRasterIOCases1And2AndErrors) {
     EXPECT_EQ(55, buf[99]);
 
     // Type conversion in Case 2
-    std::vector<uint16_t> u16_buf(10 * 10, 77);
+    std::vector<std::uint16_t> u16_buf(10 * 10, 77);
     EXPECT_EQ(CE_None, band->CallIRasterIO(GF_Write, 1, 1, 8, 8, u16_buf.data(),
                                            8, 8, GDT_UInt16, 2, 16, &extra));
     std::fill(u16_buf.begin(), u16_buf.end(), 0);
@@ -1007,23 +1110,33 @@ TEST(RasterIoTest, IRasterIOCases1And2AndErrors) {
     double stop_at = 0.0;
     extra.pfnProgress = FailingProgressCallback;
     extra.pProgressData = &stop_at;
-    EXPECT_EQ(CE_Failure, band->CallIRasterIO(GF_Read, 0, 0, 10, 10, buf.data(),
-                                              10, 10, GDT_Byte, 1, 10, &extra));
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_EQ(CE_Failure,
+                band->CallIRasterIO(GF_Read, 0, 0, 10, 10, buf.data(), 10, 10,
+                                    GDT_Byte, 1, 10, &extra));
+      CPLErrorReset();
+    }
     INIT_RASTERIO_EXTRA_ARG(extra);
 
     // GetLockedBlockRef failure in Case 2
     band->SetFailGetLockedBlock(true, true);
-    EXPECT_EQ(CE_Failure, band->CallIRasterIO(GF_Read, 0, 0, 10, 10, buf.data(),
-                                              10, 10, GDT_Byte, 1, 10, &extra));
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_EQ(CE_Failure,
+                band->CallIRasterIO(GF_Read, 0, 0, 10, 10, buf.data(), 10, 10,
+                                    GDT_Byte, 1, 10, &extra));
+      EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+      CPLErrorReset();
+    }
     band->SetFailGetLockedBlock(false);
   }
-
-  CPLPopErrorHandler();
 }
 
 TEST(RasterIoTest, IRasterIOCase3AndDownsamplingIntegerXFactor) {
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  GDALRasterIOExtraArg extra;
+  GDALRasterIOExtraArg extra = {};
   INIT_RASTERIO_EXTRA_ARG(extra);
 
   // Test DownsamplingIntegerXFactor for data type sizes 1, 2, 4, 8, 16 and
@@ -1043,7 +1156,7 @@ TEST(RasterIoTest, IRasterIOCase3AndDownsamplingIntegerXFactor) {
                                   dt_size, 10 * dt_size, &extra));
 
     // Cross-type downsampling
-    GDALDataType other_dt = (dt == GDT_Byte) ? GDT_UInt16 : GDT_Byte;
+    const GDALDataType other_dt = (dt == GDT_Byte) ? GDT_UInt16 : GDT_Byte;
     const int other_size = GDALGetDataTypeSizeBytes(other_dt);
     std::vector<GByte> dst_other(10 * 4 * other_size, 0);
     EXPECT_EQ(CE_None, band->CallIRasterIO(
@@ -1070,7 +1183,7 @@ TEST(RasterIoTest, IRasterIOCase3AndDownsamplingIntegerXFactor) {
     EXPECT_EQ(CE_None,
               band->CallIRasterIO(GF_Write, 0, 0, 12, 12, src_byte.data(), 4, 4,
                                   GDT_Byte, 1, 4, &extra));
-    std::vector<uint16_t> src_u16(4 * 4, 44);
+    std::vector<std::uint16_t> src_u16(4 * 4, 44);
     EXPECT_EQ(CE_None,
               band->CallIRasterIO(GF_Write, 0, 0, 12, 12, src_u16.data(), 4, 4,
                                   GDT_UInt16, 2, 8, &extra));
@@ -1079,22 +1192,32 @@ TEST(RasterIoTest, IRasterIOCase3AndDownsamplingIntegerXFactor) {
     double stop_at = 0.0;
     extra.pfnProgress = FailingProgressCallback;
     extra.pProgressData = &stop_at;
-    EXPECT_EQ(CE_Failure,
-              band->CallIRasterIO(GF_Write, 0, 0, 12, 12, src_byte.data(), 4, 4,
-                                  GDT_Byte, 1, 4, &extra));
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_EQ(CE_Failure,
+                band->CallIRasterIO(GF_Write, 0, 0, 12, 12, src_byte.data(), 4,
+                                    4, GDT_Byte, 1, 4, &extra));
+      CPLErrorReset();
+    }
     INIT_RASTERIO_EXTRA_ARG(extra);
 
     // Block lock failure in Case 3 Write and Read
     band->SetFailGetLockedBlock(true);
-    EXPECT_EQ(CE_Failure,
-              band->CallIRasterIO(GF_Write, 0, 0, 12, 12, src_byte.data(), 4, 4,
-                                  GDT_Byte, 1, 4, &extra));
-    EXPECT_EQ(CE_Failure,
-              band->CallIRasterIO(GF_Read, 0, 0, 12, 12, src_byte.data(), 4, 4,
-                                  GDT_Byte, 1, 4, &extra));
-    EXPECT_EQ(CE_Failure,
-              band->CallIRasterIO(GF_Read, 0, 0, 12, 12, src_byte.data(), 5, 5,
-                                  GDT_Byte, 1, 5, &extra));
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_EQ(CE_Failure,
+                band->CallIRasterIO(GF_Write, 0, 0, 12, 12, src_byte.data(), 4,
+                                    4, GDT_Byte, 1, 4, &extra));
+      EXPECT_EQ(CE_Failure,
+                band->CallIRasterIO(GF_Read, 0, 0, 12, 12, src_byte.data(), 4,
+                                    4, GDT_Byte, 1, 4, &extra));
+      EXPECT_EQ(CE_Failure,
+                band->CallIRasterIO(GF_Read, 0, 0, 12, 12, src_byte.data(), 5,
+                                    5, GDT_Byte, 1, 5, &extra));
+      CPLErrorReset();
+    }
     band->SetFailGetLockedBlock(false);
   }
 
@@ -1106,31 +1229,43 @@ TEST(RasterIoTest, IRasterIOCase3AndDownsamplingIntegerXFactor) {
     pal_band->SetTestColorTable(&ct);
     ds.AddTestBand(pal_band);
 
+    WithQuietHandler quiet;
     extra.eResampleAlg = GRIORA_Bilinear;
-    GByte out[4 * 4];
+    GByte out[4 * 4] = {};
+    CPLErrorReset();
     EXPECT_EQ(CE_None, pal_band->CallIRasterIO(GF_Read, 0, 0, 8, 8, out, 4, 4,
                                                GDT_Byte, 1, 4, &extra));
+    EXPECT_EQ(CE_Warning, CPLGetLastErrorType());
+    EXPECT_EQ(CPLE_NotSupported, CPLGetLastErrorNo());
 
     TestDataset cds(8, 8);
     auto* cpx_band = new TestRasterBand(&cds, 1, GDT_CFloat32, 8, 8, 8, 8);
     cds.AddTestBand(cpx_band);
     extra.eResampleAlg = GRIORA_Gauss;
-    float cout[4 * 4 * 2];
+    float cout[4 * 4 * 2] = {};
+    CPLErrorReset();
     EXPECT_EQ(CE_None, cpx_band->CallIRasterIO(GF_Read, 0, 0, 8, 8, cout, 4, 4,
                                                GDT_CFloat32, 8, 32, &extra));
+    EXPECT_EQ(CE_Warning, CPLGetLastErrorType());
+    EXPECT_EQ(CPLE_NotSupported, CPLGetLastErrorNo());
+    CPLErrorReset();
   }
-
-  CPLPopErrorHandler();
 }
 
 TEST(RasterIoTest, BandAndDatasetRasterIOResampled) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
+  GDALRegister_MEM();
+  GDALRegister_VRT();
 
-  const GDALRIOResampleAlg kAlgs[] = {
-      GRIORA_Bilinear, GRIORA_Cubic, GRIORA_CubicSpline, GRIORA_Lanczos,
-      GRIORA_Average,  GRIORA_RMS,   GRIORA_Mode,        GRIORA_Gauss,
-  };
+  constexpr auto kAlgs = std::to_array<GDALRIOResampleAlg>({
+      GRIORA_Bilinear,
+      GRIORA_Cubic,
+      GRIORA_CubicSpline,
+      GRIORA_Lanczos,
+      GRIORA_Average,
+      GRIORA_RMS,
+      GRIORA_Mode,
+      GRIORA_Gauss,
+  });
 
   // 1. Band RasterIOResampled on real data with NBITS, nodata mask (all valid,
   //    all nodata, partial nodata), type conversion, and floating-point window
@@ -1142,7 +1277,7 @@ TEST(RasterIoTest, BandAndDatasetRasterIOResampled) {
     ds.AddTestBand(band);
 
     for (GDALRIOResampleAlg alg : kAlgs) {
-      GDALRasterIOExtraArg extra;
+      GDALRasterIOExtraArg extra = {};
       INIT_RASTERIO_EXTRA_ARG(extra);
       extra.eResampleAlg = alg;
       extra.bFloatingPointWindowValidity = TRUE;
@@ -1182,7 +1317,7 @@ TEST(RasterIoTest, BandAndDatasetRasterIOResampled) {
     for (GDALRIOResampleAlg alg :
          {GRIORA_Bilinear, GRIORA_Cubic, GRIORA_CubicSpline, GRIORA_Lanczos,
           GRIORA_Average, GRIORA_RMS}) {
-      GDALRasterIOExtraArg extra;
+      GDALRasterIOExtraArg extra = {};
       INIT_RASTERIO_EXTRA_ARG(extra);
       extra.eResampleAlg = alg;
       std::vector<float> out(6 * 6 * 2, 0.0f);
@@ -1203,9 +1338,9 @@ TEST(RasterIoTest, BandAndDatasetRasterIOResampled) {
     ds.AddTestBand(b1);
     ds.AddTestBand(b2);
 
-    const int band_map[2] = {1, 2};
+    constexpr int kBandMap[2] = {1, 2};
     for (GDALRIOResampleAlg alg : kAlgs) {
-      GDALRasterIOExtraArg extra;
+      GDALRasterIOExtraArg extra = {};
       INIT_RASTERIO_EXTRA_ARG(extra);
       extra.eResampleAlg = alg;
       extra.bFloatingPointWindowValidity = TRUE;
@@ -1220,20 +1355,20 @@ TEST(RasterIoTest, BandAndDatasetRasterIOResampled) {
       std::fill(b2->raw_data().begin(), b2->raw_data().end(), 0);
       EXPECT_EQ(CE_None, ds.CallRasterIOResampled(GF_Read, 2, 2, 12, 12,
                                                   out.data(), 6, 6, GDT_Byte, 2,
-                                                  band_map, 1, 6, 36, &extra));
+                                                  kBandMap, 1, 6, 36, &extra));
 
       // All opaque (mask == 255)
       std::fill(b1->raw_data().begin(), b1->raw_data().end(), 40);
       std::fill(b2->raw_data().begin(), b2->raw_data().end(), 80);
       EXPECT_EQ(CE_None, ds.CallRasterIOResampled(GF_Read, 2, 2, 12, 12,
                                                   out.data(), 6, 6, GDT_Byte, 2,
-                                                  band_map, 1, 6, 36, &extra));
+                                                  kBandMap, 1, 6, 36, &extra));
 
       // Partial nodata
       b1->raw_data()[4 * 16 + 4] = 0;
       EXPECT_EQ(CE_None, ds.CallRasterIOResampled(GF_Read, 2, 2, 12, 12,
                                                   out.data(), 6, 6, GDT_Byte, 2,
-                                                  band_map, 1, 6, 36, &extra));
+                                                  kBandMap, 1, 6, 36, &extra));
     }
   }
 
@@ -1244,28 +1379,31 @@ TEST(RasterIoTest, BandAndDatasetRasterIOResampled) {
     auto* big_b1 =
         new TestRasterBand(&big_ds, 1, GDT_Byte, 1100, 1100, 1100, 10, true);
     big_ds.AddTestBand(big_b1);
-    GDALRasterIOExtraArg extra;
+    GDALRasterIOExtraArg extra = {};
     INIT_RASTERIO_EXTRA_ARG(extra);
     extra.eResampleAlg = GRIORA_Bilinear;
     double stop_at = 0.0;
     extra.pfnProgress = FailingProgressCallback;
     extra.pProgressData = &stop_at;
     std::vector<GByte> out(4 * 4, 0);
-    EXPECT_EQ(CE_Failure, big_b1->CallRasterIOResampled(
-                              GF_Read, 0, 0, 1100, 1100, out.data(), 4, 4,
-                              GDT_Byte, 1, 4, &extra));
-    const int band_map[1] = {1};
-    EXPECT_EQ(CE_Failure, big_ds.CallRasterIOResampled(
-                              GF_Read, 0, 0, 1100, 1100, out.data(), 4, 4,
-                              GDT_Byte, 1, band_map, 1, 4, 16, &extra));
+    constexpr int kBandMap[1] = {1};
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_EQ(CE_Failure, big_b1->CallRasterIOResampled(
+                                GF_Read, 0, 0, 1100, 1100, out.data(), 4, 4,
+                                GDT_Byte, 1, 4, &extra));
+      CPLErrorReset();
+      EXPECT_EQ(CE_Failure, big_ds.CallRasterIOResampled(
+                                GF_Read, 0, 0, 1100, 1100, out.data(), 4, 4,
+                                GDT_Byte, 1, kBandMap, 1, 4, 16, &extra));
+      CPLErrorReset();
+    }
   }
-
-  CPLPopErrorHandler();
 }
 
 TEST(RasterIoTest, BlockBasedRasterIO) {
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  GDALRasterIOExtraArg extra;
+  GDALRasterIOExtraArg extra = {};
   INIT_RASTERIO_EXTRA_ARG(extra);
 
   // 1. Mismatched block sizes and mismatched band data types fallback
@@ -1273,18 +1411,18 @@ TEST(RasterIoTest, BlockBasedRasterIO) {
     TestDataset ds(8, 8);
     ds.AddTestBand(new TestRasterBand(&ds, 1, GDT_Byte, 8, 8, 4, 4));
     ds.AddTestBand(new TestRasterBand(&ds, 2, GDT_Byte, 8, 8, 8, 8));
-    const int band_map[2] = {1, 2};
+    constexpr int kBandMap[2] = {1, 2};
     std::vector<GByte> buf(8 * 8 * 2, 0);
     EXPECT_EQ(CE_None, ds.CallBlockBasedRasterIO(GF_Read, 0, 0, 8, 8,
                                                  buf.data(), 8, 8, GDT_Byte, 2,
-                                                 band_map, 1, 8, 64, &extra));
+                                                 kBandMap, 1, 8, 64, &extra));
 
     TestDataset ds_dt(8, 8);
     ds_dt.AddTestBand(new TestRasterBand(&ds_dt, 1, GDT_Byte, 8, 8, 4, 4));
     ds_dt.AddTestBand(new TestRasterBand(&ds_dt, 2, GDT_UInt16, 8, 8, 4, 4));
     EXPECT_EQ(CE_None, ds_dt.CallBlockBasedRasterIO(
                            GF_Read, 0, 0, 8, 8, buf.data(), 4, 4, GDT_Byte, 2,
-                           band_map, 1, 4, 16, &extra));
+                           kBandMap, 1, 4, 16, &extra));
   }
 
   // 2. Full resolution (1:1), subsampled read, upsampled write, downsampled
@@ -1306,57 +1444,62 @@ TEST(RasterIoTest, BlockBasedRasterIO) {
     b1->AddOverview(ov1);
     b2->AddOverview(ov2);
 
-    const int band_map[2] = {1, 2};
+    constexpr int kBandMap[2] = {1, 2};
 
     // 1:1 Write and Read (pixel-interleaved)
     std::vector<GByte> buf16(16 * 16 * 2, 9);
     EXPECT_EQ(CE_None, ds.CallBlockBasedRasterIO(
                            GF_Write, 0, 0, 16, 16, buf16.data(), 16, 16,
-                           GDT_Byte, 2, band_map, 2, 32, 1, &extra));
+                           GDT_Byte, 2, kBandMap, 2, 32, 1, &extra));
     EXPECT_EQ(CE_None, ds.CallBlockBasedRasterIO(
                            GF_Read, 0, 0, 16, 16, buf16.data(), 16, 16,
-                           GDT_Byte, 2, band_map, 2, 32, 1, &extra));
+                           GDT_Byte, 2, kBandMap, 2, 32, 1, &extra));
 
     // Downsampled write (falls back to BandBasedRasterIO)
     std::vector<GByte> buf8(8 * 8 * 2, 7);
     EXPECT_EQ(CE_None, ds.CallBlockBasedRasterIO(GF_Write, 0, 0, 16, 16,
                                                  buf8.data(), 8, 8, GDT_Byte, 2,
-                                                 band_map, 1, 8, 64, &extra));
+                                                 kBandMap, 1, 8, 64, &extra));
 
     // Upsampled write (hits general loop in BlockBasedRasterIO, both same type
     // and cross-type)
     EXPECT_EQ(CE_None, ds.CallBlockBasedRasterIO(GF_Write, 0, 0, 4, 4,
                                                  buf8.data(), 8, 8, GDT_Byte, 2,
-                                                 band_map, 1, 8, 64, &extra));
-    std::vector<uint16_t> buf8_u16(8 * 8 * 2, 13);
+                                                 kBandMap, 1, 8, 64, &extra));
+    std::vector<std::uint16_t> buf8_u16(8 * 8 * 2, 13);
     EXPECT_EQ(CE_None, ds.CallBlockBasedRasterIO(
                            GF_Write, 0, 0, 4, 4, buf8_u16.data(), 8, 8,
-                           GDT_UInt16, 2, band_map, 2, 16, 128, &extra));
+                           GDT_UInt16, 2, kBandMap, 2, 16, 128, &extra));
 
     // Subsampled read using overviews (same type and cross-type)
     EXPECT_EQ(CE_None, ds.CallBlockBasedRasterIO(GF_Read, 0, 0, 16, 16,
                                                  buf8.data(), 8, 8, GDT_Byte, 2,
-                                                 band_map, 1, 8, 64, &extra));
+                                                 kBandMap, 1, 8, 64, &extra));
     EXPECT_EQ(11, buf8[0]);
     EXPECT_EQ(22, buf8[64]);
 
     EXPECT_EQ(CE_None, ds.CallBlockBasedRasterIO(
                            GF_Read, 0, 0, 16, 16, buf8_u16.data(), 8, 8,
-                           GDT_UInt16, 2, band_map, 2, 16, 128, &extra));
+                           GDT_UInt16, 2, kBandMap, 2, 16, 128, &extra));
     EXPECT_EQ(11, buf8_u16[0]);
 
     // Non-nearest resampling fallback
     extra.eResampleAlg = GRIORA_Bilinear;
     EXPECT_EQ(CE_None, ds.CallBlockBasedRasterIO(GF_Read, 0, 0, 16, 16,
                                                  buf8.data(), 8, 8, GDT_Byte, 2,
-                                                 band_map, 1, 8, 64, &extra));
+                                                 kBandMap, 1, 8, 64, &extra));
     INIT_RASTERIO_EXTRA_ARG(extra);
 
     // Block lock failure in general loop
     ov1->SetFailGetLockedBlock(true);
-    EXPECT_EQ(CE_Failure, ds.CallBlockBasedRasterIO(
-                              GF_Read, 0, 0, 16, 16, buf8.data(), 8, 8,
-                              GDT_Byte, 2, band_map, 1, 8, 64, &extra));
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_EQ(CE_Failure, ds.CallBlockBasedRasterIO(
+                                GF_Read, 0, 0, 16, 16, buf8.data(), 8, 8,
+                                GDT_Byte, 2, kBandMap, 1, 8, 64, &extra));
+      CPLErrorReset();
+    }
     ov1->SetFailGetLockedBlock(false);
   }
 
@@ -1379,20 +1522,20 @@ TEST(RasterIoTest, BlockBasedRasterIO) {
     ds.AddTestBand(b1);
     ds.AddTestBand(b2);
 
-    const int band_map[2] = {1, 2};
+    constexpr int kBandMap[2] = {1, 2};
     std::vector<GByte> buf(8 * 8 * 2, 0);
 
     // Mismatched overview count (b1 has 1, b2 has 0)
     b1->AddOverview(ov1);
     EXPECT_EQ(CE_None, ds.CallBlockBasedRasterIO(GF_Read, 0, 0, 16, 16,
                                                  buf.data(), 8, 8, GDT_Byte, 2,
-                                                 band_map, 1, 8, 64, &extra));
+                                                 kBandMap, 1, 8, 64, &extra));
 
     // Mismatched overview block size
     b2->AddOverview(ov2_diff_block);
     EXPECT_EQ(CE_None, ds.CallBlockBasedRasterIO(GF_Read, 0, 0, 16, 16,
                                                  buf.data(), 8, 8, GDT_Byte, 2,
-                                                 band_map, 1, 8, 64, &extra));
+                                                 kBandMap, 1, 8, 64, &extra));
 
     // Mismatched overview dimensions
     TestDataset ds2(16, 16);
@@ -1404,36 +1547,48 @@ TEST(RasterIoTest, BlockBasedRasterIO) {
     ds2.AddTestBand(b2_2);
     EXPECT_EQ(CE_None, ds2.CallBlockBasedRasterIO(GF_Read, 0, 0, 16, 16,
                                                   buf.data(), 8, 8, GDT_Byte, 2,
-                                                  band_map, 1, 8, 64, &extra));
+                                                  kBandMap, 1, 8, 64, &extra));
   }
-
-  CPLPopErrorHandler();
 }
 
 TEST(RasterIoTest, CopyWholeRasterDatasetAndBand) {
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
   // Nullptr checks
-  EXPECT_EQ(CE_Failure, GDALDatasetCopyWholeRaster(nullptr, nullptr, nullptr,
-                                                   nullptr, nullptr));
-  EXPECT_EQ(CE_Failure, GDALRasterBandCopyWholeRaster(nullptr, nullptr, nullptr,
-                                                      nullptr, nullptr));
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, GDALDatasetCopyWholeRaster(nullptr, nullptr, nullptr,
+                                                     nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, GDALRasterBandCopyWholeRaster(
+                              nullptr, nullptr, nullptr, nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
 
   // Mismatched dimensions
   {
-    TestDataset d1(10, 10), d2(12, 10);
+    TestDataset d1(10, 10);
+    TestDataset d2(12, 10);
     d1.AddTestBand(new TestRasterBand(&d1, 1, GDT_Byte, 10, 10, 10, 10));
     d2.AddTestBand(new TestRasterBand(&d2, 1, GDT_Byte, 12, 10, 12, 10));
+    WithQuietHandler quiet;
+    CPLErrorReset();
     EXPECT_EQ(CE_Failure,
               GDALDatasetCopyWholeRaster(&d1, &d2, nullptr, nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
     EXPECT_EQ(CE_Failure, GDALRasterBandCopyWholeRaster(
                               d1.GetRasterBand(1), d2.GetRasterBand(1), nullptr,
                               nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
   }
 
   // Zero bands dataset
   {
-    TestDataset d1(10, 10), d2(10, 10);
+    TestDataset d1(10, 10);
+    TestDataset d2(10, 10);
     EXPECT_EQ(CE_None,
               GDALDatasetCopyWholeRaster(&d1, &d2, nullptr, nullptr, nullptr));
   }
@@ -1442,7 +1597,8 @@ TEST(RasterIoTest, CopyWholeRasterDatasetAndBand) {
   // skip holes, JPEG2000 compression metadata, GSBAP_LARGEST_CHUNK_POSSIBLE,
   // and progress interruption.
   {
-    TestDataset src(16, 16), dst(16, 16);
+    TestDataset src(16, 16);
+    TestDataset dst(16, 16);
     auto* sb1 = new TestRasterBand(&src, 1, GDT_Byte, 16, 16, 8, 8);
     auto* sb2 = new TestRasterBand(&src, 2, GDT_Byte, 16, 16, 8, 8);
     std::fill(sb1->raw_data().begin(), sb1->raw_data().end(), 101);
@@ -1457,9 +1613,9 @@ TEST(RasterIoTest, CopyWholeRasterDatasetAndBand) {
     dst.AddTestBand(db2);
 
     // 1. Default band-interleaved with SKIP_HOLES=YES
-    const char* opts_band[] = {"INTERLEAVE=BAND", "SKIP_HOLES=YES",
-                               "COMPRESSED=YES", nullptr};
-    EXPECT_EQ(CE_None, GDALDatasetCopyWholeRaster(&src, &dst, opts_band,
+    constexpr const char* kOptsBand[] = {"INTERLEAVE=BAND", "SKIP_HOLES=YES",
+                                         "COMPRESSED=YES", nullptr};
+    EXPECT_EQ(CE_None, GDALDatasetCopyWholeRaster(&src, &dst, kOptsBand,
                                                   nullptr, nullptr));
     dst.FlushCache(false);
     EXPECT_EQ(101, db1->raw_data()[0]);
@@ -1468,9 +1624,9 @@ TEST(RasterIoTest, CopyWholeRasterDatasetAndBand) {
     // 2. Pixel-interleaved with SKIP_HOLES=YES and empty hole coverage
     sb1->SetCoverageStatus(GDAL_DATA_COVERAGE_STATUS_EMPTY);
     sb2->SetCoverageStatus(GDAL_DATA_COVERAGE_STATUS_EMPTY);
-    const char* opts_pixel[] = {"INTERLEAVE=PIXEL", "SKIP_HOLES=YES",
-                                "COMPRESSED=YES", nullptr};
-    EXPECT_EQ(CE_None, GDALDatasetCopyWholeRaster(&src, &dst, opts_pixel,
+    constexpr const char* kOptsPixel[] = {"INTERLEAVE=PIXEL", "SKIP_HOLES=YES",
+                                          "COMPRESSED=YES", nullptr};
+    EXPECT_EQ(CE_None, GDALDatasetCopyWholeRaster(&src, &dst, kOptsPixel,
                                                   nullptr, nullptr));
 
     // With data coverage and JPEG2000 compression metadata + small swath size
@@ -1478,50 +1634,72 @@ TEST(RasterIoTest, CopyWholeRasterDatasetAndBand) {
     sb2->SetCoverageStatus(GDAL_DATA_COVERAGE_STATUS_DATA);
     src.SetMetadataItem("COMPRESSION", "JPEG2000", "IMAGE_STRUCTURE");
     src.SetMetadataItem("INTERLEAVE", "PIXEL", "IMAGE_STRUCTURE");
-    CPLSetConfigOption("GDAL_SWATH_SIZE", "100");
-    EXPECT_EQ(CE_None, GDALDatasetCopyWholeRaster(&src, &dst, opts_pixel,
-                                                  nullptr, nullptr));
-    CPLSetConfigOption("GDAL_SWATH_SIZE", nullptr);
+    {
+      CPLConfigOptionSetter swath_size_setter("GDAL_SWATH_SIZE", "100",
+                                              /*bSetOnlyIfUndefined=*/false);
+      EXPECT_EQ(CE_None, GDALDatasetCopyWholeRaster(&src, &dst, kOptsPixel,
+                                                    nullptr, nullptr));
+    }
 
     // 3. INTERLEAVE=ATTRIBUTES and invalid INTERLEAVE option
-    const char* opts_attr[] = {"INTERLEAVE=ATTRIBUTES", nullptr};
-    EXPECT_EQ(CE_None, GDALDatasetCopyWholeRaster(&src, &dst, opts_attr,
+    constexpr const char* kOptsAttr[] = {"INTERLEAVE=ATTRIBUTES", nullptr};
+    EXPECT_EQ(CE_None, GDALDatasetCopyWholeRaster(&src, &dst, kOptsAttr,
                                                   nullptr, nullptr));
-    const char* opts_invalid[] = {"INTERLEAVE=INVALID_VALUE", nullptr};
-    EXPECT_EQ(CE_None, GDALDatasetCopyWholeRaster(&src, &dst, opts_invalid,
-                                                  nullptr, nullptr));
+    constexpr const char* kOptsInvalid[] = {"INTERLEAVE=INVALID_VALUE",
+                                            nullptr};
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_EQ(CE_None, GDALDatasetCopyWholeRaster(&src, &dst, kOptsInvalid,
+                                                    nullptr, nullptr));
+      EXPECT_EQ(CE_Warning, CPLGetLastErrorType());
+      EXPECT_EQ(CPLE_NotSupported, CPLGetLastErrorNo());
+      CPLErrorReset();
+    }
 
     // 4. Progress interruption at 0.0 and mid-way
-    double stop_at = 0.0;
-    EXPECT_EQ(CE_Failure,
-              GDALDatasetCopyWholeRaster(&src, &dst, opts_band,
-                                         FailingProgressCallback, &stop_at));
-    stop_at = 0.4;
-    EXPECT_EQ(CE_Failure,
-              GDALDatasetCopyWholeRaster(&src, &dst, opts_band,
-                                         FailingProgressCallback, &stop_at));
-    EXPECT_EQ(CE_Failure,
-              GDALDatasetCopyWholeRaster(&src, &dst, opts_pixel,
-                                         FailingProgressCallback, &stop_at));
+    {
+      WithQuietHandler quiet;
+      double stop_at = 0.0;
+      CPLErrorReset();
+      EXPECT_EQ(CE_Failure,
+                GDALDatasetCopyWholeRaster(&src, &dst, kOptsBand,
+                                           FailingProgressCallback, &stop_at));
+      stop_at = 0.4;
+      CPLErrorReset();
+      EXPECT_EQ(CE_Failure,
+                GDALDatasetCopyWholeRaster(&src, &dst, kOptsBand,
+                                           FailingProgressCallback, &stop_at));
+      CPLErrorReset();
+      EXPECT_EQ(CE_Failure,
+                GDALDatasetCopyWholeRaster(&src, &dst, kOptsPixel,
+                                           FailingProgressCallback, &stop_at));
+      CPLErrorReset();
+    }
 
     // 5. GDALRasterBandCopyWholeRaster
-    EXPECT_EQ(CE_None, GDALRasterBandCopyWholeRaster(sb1, db1, opts_band,
+    EXPECT_EQ(CE_None, GDALRasterBandCopyWholeRaster(sb1, db1, kOptsBand,
                                                      nullptr, nullptr));
     sb1->SetCoverageStatus(GDAL_DATA_COVERAGE_STATUS_EMPTY);
-    EXPECT_EQ(CE_None, GDALRasterBandCopyWholeRaster(sb1, db1, opts_band,
+    EXPECT_EQ(CE_None, GDALRasterBandCopyWholeRaster(sb1, db1, kOptsBand,
                                                      nullptr, nullptr));
     sb1->SetCoverageStatus(GDAL_DATA_COVERAGE_STATUS_DATA);
-    stop_at = 0.0;
-    EXPECT_EQ(CE_Failure,
-              GDALRasterBandCopyWholeRaster(sb1, db1, opts_band,
-                                            FailingProgressCallback, &stop_at));
-    stop_at = 0.5;
-    EXPECT_EQ(CE_Failure,
-              GDALRasterBandCopyWholeRaster(sb1, db1, opts_band,
-                                            FailingProgressCallback, &stop_at));
+    {
+      WithQuietHandler quiet;
+      double stop_at = 0.0;
+      CPLErrorReset();
+      EXPECT_EQ(CE_Failure,
+                GDALRasterBandCopyWholeRaster(
+                    sb1, db1, kOptsBand, FailingProgressCallback, &stop_at));
+      stop_at = 0.5;
+      CPLErrorReset();
+      EXPECT_EQ(CE_Failure,
+                GDALRasterBandCopyWholeRaster(
+                    sb1, db1, kOptsBand, FailingProgressCallback, &stop_at));
+      CPLErrorReset();
+    }
   }
-
-  CPLPopErrorHandler();
 }
 
 }  // namespace
+}  // namespace autotest2

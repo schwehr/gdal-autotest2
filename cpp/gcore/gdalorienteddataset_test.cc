@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,71 +12,127 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests gcore/gdalorienteddataset.cpp.
+// Tests oriented dataset wrapper (gcore/gdalorienteddataset.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdalorienteddataset.cpp
 
 #include "third_party/gdal/gcore/gdalorienteddataset.h"
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
+#include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
 #include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_frmts.h"
 #include "third_party/gdal/gcore/gdal_priv.h"
+#include "third_party/gdal/port/cpl_port.h"
 
+namespace autotest2 {
 namespace {
 
-TEST(GdalorienteddatasetTest, AllOrientationsAndDataTypes) {
-  GDALAllRegister();
+using ::testing::ElementsAreArray;
+
+constexpr int kSrcWidth = 4;
+constexpr int kSrcHeight = 3;
+
+constexpr auto kOrigins = std::to_array<GDALOrientedDataset::Origin>({
+    GDALOrientedDataset::Origin::TOP_LEFT,
+    GDALOrientedDataset::Origin::TOP_RIGHT,
+    GDALOrientedDataset::Origin::BOT_RIGHT,
+    GDALOrientedDataset::Origin::BOT_LEFT,
+    GDALOrientedDataset::Origin::LEFT_TOP,
+    GDALOrientedDataset::Origin::RIGHT_TOP,
+    GDALOrientedDataset::Origin::RIGHT_BOT,
+    GDALOrientedDataset::Origin::LEFT_BOT,
+});
+
+// Expected 1-based source pixel indices after applying each EXIF orientation
+// transform to a 4x3 raster containing {1..12} in row-major order.
+constexpr std::array<std::array<int, 12>, 8> kExpectedPixelOrder = {{
+    {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},  // TOP_LEFT (4x3)
+    {4, 3, 2, 1, 8, 7, 6, 5, 12, 11, 10, 9},  // TOP_RIGHT (4x3)
+    {12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1},  // BOT_RIGHT (4x3)
+    {9, 10, 11, 12, 5, 6, 7, 8, 1, 2, 3, 4},  // BOT_LEFT (4x3)
+    {1, 5, 9, 2, 6, 10, 3, 7, 11, 4, 8, 12},  // LEFT_TOP (3x4)
+    {9, 5, 1, 10, 6, 2, 11, 7, 3, 12, 8, 4},  // RIGHT_TOP (3x4)
+    {12, 8, 4, 11, 7, 3, 10, 6, 2, 9, 5, 1},  // RIGHT_BOT (3x4)
+    {4, 8, 12, 3, 7, 11, 2, 6, 10, 1, 5, 9},  // LEFT_BOT (3x4)
+}};
+
+TEST(GdalOrientedDatasetTest, AllOrientationsAndDataTypes) {
+  GDALRegister_MEM();
   GDALDriver* mem_driver = GetGDALDriverManager()->GetDriverByName("MEM");
   ASSERT_NE(nullptr, mem_driver);
 
-  const GDALOrientedDataset::Origin origins[] = {
-      GDALOrientedDataset::Origin::TOP_LEFT,
-      GDALOrientedDataset::Origin::TOP_RIGHT,
-      GDALOrientedDataset::Origin::BOT_RIGHT,
-      GDALOrientedDataset::Origin::BOT_LEFT,
-      GDALOrientedDataset::Origin::LEFT_TOP,
-      GDALOrientedDataset::Origin::RIGHT_TOP,
-      GDALOrientedDataset::Origin::RIGHT_BOT,
-      GDALOrientedDataset::Origin::LEFT_BOT,
-  };
-
-  // Test with both 1-byte (GDT_Byte) and 2-byte (GDT_UInt16) data types to
-  // cover both branches of FlipLineHorizontally().
+  // Test both 1-byte (GDT_Byte) and 2-byte (GDT_UInt16) data types to cover
+  // both branches of FlipLineHorizontally() and pixel-byte transposes.
   for (GDALDataType dt : {GDT_Byte, GDT_UInt16}) {
-    std::unique_ptr<GDALDataset> src_ds(
-        mem_driver->Create("", 4, 3, 1, dt, nullptr));
+    SCOPED_TRACE(GDALGetDataTypeName(dt));
+    GDALDatasetUniquePtr src_ds(
+        mem_driver->Create("", kSrcWidth, kSrcHeight, 1, dt, nullptr));
     ASSERT_NE(nullptr, src_ds);
     src_ds->GetRasterBand(1)->SetColorInterpretation(GCI_GrayIndex);
-    std::vector<GByte> init_data(4 * 3 * GDALGetDataTypeSizeBytes(dt), 1);
-    for (size_t i = 0; i < init_data.size(); ++i) {
-      init_data[i] = static_cast<GByte>((i + 1) & 0xFF);
-    }
-    ASSERT_EQ(CE_None, src_ds->GetRasterBand(1)->RasterIO(
-                           GF_Write, 0, 0, 4, 3, init_data.data(), 4, 3, dt, 0,
-                           0, nullptr));
 
-    for (GDALOrientedDataset::Origin origin : origins) {
-      GDALOrientedDataset oriented_ds(src_ds.get(), origin);
+    if (dt == GDT_Byte) {
+      constexpr auto kSrcBytes =
+          std::to_array<GByte>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12});
+      ASSERT_EQ(CE_None, src_ds->GetRasterBand(1)->RasterIO(
+                             GF_Write, 0, 0, kSrcWidth, kSrcHeight,
+                             const_cast<GByte*>(kSrcBytes.data()), kSrcWidth,
+                             kSrcHeight, GDT_Byte, 0, 0, nullptr));
+    } else {
+      constexpr auto kSrcU16 =
+          std::to_array<uint16_t>({1001, 1002, 1003, 1004, 1005, 1006, 1007,
+                                   1008, 1009, 1010, 1011, 1012});
+      ASSERT_EQ(CE_None, src_ds->GetRasterBand(1)->RasterIO(
+                             GF_Write, 0, 0, kSrcWidth, kSrcHeight,
+                             const_cast<uint16_t*>(kSrcU16.data()), kSrcWidth,
+                             kSrcHeight, GDT_UInt16, 0, 0, nullptr));
+    }
+
+    for (size_t idx = 0; idx < kOrigins.size(); ++idx) {
+      GDALOrientedDataset oriented_ds(src_ds.get(), kOrigins[idx]);
       GDALRasterBand* band = oriented_ds.GetRasterBand(1);
       ASSERT_NE(nullptr, band);
       EXPECT_EQ(GCI_GrayIndex, band->GetColorInterpretation());
+      const int out_w = oriented_ds.GetRasterXSize();
+      const int out_h = oriented_ds.GetRasterYSize();
+      EXPECT_EQ(12, out_w * out_h);
 
-      std::vector<GByte> out_buf(oriented_ds.GetRasterXSize() *
-                                     oriented_ds.GetRasterYSize() *
-                                     GDALGetDataTypeSizeBytes(dt),
-                                 0);
-      EXPECT_EQ(CE_None, band->RasterIO(
-                             GF_Read, 0, 0, oriented_ds.GetRasterXSize(),
-                             oriented_ds.GetRasterYSize(), out_buf.data(),
-                             oriented_ds.GetRasterXSize(),
-                             oriented_ds.GetRasterYSize(), dt, 0, 0, nullptr));
+      if (dt == GDT_Byte) {
+        std::array<GByte, 12> expected{};
+        for (size_t i = 0; i < 12; ++i) {
+          expected[i] = static_cast<GByte>(kExpectedPixelOrder[idx][i]);
+        }
+        std::vector<GByte> out_buf(12, 0);
+        ASSERT_EQ(CE_None,
+                  band->RasterIO(GF_Read, 0, 0, out_w, out_h, out_buf.data(),
+                                 out_w, out_h, GDT_Byte, 0, 0, nullptr));
+        EXPECT_THAT(out_buf, ElementsAreArray(expected));
+      } else {
+        std::array<uint16_t, 12> expected{};
+        for (size_t i = 0; i < 12; ++i) {
+          expected[i] =
+              static_cast<uint16_t>(1000 + kExpectedPixelOrder[idx][i]);
+        }
+        std::vector<uint16_t> out_buf(12, 0);
+        ASSERT_EQ(CE_None,
+                  band->RasterIO(GF_Read, 0, 0, out_w, out_h, out_buf.data(),
+                                 out_w, out_h, GDT_UInt16, 0, 0, nullptr));
+        EXPECT_THAT(out_buf, ElementsAreArray(expected));
+      }
     }
   }
 }
 
-TEST(GdalorienteddatasetTest, UniquePtrCtorAndMetadata) {
-  GDALAllRegister();
+TEST(GdalOrientedDatasetTest, UniquePtrCtorAndMetadata) {
+  GDALRegister_MEM();
   GDALDriver* mem_driver = GetGDALDriverManager()->GetDriverByName("MEM");
   ASSERT_NE(nullptr, mem_driver);
 
@@ -104,3 +160,4 @@ TEST(GdalorienteddatasetTest, UniquePtrCtorAndMetadata) {
 }
 
 }  // namespace
+}  // namespace autotest2

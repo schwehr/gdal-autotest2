@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests gcore/gdal_adbc.cpp.
+// Tests ADBC load driver override accessors (gcore/gdal_adbc.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdal_adbc.cpp
 
 #include "third_party/gdal/gcore/gdal_adbc.h"
 
 #include <cstdint>
 
 #include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
 
+namespace autotest2 {
 namespace {
 
 uint8_t DummyAdbcLoadDriver(const char* driver_name, const char* entrypoint,
@@ -28,6 +33,9 @@ uint8_t DummyAdbcLoadDriver(const char* driver_name, const char* entrypoint,
 }
 
 TEST(GdalAdbcTest, SetAndGetAdbcLoadDriverOverride) {
+  absl::Cleanup restore_override = [] {
+    GDALSetAdbcLoadDriverOverride(nullptr);
+  };
   EXPECT_EQ(nullptr, GDALGetAdbcLoadDriverOverride());
   GDALSetAdbcLoadDriverOverride(&DummyAdbcLoadDriver);
   EXPECT_EQ(&DummyAdbcLoadDriver, GDALGetAdbcLoadDriverOverride());
@@ -36,3 +44,4 @@ TEST(GdalAdbcTest, SetAndGetAdbcLoadDriverOverride) {
 }
 
 }  // namespace
+}  // namespace autotest2

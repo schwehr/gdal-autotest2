@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,38 +12,56 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests gcore/gdal_rat_vat_dbf.cpp.
+// Tests loading ESRI .vat.dbf raster attribute tables
+// (gdal_rat_vat_dbf.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdal_rat_vat_dbf.cpp
 
 #include <memory>
-#include <string>
 
 #include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_priv.h"
 #include "third_party/gdal/gcore/gdal_rat.h"
+#include "third_party/gdal/ogr/ogr_core.h"
+#include "third_party/gdal/ogr/ogr_feature.h"
 #include "third_party/gdal/ogr/ogrsf_frmts/ogrsf_frmts.h"
 #include "third_party/gdal/port/cpl_error.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 
+namespace autotest2 {
 namespace {
 
-TEST(GdalRatVatDbfTest, LoadNonExistentReturnsNull) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  auto rat = GDALLoadVATDBF("/vsimem/does_not_exist.vat.dbf");
-  CPLPopErrorHandler();
-  EXPECT_EQ(nullptr, rat);
+constexpr char kSuiteDir[] = "/vsimem/gdal_rat_vat_dbf_test";
+
+class GdalRatVatDbfTest : public ::testing::Test {
+ protected:
+  void SetUp() override { RegisterOGRShape(); }
+};
+
+TEST_F(GdalRatVatDbfTest, LoadNonExistentReturnsNull) {
+  WithQuietHandler quiet;
+  CPLErrorReset();
+  EXPECT_EQ(
+      nullptr,
+      GDALLoadVATDBF("/vsimem/gdal_rat_vat_dbf_test/does_not_exist.vat.dbf"));
+  EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+  CPLErrorReset();
 }
 
-TEST(GdalRatVatDbfTest, LoadIntValueAndAllFieldTypes) {
-  GDALAllRegister();
+TEST_F(GdalRatVatDbfTest, LoadIntValueAndAllFieldTypes) {
   GDALDriver* shp_driver =
       GetGDALDriverManager()->GetDriverByName("ESRI Shapefile");
   ASSERT_NE(nullptr, shp_driver);
 
-  const std::string dbf_path = "/vsimem/test_int_vat.dbf";
+  constexpr char kDbfPath[] = "/vsimem/gdal_rat_vat_dbf_test/test_int_vat.dbf";
+  absl::Cleanup cleanup_dir = [] { VSIRmdirRecursive(kSuiteDir); };
   {
-    std::unique_ptr<GDALDataset> ds(
-        shp_driver->Create(dbf_path.c_str(), 0, 0, 0, GDT_Unknown, nullptr));
+    GDALDatasetUniquePtr ds(
+        shp_driver->Create(kDbfPath, 0, 0, 0, GDT_Unknown, nullptr));
     ASSERT_NE(nullptr, ds);
     OGRLayer* layer = ds->CreateLayer("vat", nullptr, wkbNone, nullptr);
     ASSERT_NE(nullptr, layer);
@@ -106,7 +124,7 @@ TEST(GdalRatVatDbfTest, LoadIntValueAndAllFieldTypes) {
     ASSERT_EQ(OGRERR_NONE, layer->CreateFeature(feat.get()));
   }
 
-  auto rat = GDALLoadVATDBF(dbf_path.c_str());
+  auto rat = GDALLoadVATDBF(kDbfPath);
   ASSERT_NE(nullptr, rat);
   EXPECT_EQ(11, rat->GetColumnCount());
   EXPECT_EQ(1, rat->GetRowCount());
@@ -148,20 +166,18 @@ TEST(GdalRatVatDbfTest, LoadIntValueAndAllFieldTypes) {
 
   EXPECT_EQ(GFT_String, rat->GetTypeOfCol(10));
   EXPECT_STREQ("misc", rat->GetValueAsString(0, 10));
-
-  VSIUnlink(dbf_path.c_str());
 }
 
-TEST(GdalRatVatDbfTest, LoadRealValueField) {
-  GDALAllRegister();
+TEST_F(GdalRatVatDbfTest, LoadRealValueField) {
   GDALDriver* shp_driver =
       GetGDALDriverManager()->GetDriverByName("ESRI Shapefile");
   ASSERT_NE(nullptr, shp_driver);
 
-  const std::string dbf_path = "/vsimem/test_real_vat.dbf";
+  constexpr char kDbfPath[] = "/vsimem/gdal_rat_vat_dbf_test/test_real_vat.dbf";
+  absl::Cleanup cleanup_dir = [] { VSIRmdirRecursive(kSuiteDir); };
   {
-    std::unique_ptr<GDALDataset> ds(
-        shp_driver->Create(dbf_path.c_str(), 0, 0, 0, GDT_Unknown, nullptr));
+    GDALDatasetUniquePtr ds(
+        shp_driver->Create(kDbfPath, 0, 0, 0, GDT_Unknown, nullptr));
     ASSERT_NE(nullptr, ds);
     OGRLayer* layer = ds->CreateLayer("vat", nullptr, wkbNone, nullptr);
     ASSERT_NE(nullptr, layer);
@@ -180,15 +196,14 @@ TEST(GdalRatVatDbfTest, LoadRealValueField) {
     ASSERT_EQ(OGRERR_NONE, layer->CreateFeature(feat.get()));
   }
 
-  auto rat = GDALLoadVATDBF(dbf_path.c_str());
+  auto rat = GDALLoadVATDBF(kDbfPath);
   ASSERT_NE(nullptr, rat);
   EXPECT_EQ(GFT_Real, rat->GetTypeOfCol(0));
   EXPECT_EQ(GFU_MinMax, rat->GetUsageOfCol(0));
   EXPECT_NEAR(1.5, rat->GetValueAsDouble(0, 0), 1e-4);
   EXPECT_EQ(GFU_Name, rat->GetUsageOfCol(1));
   EXPECT_STREQ("Water", rat->GetValueAsString(0, 1));
-
-  VSIUnlink(dbf_path.c_str());
 }
 
 }  // namespace
+}  // namespace autotest2

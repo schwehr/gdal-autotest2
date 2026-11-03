@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,22 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests gcore/gdalpythondriverloader.cpp.
+// Tests Python driver loader lifecycle (gcore/gdalpythondriverloader.cpp).
+//
+// Note: GDAL_NO_AUTOLOAD is defined in google3 builds, so
+// AutoLoadPythonDrivers() and CleanupPythonDrivers() are compiled as no-op
+// stubs.
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdalpythondriverloader.cpp
 
 #include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
 #include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_frmts.h"
 #include "third_party/gdal/gcore/gdal_priv.h"
 
+namespace autotest2 {
 namespace {
 
-TEST(GdalpythondriverloaderTest, AutoLoadAndCleanupPythonDrivers) {
+TEST(GdalPythonDriverLoaderTest, AutoLoadAndCleanupPythonDrivers) {
   GDALDriverManager* dm = GetGDALDriverManager();
   ASSERT_NE(nullptr, dm);
   dm->AutoLoadPythonDrivers();
   // GDALDestroyDriverManager invokes ~GDALDriverManager(), which calls
   // CleanupPythonDrivers().
+  absl::Cleanup reregister_mem = [] { GDALRegister_MEM(); };
   GDALDestroyDriverManager();
-  GDALAllRegister();
 }
 
 }  // namespace
+}  // namespace autotest2

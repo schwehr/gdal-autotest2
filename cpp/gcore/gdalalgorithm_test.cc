@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,33 +12,52 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests gcore/gdalalgorithm.cpp.
+// Tests GDALAlgorithm, GDALAlgorithmArg, GDALArgDatasetValue, and their C/C++
+// APIs (gcore/gdalalgorithm.cpp, gcore/gdalalgorithm_c.h,
+// gcore/gdalalgorithm_cpp.h).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdalalgorithm.cpp
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdalalgorithm_c.h
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdalalgorithm_cpp.h
 
 #include "third_party/gdal/gcore/gdalalgorithm.h"
 
-#include <cmath>
-#include <cstring>
-#include <limits>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>  // NOLINT
 #include <memory>
+#include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_cstringlist.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_memory.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
+#include "third_party/gdal/autotest2/cpp/util/vsimem.h"
 #include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_frmts.h"
 #include "third_party/gdal/gcore/gdal_priv.h"
-#include "third_party/gdal/ogr/ogr_api.h"
+#include "third_party/gdal/gcore/gdalalgorithm_c.h"
+#include "third_party/gdal/gcore/gdalalgorithm_cpp.h"
 #include "third_party/gdal/ogr/ogr_core.h"
-#include "third_party/gdal/ogr/ogr_feature.h"
 #include "third_party/gdal/ogr/ogr_spatialref.h"
 #include "third_party/gdal/ogr/ogrsf_frmts/ogrsf_frmts.h"
 #include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
-#include "third_party/gdal/port/cpl_json.h"
+#include "third_party/gdal/port/cpl_progress.h"
 #include "third_party/gdal/port/cpl_string.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 
+// GDALAlgorithm declares `friend struct
+// test_gdal_algorithm::test_gdal_algorithm;` in the global namespace
+// (gcore/gdalalgorithm_cpp.h).
 namespace test_gdal_algorithm {
 
 struct test_gdal_algorithm {
@@ -65,66 +84,58 @@ struct test_gdal_algorithm {
 
 }  // namespace test_gdal_algorithm
 
+namespace autotest2 {
 namespace {
 
 using ::testing::Contains;
 using ::testing::ElementsAre;
 using ::testing::HasSubstr;
-using ::testing::IsEmpty;
 using ::testing::Not;
 
-class QuietErrorGuard {
- public:
-  QuietErrorGuard() { CPLPushErrorHandler(CPLQuietErrorHandler); }
-  ~QuietErrorGuard() { CPLPopErrorHandler(); }
-};
+constexpr char kVsiMemDir[] = "/vsimem/gdalalgorithm_test";
 
-std::unique_ptr<GDALDataset> CreateMemRaster(int width = 4, int height = 4,
-                                             int bands = 2) {
+constexpr std::string_view kSampleGeoJson = R"json({
+  "type": "FeatureCollection",
+  "name": "test_layer",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "name_field": "val1", "int_field": 10 },
+      "geometry": { "type": "Point", "coordinates": [2.0, 49.0] }
+    }
+  ]
+})json";
+
+std::string VsiMemPath(std::string_view filename) {
+  return (std::filesystem::path(kVsiMemDir) / filename).string();
+}
+
+GDALDatasetUniquePtr CreateMemRaster(int width = 4, int height = 4,
+                                     int bands = 2) {
   GDALDriver* drv = GetGDALDriverManager()->GetDriverByName("MEM");
   if (!drv) return nullptr;
-  return std::unique_ptr<GDALDataset>(
+  return GDALDatasetUniquePtr(
       drv->Create("mem_ds", width, height, bands, GDT_Byte, nullptr));
 }
 
-bool CreateGTiffFile(const std::string& path, int bands = 2) {
+void CreateGTiffFile(const std::string& path, int bands = 2) {
   GDALDriver* drv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  if (!drv) return false;
-  std::unique_ptr<GDALDataset> ds(
+  ASSERT_NE(nullptr, drv);
+  GDALDatasetUniquePtr ds(
       drv->Create(path.c_str(), 4, 4, bands, GDT_Byte, nullptr));
-  if (!ds) return false;
+  ASSERT_NE(nullptr, ds);
   OGRSpatialReference srs;
-  srs.SetWellKnownGeogCS("WGS84");
-  ds->SetSpatialRef(&srs);
-  double gt[6] = {2.0, 0.1, 0.0, 49.0, 0.0, -0.1};
-  ds->SetGeoTransform(gt);
-  return true;
+  ASSERT_EQ(OGRERR_NONE, srs.SetWellKnownGeogCS("WGS84"));
+  EXPECT_EQ(CE_None, ds->SetSpatialRef(&srs));
+  GDALGeoTransform gt(2.0, 0.1, 0.0, 49.0, 0.0, -0.1);
+  EXPECT_EQ(CE_None, ds->SetGeoTransform(gt));
 }
 
-bool CreateGeoJSONFile(const std::string& path) {
-  const char* geojson = R"json({
-    "type": "FeatureCollection",
-    "name": "test_layer",
-    "features": [
-      {
-        "type": "Feature",
-        "properties": { "name_field": "val1", "int_field": 10 },
-        "geometry": { "type": "Point", "coordinates": [2.0, 49.0] }
-      }
-    ]
-  })json";
-  VSILFILE* fp = VSIFOpenL(path.c_str(), "wb");
-  if (!fp) return false;
-  VSIFWriteL(geojson, 1, strlen(geojson), fp);
-  VSIFCloseL(fp);
-  return true;
-}
-
-class CustomSubAlg1 : public GDALAlgorithm {
+class CustomSubAlg1 final : public GDALAlgorithm {
  public:
-  static constexpr const char* NAME = "sub_alpha";
-  static constexpr const char* DESCRIPTION = "Sub algorithm alpha";
-  static constexpr const char* HELP_URL = "/programs/sub_alpha.html";
+  static constexpr char NAME[] = "sub_alpha";
+  static constexpr char DESCRIPTION[] = "Sub algorithm alpha";
+  static constexpr char HELP_URL[] = "/programs/sub_alpha.html";
   static std::vector<std::string> GetAliasesStatic() {
     return {"sa", GDALAlgorithmRegistry::HIDDEN_ALIAS_SEPARATOR, "hidden_sa"};
   }
@@ -147,11 +158,11 @@ class CustomSubAlg1 : public GDALAlgorithm {
   }
 };
 
-class CustomSubAlg2 : public GDALAlgorithm {
+class CustomSubAlg2 final : public GDALAlgorithm {
  public:
-  static constexpr const char* NAME = "sub_beta";
-  static constexpr const char* DESCRIPTION = "Sub algorithm beta";
-  static constexpr const char* HELP_URL = "https://example.com/beta";
+  static constexpr char NAME[] = "sub_beta";
+  static constexpr char DESCRIPTION[] = "Sub algorithm beta";
+  static constexpr char HELP_URL[] = "https://example.com/beta";
   static std::vector<std::string> GetAliasesStatic() { return {}; }
 
   CustomSubAlg2() : GDALAlgorithm(NAME, DESCRIPTION, HELP_URL) {
@@ -166,9 +177,10 @@ class CustomSubAlg2 : public GDALAlgorithm {
 
 class ConfigurableAlg : public GDALAlgorithm {
  public:
-  ConfigurableAlg(const std::string& name = "test_alg",
-                  const std::string& desc = "Test algorithm description",
-                  const std::string& help_url = "/programs/test_alg.html")
+  explicit ConfigurableAlg(
+      const std::string& name = "test_alg",
+      const std::string& desc = "Test algorithm description",
+      const std::string& help_url = "/programs/test_alg.html")
       : GDALAlgorithm(name, desc, help_url) {}
 
   using GDALAlgorithm::AddAbsolutePathArg;
@@ -246,59 +258,71 @@ class ConfigurableAlg : public GDALAlgorithm {
 };
 
 TEST(GdalAlgorithmTest, FreeFunctionsAndTypes) {
-  EXPECT_FALSE(GDALAlgorithmArgTypeIsList(GAAT_BOOLEAN));
-  EXPECT_FALSE(GDALAlgorithmArgTypeIsList(GAAT_STRING));
-  EXPECT_FALSE(GDALAlgorithmArgTypeIsList(GAAT_INTEGER));
-  EXPECT_FALSE(GDALAlgorithmArgTypeIsList(GAAT_REAL));
-  EXPECT_FALSE(GDALAlgorithmArgTypeIsList(GAAT_DATASET));
-  EXPECT_TRUE(GDALAlgorithmArgTypeIsList(GAAT_STRING_LIST));
-  EXPECT_TRUE(GDALAlgorithmArgTypeIsList(GAAT_INTEGER_LIST));
-  EXPECT_TRUE(GDALAlgorithmArgTypeIsList(GAAT_REAL_LIST));
-  EXPECT_TRUE(GDALAlgorithmArgTypeIsList(GAAT_DATASET_LIST));
+  struct ArgTypeCase {
+    GDALAlgorithmArgType type;
+    bool is_list;
+    const char* name;
+  };
+  constexpr ArgTypeCase kArgTypeCases[] = {
+      {.type = GAAT_BOOLEAN, .is_list = false, .name = "boolean"},
+      {.type = GAAT_STRING, .is_list = false, .name = "string"},
+      {.type = GAAT_INTEGER, .is_list = false, .name = "integer"},
+      {.type = GAAT_REAL, .is_list = false, .name = "real"},
+      {.type = GAAT_DATASET, .is_list = false, .name = "dataset"},
+      {.type = GAAT_STRING_LIST, .is_list = true, .name = "string_list"},
+      {.type = GAAT_INTEGER_LIST, .is_list = true, .name = "integer_list"},
+      {.type = GAAT_REAL_LIST, .is_list = true, .name = "real_list"},
+      {.type = GAAT_DATASET_LIST, .is_list = true, .name = "dataset_list"},
+  };
+  for (const auto& tc : kArgTypeCases) {
+    EXPECT_EQ(tc.is_list, GDALAlgorithmArgTypeIsList(tc.type));
+    EXPECT_STREQ(tc.name, GDALAlgorithmArgTypeName(tc.type));
+  }
 
-  EXPECT_STREQ("boolean", GDALAlgorithmArgTypeName(GAAT_BOOLEAN));
-  EXPECT_STREQ("string", GDALAlgorithmArgTypeName(GAAT_STRING));
-  EXPECT_STREQ("integer", GDALAlgorithmArgTypeName(GAAT_INTEGER));
-  EXPECT_STREQ("real", GDALAlgorithmArgTypeName(GAAT_REAL));
-  EXPECT_STREQ("dataset", GDALAlgorithmArgTypeName(GAAT_DATASET));
-  EXPECT_STREQ("string_list", GDALAlgorithmArgTypeName(GAAT_STRING_LIST));
-  EXPECT_STREQ("integer_list", GDALAlgorithmArgTypeName(GAAT_INTEGER_LIST));
-  EXPECT_STREQ("real_list", GDALAlgorithmArgTypeName(GAAT_REAL_LIST));
-  EXPECT_STREQ("dataset_list", GDALAlgorithmArgTypeName(GAAT_DATASET_LIST));
-
-  EXPECT_EQ("raster", GDALAlgorithmArgDatasetTypeName(GDAL_OF_RASTER));
-  EXPECT_EQ("vector", GDALAlgorithmArgDatasetTypeName(GDAL_OF_VECTOR));
-  EXPECT_EQ("multidimensional raster",
-            GDALAlgorithmArgDatasetTypeName(GDAL_OF_MULTIDIM_RASTER));
-  EXPECT_EQ("raster or vector",
-            GDALAlgorithmArgDatasetTypeName(GDAL_OF_RASTER | GDAL_OF_VECTOR));
-  EXPECT_EQ("raster or multidimensional raster",
-            GDALAlgorithmArgDatasetTypeName(GDAL_OF_RASTER |
-                                            GDAL_OF_MULTIDIM_RASTER));
-  EXPECT_EQ("vector or multidimensional raster",
-            GDALAlgorithmArgDatasetTypeName(GDAL_OF_VECTOR |
-                                            GDAL_OF_MULTIDIM_RASTER));
-  EXPECT_EQ("raster, vector or multidimensional raster",
-            GDALAlgorithmArgDatasetTypeName(GDAL_OF_RASTER | GDAL_OF_VECTOR |
-                                            GDAL_OF_MULTIDIM_RASTER));
+  struct DatasetTypeCase {
+    GDALArgDatasetType type;
+    std::string_view expected;
+  };
+  constexpr DatasetTypeCase kDatasetTypeCases[] = {
+      {.type = GDAL_OF_RASTER, .expected = "raster"},
+      {.type = GDAL_OF_VECTOR, .expected = "vector"},
+      {.type = GDAL_OF_MULTIDIM_RASTER, .expected = "multidimensional raster"},
+      {.type = GDAL_OF_RASTER | GDAL_OF_VECTOR, .expected = "raster or vector"},
+      {.type = GDAL_OF_RASTER | GDAL_OF_MULTIDIM_RASTER,
+       .expected = "raster or multidimensional raster"},
+      {.type = GDAL_OF_VECTOR | GDAL_OF_MULTIDIM_RASTER,
+       .expected = "vector or multidimensional raster"},
+      {.type = GDAL_OF_RASTER | GDAL_OF_VECTOR | GDAL_OF_MULTIDIM_RASTER,
+       .expected = "raster, vector or multidimensional raster"},
+  };
+  for (const auto& tc : kDatasetTypeCases) {
+    EXPECT_EQ(tc.expected, GDALAlgorithmArgDatasetTypeName(tc.type));
+  }
 }
 
 TEST(GdalAlgorithmTest, ArgDeclAndSetConversions) {
-  GDALAllRegister();
+  GDALRegister_MEM();
 
-  // GDALAlgorithmArgDecl scalar vs list SetMinCount/SetMaxCount and SetDefault
+  // 1. GDALAlgorithmArgDecl scalar vs list SetMinCount/SetMaxCount and
+  // SetDefault.
+  GDALAlgorithmArgDecl scalar_decl("scalar", 's', "desc", GAAT_INTEGER);
   {
-    QuietErrorGuard quiet;
-    GDALAlgorithmArgDecl scalar_decl("scalar", 's', "desc", GAAT_INTEGER);
+    WithQuietHandler quiet;
+    CPLErrorReset();
     scalar_decl.SetMinCount(2);
     scalar_decl.SetMaxCount(5);
-    EXPECT_EQ(0, scalar_decl.GetMinCount());
-    EXPECT_EQ(1, scalar_decl.GetMaxCount());
-    // Wrong type for SetDefault
-    scalar_decl.SetDefault(std::string("wrong"));
+    CPLErrorReset();
+  }
+  EXPECT_EQ(0, scalar_decl.GetMinCount());
+  EXPECT_EQ(1, scalar_decl.GetMaxCount());
 
-    GDALAlgorithmArgDecl ds_decl("ds", 0, "desc", GAAT_DATASET);
+  GDALAlgorithmArgDecl ds_decl("ds", 0, "desc", GAAT_DATASET);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    scalar_decl.SetDefault(std::string("wrong"));
     ds_decl.SetDefault(123);
+    CPLErrorReset();
   }
 
   GDALAlgorithmArgDecl str_list_decl("str-list", 0, "desc", GAAT_STRING_LIST);
@@ -315,7 +339,7 @@ TEST(GdalAlgorithmTest, ArgDeclAndSetConversions) {
   EXPECT_THAT(real_list_decl.GetDefault<std::vector<double>>(),
               ElementsAre(2.5));
 
-  // Test all Set() overloads across all 9 argument types
+  // 2. Test all Set() overloads across all 9 argument types.
   ConfigurableAlg alg;
   bool b_val = false;
   std::string s_val;
@@ -337,25 +361,27 @@ TEST(GdalAlgorithmTest, ArgDeclAndSetConversions) {
   GDALAlgorithmArg& dl_arg = alg.AddArg("dl-arg", 0, "RealList", &dl_val);
   GDALAlgorithmArg& dsl_arg = alg.AddArg("dsl-arg", 0, "DSList", &dsl_val);
 
-  // GAAT_BOOLEAN Set() variants
+  // GAAT_BOOLEAN Set() variants.
   EXPECT_TRUE(b_arg.Set(true));
   EXPECT_TRUE(b_val);
-  EXPECT_TRUE(b_arg.Set(std::string("0")));
-  EXPECT_FALSE(b_val);
-  EXPECT_TRUE(b_arg.Set(std::string("1")));
-  EXPECT_TRUE(b_val);
-  EXPECT_TRUE(b_arg.Set(std::string("FALSE")));
-  EXPECT_FALSE(b_val);
-  EXPECT_TRUE(b_arg.Set(std::string("TRUE")));
-  EXPECT_TRUE(b_val);
-  EXPECT_TRUE(b_arg.Set(std::string("NO")));
-  EXPECT_FALSE(b_val);
-  EXPECT_TRUE(b_arg.Set(std::string("YES")));
-  EXPECT_TRUE(b_val);
-  EXPECT_TRUE(b_arg.Set(std::string("OFF")));
-  EXPECT_FALSE(b_val);
-  EXPECT_TRUE(b_arg.Set(std::string("ON")));
-  EXPECT_TRUE(b_val);
+  struct BoolStringCase {
+    std::string_view input;
+    bool expected;
+  };
+  constexpr BoolStringCase kBoolStringCases[] = {
+      {.input = "0", .expected = false},
+      {.input = "1", .expected = true},
+      {.input = "FALSE", .expected = false},
+      {.input = "TRUE", .expected = true},
+      {.input = "NO", .expected = false},
+      {.input = "YES", .expected = true},
+      {.input = "OFF", .expected = false},
+      {.input = "ON", .expected = true},
+  };
+  for (const auto& tc : kBoolStringCases) {
+    EXPECT_TRUE(b_arg.Set(std::string(tc.input)));
+    EXPECT_EQ(tc.expected, b_val);
+  }
   EXPECT_TRUE(b_arg.Set(0));
   EXPECT_FALSE(b_val);
   EXPECT_TRUE(b_arg.Set(1));
@@ -364,7 +390,8 @@ TEST(GdalAlgorithmTest, ArgDeclAndSetConversions) {
   EXPECT_FALSE(b_val);
 
   {
-    QuietErrorGuard quiet;
+    WithQuietHandler quiet;
+    CPLErrorReset();
     EXPECT_FALSE(b_arg.Set(std::string("invalid_bool")));
     EXPECT_FALSE(b_arg.Set(2));
     EXPECT_FALSE(b_arg.Set(1.5));
@@ -372,9 +399,10 @@ TEST(GdalAlgorithmTest, ArgDeclAndSetConversions) {
     EXPECT_FALSE(b_arg.Set(std::vector<int>{1}));
     EXPECT_FALSE(b_arg.Set(std::vector<double>{1.0}));
     EXPECT_FALSE(s_arg.Set(true));
+    CPLErrorReset();
   }
 
-  // GAAT_INTEGER Set() variants
+  // GAAT_INTEGER Set() variants.
   EXPECT_TRUE(i_arg.Set(42));
   EXPECT_EQ(42, i_val);
   EXPECT_TRUE(i_arg.Set(std::string("-15")));
@@ -391,15 +419,17 @@ TEST(GdalAlgorithmTest, ArgDeclAndSetConversions) {
   EXPECT_EQ(55, i_val);
 
   {
-    QuietErrorGuard quiet;
+    WithQuietHandler quiet;
+    CPLErrorReset();
     EXPECT_FALSE(i_arg.Set(std::string("not_an_int")));
     EXPECT_FALSE(i_arg.Set(10.5));
     EXPECT_FALSE(i_arg.Set(std::vector<int>{1, 2}));
     EXPECT_FALSE(i_arg.Set(std::vector<double>{1.0, 2.0}));
     EXPECT_FALSE(i_arg.Set(std::vector<std::string>{"1", "2"}));
+    CPLErrorReset();
   }
 
-  // GAAT_REAL Set() variants
+  // GAAT_REAL Set() variants.
   EXPECT_TRUE(d_arg.Set(3.25));
   EXPECT_DOUBLE_EQ(3.25, d_val);
   EXPECT_TRUE(d_arg.Set(5));
@@ -416,11 +446,13 @@ TEST(GdalAlgorithmTest, ArgDeclAndSetConversions) {
   EXPECT_DOUBLE_EQ(11.25, d_val);
 
   {
-    QuietErrorGuard quiet;
+    WithQuietHandler quiet;
+    CPLErrorReset();
     EXPECT_FALSE(d_arg.Set(std::string("not_a_real")));
+    CPLErrorReset();
   }
 
-  // GAAT_STRING Set() variants
+  // GAAT_STRING Set() variants.
   EXPECT_TRUE(s_arg.Set("hello"));
   EXPECT_EQ("hello", s_val);
   EXPECT_TRUE(s_arg.Set(123));
@@ -429,7 +461,7 @@ TEST(GdalAlgorithmTest, ArgDeclAndSetConversions) {
   EXPECT_TRUE(s_arg.Set(GDT_Byte));
   EXPECT_EQ("Byte", s_val);
   OGRSpatialReference srs;
-  srs.SetWellKnownGeogCS("WGS84");
+  ASSERT_EQ(OGRERR_NONE, srs.SetWellKnownGeogCS("WGS84"));
   EXPECT_TRUE(s_arg.Set(srs));
   EXPECT_THAT(s_val, HasSubstr("WGS 84"));
   EXPECT_TRUE(s_arg.Set(std::vector<std::string>{"from_vec"}));
@@ -446,7 +478,7 @@ TEST(GdalAlgorithmTest, ArgDeclAndSetConversions) {
   s_arg = srs;
   EXPECT_THAT(s_val, HasSubstr("WGS 84"));
 
-  // GAAT_INTEGER_LIST Set() variants
+  // GAAT_INTEGER_LIST Set() variants.
   EXPECT_TRUE(il_arg.Set(std::string("12")));
   EXPECT_THAT(il_val, ElementsAre(12));
   EXPECT_TRUE(il_arg.Set(34));
@@ -461,14 +493,16 @@ TEST(GdalAlgorithmTest, ArgDeclAndSetConversions) {
   EXPECT_THAT(il_val, ElementsAre(50, 60));
 
   {
-    QuietErrorGuard quiet;
+    WithQuietHandler quiet;
+    CPLErrorReset();
     EXPECT_FALSE(il_arg.Set(std::string("bad")));
     EXPECT_FALSE(il_arg.Set(12.34));
     EXPECT_FALSE(il_arg.Set(std::vector<std::string>{"10", "bad"}));
     EXPECT_FALSE(il_arg.Set(std::vector<double>{10.0, 12.5}));
+    CPLErrorReset();
   }
 
-  // GAAT_REAL_LIST Set() variants
+  // GAAT_REAL_LIST Set() variants.
   EXPECT_TRUE(dl_arg.Set(std::string("1.25")));
   EXPECT_THAT(dl_val, ElementsAre(1.25));
   EXPECT_TRUE(dl_arg.Set(5));
@@ -483,12 +517,14 @@ TEST(GdalAlgorithmTest, ArgDeclAndSetConversions) {
   EXPECT_THAT(dl_val, ElementsAre(7.5, 8.5));
 
   {
-    QuietErrorGuard quiet;
+    WithQuietHandler quiet;
+    CPLErrorReset();
     EXPECT_FALSE(dl_arg.Set(std::string("bad")));
     EXPECT_FALSE(dl_arg.Set(std::vector<std::string>{"1.5", "bad"}));
+    CPLErrorReset();
   }
 
-  // GAAT_STRING_LIST Set() variants
+  // GAAT_STRING_LIST Set() variants.
   EXPECT_TRUE(sl_arg.Set(std::string("one")));
   EXPECT_THAT(sl_val, ElementsAre("one"));
   EXPECT_TRUE(sl_arg.Set(2));
@@ -502,44 +538,55 @@ TEST(GdalAlgorithmTest, ArgDeclAndSetConversions) {
   sl_arg = std::vector<std::string>{"a", "b"};
   EXPECT_THAT(sl_val, ElementsAre("a", "b"));
 
-  // GAAT_DATASET and GAAT_DATASET_LIST Set() variants
-  EXPECT_TRUE(ds_arg.Set(std::string("/vsimem/ds1.tif")));
-  EXPECT_EQ("/vsimem/ds1.tif", ds_val.GetName());
+  // GAAT_DATASET and GAAT_DATASET_LIST Set() variants.
+  const std::string ds1_path = VsiMemPath("ds1.tif");
+  EXPECT_TRUE(ds_arg.Set(ds1_path));
+  EXPECT_EQ(ds1_path, ds_val.GetName());
   auto mem_ds1 = CreateMemRaster();
+  ASSERT_NE(nullptr, mem_ds1);
   EXPECT_TRUE(ds_arg.Set(mem_ds1.get()));
   EXPECT_EQ(mem_ds1.get(), ds_val.GetDatasetRef());
-  auto mem_ds2 = CreateMemRaster();
+  std::unique_ptr<GDALDataset> mem_ds2(CreateMemRaster().release());
+  ASSERT_NE(nullptr, mem_ds2);
   GDALDataset* mem_ds2_raw = mem_ds2.get();
   ds_arg = std::move(mem_ds2);
   EXPECT_EQ(mem_ds2_raw, ds_val.GetDatasetRef());
   auto mem_ds3 = CreateMemRaster();
+  ASSERT_NE(nullptr, mem_ds3);
   ds_arg = mem_ds3.get();
   EXPECT_EQ(mem_ds3.get(), ds_val.GetDatasetRef());
 
-  GDALArgDatasetValue other_ds_val("/vsimem/other.tif");
+  const std::string other_ds_path = VsiMemPath("other.tif");
+  GDALArgDatasetValue other_ds_val(other_ds_path);
   EXPECT_TRUE(ds_arg.SetFrom(other_ds_val));
-  EXPECT_EQ("/vsimem/other.tif", ds_val.GetName());
+  EXPECT_EQ(other_ds_path, ds_val.GetName());
 
-  EXPECT_TRUE(dsl_arg.Set(std::string("/vsimem/dsl1.tif")));
+  const std::string dsl1_path = VsiMemPath("dsl1.tif");
+  EXPECT_TRUE(dsl_arg.Set(dsl1_path));
   ASSERT_EQ(1u, dsl_val.size());
-  EXPECT_EQ("/vsimem/dsl1.tif", dsl_val[0].GetName());
-  EXPECT_TRUE(
-      dsl_arg.Set(std::vector<std::string>{"/vsimem/a.tif", "/vsimem/b.tif"}));
+  EXPECT_EQ(dsl1_path, dsl_val[0].GetName());
+  const std::string a_tif = VsiMemPath("a.tif");
+  const std::string b_tif = VsiMemPath("b.tif");
+  EXPECT_TRUE(dsl_arg.Set(std::vector<std::string>{a_tif, b_tif}));
   ASSERT_EQ(2u, dsl_val.size());
-  EXPECT_EQ("/vsimem/b.tif", dsl_val[1].GetName());
+  EXPECT_EQ(b_tif, dsl_val[1].GetName());
 
-  // Error paths on dataset setters for non-dataset args
+  // Error paths on dataset setters for non-dataset args.
+  std::unique_ptr<GDALDataset> mem_ds_err(CreateMemRaster().release());
+  ASSERT_NE(nullptr, mem_ds_err);
   {
-    QuietErrorGuard quiet;
+    WithQuietHandler quiet;
+    CPLErrorReset();
     EXPECT_FALSE(s_arg.Set(mem_ds1.get()));
-    EXPECT_FALSE(s_arg.Set(CreateMemRaster()));
+    EXPECT_FALSE(s_arg.Set(std::move(mem_ds_err)));
     EXPECT_FALSE(s_arg.SetDatasetName("foo"));
     EXPECT_FALSE(s_arg.SetFrom(other_ds_val));
     EXPECT_FALSE(s_arg.Set(std::vector<GDALArgDatasetValue>{}));
     EXPECT_FALSE(ds_arg.Set(123));
+    CPLErrorReset();
   }
 
-  // CheckCanSetDatasetObject restrictions
+  // CheckCanSetDatasetObject restrictions.
   GDALArgDatasetValue out_only_val;
   auto& out_only_arg = alg.AddArg("out-only-ds", 0, "Out DS", &out_only_val)
                            .SetDatasetInputFlags(GADV_NAME)
@@ -548,15 +595,19 @@ TEST(GdalAlgorithmTest, ArgDeclAndSetConversions) {
   auto& name_only_arg = alg.AddArg("name-only-ds", 0, "Name DS", &name_only_val)
                             .SetDatasetInputFlags(GADV_NAME)
                             .SetDatasetOutputFlags(0);
+  std::unique_ptr<GDALDataset> mem_ds_out_err(CreateMemRaster().release());
+  ASSERT_NE(nullptr, mem_ds_out_err);
   {
-    QuietErrorGuard quiet;
+    WithQuietHandler quiet;
+    CPLErrorReset();
     EXPECT_FALSE(out_only_arg.Set(mem_ds1.get()));
-    EXPECT_FALSE(out_only_arg.Set(CreateMemRaster()));
+    EXPECT_FALSE(out_only_arg.Set(std::move(mem_ds_out_err)));
     EXPECT_FALSE(out_only_arg.SetFrom(other_ds_val));
     EXPECT_FALSE(name_only_arg.Set(mem_ds1.get()));
+    CPLErrorReset();
   }
 
-  // SetFrom(const GDALAlgorithmArg&) for all types
+  // 3. SetFrom(const GDALAlgorithmArg&) for all types.
   ConfigurableAlg alg2;
   bool b_val2 = false;
   std::string s_val2;
@@ -590,23 +641,27 @@ TEST(GdalAlgorithmTest, ArgDeclAndSetConversions) {
   EXPECT_EQ(2u, dsl_val2.size());
 
   {
-    QuietErrorGuard quiet;
+    WithQuietHandler quiet;
+    CPLErrorReset();
     EXPECT_FALSE(b_arg2.SetFrom(s_arg));
+    CPLErrorReset();
   }
 }
 
 TEST(GdalAlgorithmTest, ProcessStringAndDatasetValueMethods) {
-  GDALAllRegister();
+  GDALRegister_MEM();
+  absl::Cleanup cleanup_dir = [] { VSIRmdirRecursive(kVsiMemDir); };
 
-  // UTF-8 BOM file and SQL comments removal
-  const char* bom_file = "/vsimem/bom_sql.txt";
-  const unsigned char bom_content[] = {
-      0xEF, 0xBB, 0xBF, '-', '-', ' ', 'c', 'o', 'm', 'm', 'e', 'n',
-      't',  '\n', 'S',  'E', 'L', 'E', 'C', 'T', ' ', '1', 0x00};
-  VSILFILE* fp = VSIFOpenL(bom_file, "wb");
-  ASSERT_NE(nullptr, fp);
-  VSIFWriteL(bom_content, 1, sizeof(bom_content) - 1, fp);
-  VSIFCloseL(fp);
+  // 1. UTF-8 BOM file and SQL comments removal.
+  const std::string bom_file = VsiMemPath("bom_sql.txt");
+  constexpr std::array<uint8_t, 22> kBomSqlContent = {
+      0xEF, 0xBB, 0xBF, '-', '-', ' ', 'c', 'o', 'm', 'm', 'e',
+      'n',  't',  '\n', 'S', 'E', 'L', 'E', 'C', 'T', ' ', '1'};
+  static_assert(kBomSqlContent.size() == 22);
+  VsiMemTempWrapper bom_wrapper(
+      bom_file,
+      std::string(reinterpret_cast<const char*>(kBomSqlContent.data()),
+                  kBomSqlContent.size()));
 
   ConfigurableAlg alg;
   std::string sql_str;
@@ -620,39 +675,45 @@ TEST(GdalAlgorithmTest, ProcessStringAndDatasetValueMethods) {
 
   EXPECT_TRUE(s_arg.IsReadFromFileAtSyntaxAllowed());
   EXPECT_TRUE(s_arg.IsRemoveSQLCommentsEnabled());
-  EXPECT_TRUE(s_arg.Set(std::string("@") + bom_file));
+  EXPECT_TRUE(s_arg.Set("@" + bom_file));
   EXPECT_EQ("SELECT 1", sql_str);
 
-  EXPECT_TRUE(
-      sl_arg.Set(std::vector<std::string>{std::string("@") + bom_file}));
+  EXPECT_TRUE(sl_arg.Set(std::vector<std::string>{"@" + bom_file}));
   EXPECT_THAT(sql_list, ElementsAre("SELECT 1"));
 
+  const std::string missing_file =
+      "@" + VsiMemPath("does_not_exist_at_all.txt");
   {
-    QuietErrorGuard quiet;
-    EXPECT_FALSE(s_arg.Set("@/vsimem/does_not_exist_at_all.txt"));
-    EXPECT_FALSE(sl_arg.Set(
-        std::vector<std::string>{"@/vsimem/does_not_exist_at_all.txt"}));
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_FALSE(s_arg.Set(missing_file));
+    EXPECT_FALSE(sl_arg.Set(std::vector<std::string>{missing_file}));
+    CPLErrorReset();
   }
-  VSIUnlink(bom_file);
 
-  // GDALArgDatasetValue move constructor, move assignment, BorrowDataset, etc.
+  // 2. GDALArgDatasetValue move constructor, move assignment, BorrowDataset,
+  // etc.
   auto ds1 = CreateMemRaster();
+  ASSERT_NE(nullptr, ds1);
   GDALDataset* ds1_raw = ds1.get();
   GDALArgDatasetValue v1(ds1_raw);
   EXPECT_EQ(ds1_raw, v1.GetDatasetRef());
   EXPECT_TRUE(v1.IsNameSet());
 
   GDALDataset* inc_ds = v1.GetDatasetIncreaseRefCount();
-  EXPECT_EQ(ds1_raw, inc_ds);
-  inc_ds->ReleaseRef();
+  ASSERT_NE(nullptr, inc_ds);
+  {
+    absl::Cleanup release_inc_ds = [inc_ds] { inc_ds->ReleaseRef(); };
+    EXPECT_EQ(ds1_raw, inc_ds);
+  }
 
   GDALArgDatasetValue v2(std::move(v1));
-  EXPECT_EQ(nullptr, v1.GetDatasetRef());
+  EXPECT_EQ(nullptr, v1.GetDatasetRef());  // NOLINT(bugprone-use-after-move)
   EXPECT_EQ(ds1_raw, v2.GetDatasetRef());
 
   GDALArgDatasetValue v3;
   v3 = std::move(v2);
-  EXPECT_EQ(nullptr, v2.GetDatasetRef());
+  EXPECT_EQ(nullptr, v2.GetDatasetRef());  // NOLINT(bugprone-use-after-move)
   EXPECT_EQ(ds1_raw, v3.GetDatasetRef());
 
   GDALArgDatasetValue v4;
@@ -730,7 +791,7 @@ TEST(GdalAlgorithmTest, ValidationChoicesRangesCharCountAndListCounts) {
                    .SetMinCount(2)
                    .SetMaxCount(3);
 
-  // Choices
+  // 1. Choices.
   EXPECT_TRUE(c_s.Set("alpha"));
   EXPECT_EQ("Alpha", choice_str);
   EXPECT_TRUE(c_s.Set("secret"));
@@ -739,85 +800,105 @@ TEST(GdalAlgorithmTest, ValidationChoicesRangesCharCountAndListCounts) {
   EXPECT_THAT(choice_list, ElementsAre("One", "HiddenThree"));
 
   {
-    QuietErrorGuard quiet;
+    WithQuietHandler quiet;
+    CPLErrorReset();
     EXPECT_FALSE(c_s.Set("Invalid"));
     EXPECT_FALSE(c_l.Set(std::vector<std::string>{"One", "Invalid"}));
+    CPLErrorReset();
   }
 
-  // MinCharCount
+  // 2. MinCharCount.
   EXPECT_TRUE(mc_s.Set("abc"));
   EXPECT_TRUE(mc_l.Set(std::vector<std::string>{"abc", "defg"}));
   {
-    QuietErrorGuard quiet;
+    WithQuietHandler quiet;
+    CPLErrorReset();
     EXPECT_FALSE(mc_s.Set("ab"));
     EXPECT_FALSE(mc_l.Set(std::vector<std::string>{"abc", "xy"}));
+    CPLErrorReset();
   }
 
-  // Int ranges
+  // 3. Int ranges.
   EXPECT_TRUE(ri_inc.Set(10));
   EXPECT_TRUE(ri_inc.Set(20));
   EXPECT_TRUE(ri_exc.Set(11));
   EXPECT_TRUE(ri_exc.Set(19));
   EXPECT_TRUE(ri_list.Set(std::vector<int>{0, 5}));
   {
-    QuietErrorGuard quiet;
+    WithQuietHandler quiet;
+    CPLErrorReset();
     EXPECT_FALSE(ri_inc.Set(9));
     EXPECT_FALSE(ri_inc.Set(21));
     EXPECT_FALSE(ri_exc.Set(10));
     EXPECT_FALSE(ri_exc.Set(20));
     EXPECT_FALSE(ri_list.Set(std::vector<int>{1, -1}));
+    CPLErrorReset();
   }
 
-  // Real ranges
+  // 4. Real ranges.
   EXPECT_TRUE(rr_inc.Set(1.0));
   EXPECT_TRUE(rr_inc.Set(2.0));
   EXPECT_TRUE(rr_exc.Set(1.1));
   EXPECT_TRUE(rr_exc.Set(1.9));
   EXPECT_TRUE(rr_list.Set(std::vector<double>{0.0, 5.0}));
   {
-    QuietErrorGuard quiet;
+    WithQuietHandler quiet;
+    CPLErrorReset();
     EXPECT_FALSE(rr_inc.Set(0.9));
     EXPECT_FALSE(rr_inc.Set(2.1));
     EXPECT_FALSE(rr_exc.Set(1.0));
     EXPECT_FALSE(rr_exc.Set(2.0));
     EXPECT_FALSE(rr_list.Set(std::vector<double>{1.0, 6.0}));
+    CPLErrorReset();
   }
 
-  // List counts
+  // 5. List counts.
   EXPECT_TRUE(ex1.Set(std::vector<std::string>{"a"}));
   EXPECT_TRUE(ex2.Set(std::vector<int>{1, 2}));
   EXPECT_TRUE(mm.Set(std::vector<double>{1.0, 2.0}));
+  std::vector<GDALArgDatasetValue> one_ds;
+  one_ds.emplace_back("a.tif");
   {
-    QuietErrorGuard quiet;
+    WithQuietHandler quiet;
+    CPLErrorReset();
     EXPECT_FALSE(ex1.Set(std::vector<std::string>{"a", "b"}));
     EXPECT_FALSE(ex2.Set(std::vector<int>{1}));
     EXPECT_FALSE(mm.Set(std::vector<double>{1.0}));
     EXPECT_FALSE(mm.Set(std::vector<double>{1.0, 2.0, 3.0, 4.0}));
-    std::vector<GDALArgDatasetValue> one_ds;
-    one_ds.emplace_back("a.tif");
     EXPECT_FALSE(dsmm.Set(std::move(one_ds)));
+    CPLErrorReset();
   }
 
-  // Standalone GDALAlgorithmArg ReportError (m_owner == nullptr)
+  // 6. Standalone GDALAlgorithmArg ReportError (m_owner == nullptr).
+  std::vector<int> standalone_vec;
+  GDALAlgorithmArgDecl standalone_decl("standalone", 0, "desc",
+                                       GAAT_INTEGER_LIST);
+  standalone_decl.SetMinCount(2);
+  GDALAlgorithmArg standalone_arg(standalone_decl, &standalone_vec);
   {
-    QuietErrorGuard quiet;
-    std::vector<int> standalone_vec;
-    GDALAlgorithmArgDecl standalone_decl("standalone", 0, "desc",
-                                         GAAT_INTEGER_LIST);
-    standalone_decl.SetMinCount(2);
-    GDALAlgorithmArg standalone_arg(standalone_decl, &standalone_vec);
+    WithQuietHandler quiet;
+    CPLErrorReset();
     EXPECT_FALSE(standalone_arg.Set(std::vector<int>{1}));
+    CPLErrorReset();
   }
 }
 
 TEST(GdalAlgorithmTest, EscapeAndSerializeArgs) {
-  EXPECT_EQ("simple", GDALAlgorithmArg::GetEscapedString("simple"));
-  EXPECT_EQ("\"\\\"[ nested pipeline ]\\\"\"",
-            GDALAlgorithmArg::GetEscapedString("\"[ nested pipeline ]\""));
-  EXPECT_EQ("[ nested pipeline ]",
-            GDALAlgorithmArg::GetEscapedString("[ nested pipeline ]"));
-  EXPECT_EQ("\"a \\\"b\\\" \\\\c,d\"",
-            GDALAlgorithmArg::GetEscapedString("a \"b\" \\c,d"));
+  struct EscapeCase {
+    std::string_view input;
+    std::string_view expected;
+  };
+  constexpr EscapeCase kEscapeCases[] = {
+      {.input = "simple", .expected = "simple"},
+      {.input = "\"[ nested pipeline ]\"",
+       .expected = "\"\\\"[ nested pipeline ]\\\"\""},
+      {.input = "[ nested pipeline ]", .expected = "[ nested pipeline ]"},
+      {.input = "a \"b\" \\c,d", .expected = "\"a \\\"b\\\" \\\\c,d\""},
+  };
+  for (const auto& tc : kEscapeCases) {
+    EXPECT_EQ(tc.expected,
+              GDALAlgorithmArg::GetEscapedString(std::string(tc.input)));
+  }
 
   ConfigurableAlg alg;
   bool b_val = false;
@@ -862,15 +943,16 @@ TEST(GdalAlgorithmTest, EscapeAndSerializeArgs) {
   EXPECT_TRUE(d_arg.Serialize(out));
   EXPECT_EQ("--real 3.5", out);
 
-  // Dataset with empty name fails to serialize
+  // Dataset with empty name fails to serialize.
   EXPECT_TRUE(ds_arg.SetDatasetName(""));
   EXPECT_FALSE(ds_arg.Serialize(out));
 
-  EXPECT_TRUE(ds_arg.SetDatasetName("/vsimem/file.tif"));
+  const std::string file_tif = VsiMemPath("file.tif");
+  EXPECT_TRUE(ds_arg.SetDatasetName(file_tif));
   EXPECT_TRUE(ds_arg.Serialize(out, /*absolutePath=*/true));
-  EXPECT_EQ("--ds /vsimem/file.tif", out);
+  EXPECT_EQ("--ds " + file_tif, out);
 
-  // Relative path serialization with existing directory "."
+  // Relative path serialization with existing directory ".".
   EXPECT_TRUE(ds_arg.SetDatasetName("."));
   EXPECT_TRUE(ds_arg.Serialize(out, /*absolutePath=*/true));
   EXPECT_THAT(out, HasSubstr("--ds "));
@@ -891,33 +973,37 @@ TEST(GdalAlgorithmTest, EscapeAndSerializeArgs) {
   EXPECT_TRUE(dl_arg.Serialize(out));
   EXPECT_EQ("--dl 1.5,2.5", out);
 
-  EXPECT_TRUE(
-      dsl_arg.Set(std::vector<std::string>{"/vsimem/1.tif", "/vsimem/2.tif"}));
+  const std::string tif1 = VsiMemPath("1.tif");
+  const std::string tif2 = VsiMemPath("2.tif");
+  EXPECT_TRUE(dsl_arg.Set(std::vector<std::string>{tif1, tif2}));
   EXPECT_TRUE(dsl_arg.Serialize(out, /*absolutePath=*/true));
-  EXPECT_EQ("--dsl /vsimem/1.tif,/vsimem/2.tif", out);
+  EXPECT_EQ("--dsl " + tif1 + "," + tif2, out);
 
-  EXPECT_TRUE(dsl_arg.Set(std::vector<std::string>{"/vsimem/1.tif", ""}));
+  EXPECT_TRUE(dsl_arg.Set(std::vector<std::string>{tif1, ""}));
   EXPECT_FALSE(dsl_arg.Serialize(out));
 }
 
 TEST(GdalAlgorithmTest, CRSArgValidationAndAutoComplete) {
-  GDALAllRegister();
+  GDALRegister_GTiff();
+  absl::Cleanup cleanup_dir = [] { VSIRmdirRecursive(kVsiMemDir); };
 
-  const std::string tif_earth = "/vsimem/crs_earth.tif";
-  ASSERT_TRUE(CreateGTiffFile(tif_earth));
+  const std::string tif_earth = VsiMemPath("crs_earth.tif");
+  CreateGTiffFile(tif_earth);
 
-  const std::string tif_moon = "/vsimem/crs_moon.tif";
+  const std::string tif_moon = VsiMemPath("crs_moon.tif");
   {
     GDALDriver* drv = GetGDALDriverManager()->GetDriverByName("GTiff");
     ASSERT_NE(nullptr, drv);
-    std::unique_ptr<GDALDataset> ds(
+    GDALDatasetUniquePtr ds(
         drv->Create(tif_moon.c_str(), 4, 4, 1, GDT_Byte, nullptr));
+    ASSERT_NE(nullptr, ds);
     OGRSpatialReference moon_srs;
-    moon_srs.importFromWkt(
-        R"(GEOGCRS["Moon 2000",DATUM["D_Moon_2000",ELLIPSOID["Moon_2000_IAU_IAG",1737400,0]],PRIMEM["Reference_Meridian",0],CS[ellipsoidal,2],AXIS["lat",north],AXIS["lon",east]])");
-    ds->SetSpatialRef(&moon_srs);
-    double gt[6] = {0.0, 1.0, 0.0, 10.0, 0.0, -1.0};
-    ds->SetGeoTransform(gt);
+    ASSERT_EQ(OGRERR_NONE,
+              moon_srs.SetGeogCS("Moon 2000", "D_Moon_2000",
+                                 "Moon_2000_IAU_IAG", 1737400.0, 0.0));
+    EXPECT_EQ(CE_None, ds->SetSpatialRef(&moon_srs));
+    GDALGeoTransform gt(0.0, 1.0, 0.0, 10.0, 0.0, -1.0);
+    EXPECT_EQ(CE_None, ds->SetGeoTransform(gt));
   }
 
   ConfigurableAlg alg;
@@ -929,9 +1015,12 @@ TEST(GdalAlgorithmTest, CRSArgValidationAndAutoComplete) {
   auto& crs_arg = alg.AddArg("dst-crs", 0, "Destination CRS", &dst_crs)
                       .SetIsCRSArg(/*noneAllowed=*/true, {"SPECIAL_CRS"});
 
+  auto& non_str_arg = alg.AddArg("non-str-crs", 0, "Invalid", &non_str);
   {
-    QuietErrorGuard quiet;
-    alg.AddArg("non-str-crs", 0, "Invalid", &non_str).SetIsCRSArg();
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    non_str_arg.SetIsCRSArg();
+    CPLErrorReset();
   }
 
   EXPECT_TRUE(crs_arg.Set("none"));
@@ -939,14 +1028,16 @@ TEST(GdalAlgorithmTest, CRSArgValidationAndAutoComplete) {
   EXPECT_TRUE(crs_arg.Set("SPECIAL_CRS"));
   EXPECT_TRUE(crs_arg.Set("EPSG:4326"));
   {
-    QuietErrorGuard quiet;
+    WithQuietHandler quiet;
+    CPLErrorReset();
     EXPECT_FALSE(crs_arg.Set("TOTALLY_INVALID_CRS_XYZ"));
+    CPLErrorReset();
   }
 
   alg.SetCalledFromCommandLine();
   EXPECT_TRUE(crs_arg.Set("?"));
 
-  // Autocomplete with Earth dataset
+  // Autocomplete with Earth dataset.
   ASSERT_TRUE(alg.GetArg("input")->Set(std::vector<std::string>{tif_earth}));
   auto choices_empty = crs_arg.GetAutoCompleteChoices("");
   EXPECT_THAT(choices_empty, Contains("none"));
@@ -958,19 +1049,14 @@ TEST(GdalAlgorithmTest, CRSArgValidationAndAutoComplete) {
   auto choices_multi = crs_arg.GetAutoCompleteChoices("EPSG:326");
   EXPECT_FALSE(choices_multi.empty());
 
-  // Autocomplete with Moon dataset
+  // Autocomplete with Moon dataset.
   ASSERT_TRUE(alg.GetArg("input")->Set(std::vector<std::string>{tif_moon}));
   auto choices_moon = crs_arg.GetAutoCompleteChoices("IAU_2015:");
   EXPECT_FALSE(choices_moon.empty());
-
-  VSIUnlink(tif_earth.c_str());
-  VSIUnlink(tif_moon.c_str());
 }
 
 TEST(GdalAlgorithmTest, ParseCommandLineArgumentsComprehensive) {
-  GDALAllRegister();
-
-  // 1. Subalgorithms, "help" AWS syntax, duplicate call error
+  // 1. Subalgorithms, "help" AWS syntax, duplicate call error.
   {
     ConfigurableAlg top_alg("gdal");
     top_alg.SetCallPath({"gdal"});
@@ -980,35 +1066,39 @@ TEST(GdalAlgorithmTest, ParseCommandLineArgumentsComprehensive) {
     EXPECT_TRUE(top_alg.ParseCommandLineArguments({"help"}));
     EXPECT_TRUE(top_alg.IsHelpRequested());
 
+    // Second call on same instance fails.
     {
-      QuietErrorGuard quiet;
-      // Second call on same instance fails
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(top_alg.ParseCommandLineArguments({"help"}));
+      CPLErrorReset();
     }
 
-    // Missing command name
+    // Missing command name.
+    ConfigurableAlg empty_alg("gdal");
+    empty_alg.SetCallPath({"gdal"});
+    empty_alg.RegisterSubAlgorithm<CustomSubAlg1>();
+
+    // Unknown subcommand with suggestion and without suggestion.
+    ConfigurableAlg unk_alg1("gdal");
+    unk_alg1.RegisterSubAlgorithm<CustomSubAlg1>();
+
+    ConfigurableAlg unk_alg2("gdal");
+    unk_alg2.RegisterSubAlgorithm<CustomSubAlg1>();
     {
-      QuietErrorGuard quiet;
-      ConfigurableAlg empty_alg("gdal");
-      empty_alg.SetCallPath({"gdal"});
-      empty_alg.RegisterSubAlgorithm<CustomSubAlg1>();
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(empty_alg.ParseCommandLineArguments({}));
-
-      // Unknown subcommand with suggestion and without suggestion
-      ConfigurableAlg unk_alg1("gdal");
-      unk_alg1.RegisterSubAlgorithm<CustomSubAlg1>();
       EXPECT_FALSE(unk_alg1.ParseCommandLineArguments({"sub_alph"}));
-
-      ConfigurableAlg unk_alg2("gdal");
-      unk_alg2.RegisterSubAlgorithm<CustomSubAlg1>();
       EXPECT_FALSE(
           unk_alg2.ParseCommandLineArguments({"completely_unknown_xyz"}));
+      CPLErrorReset();
     }
 
-    // Valid subcommand invocation and execution
+    // Valid subcommand invocation and execution.
     ConfigurableAlg run_top("gdal");
     run_top.SetCallPath({"gdal"});
-    run_top.SetReferencePathForRelativePaths("/vsimem");
+    run_top.SetReferencePathForRelativePaths(kVsiMemDir);
     run_top.RegisterSubAlgorithm<CustomSubAlg1>();
     EXPECT_TRUE(run_top.ParseCommandLineArguments(
         {"sub_alpha", "-f", "--text=abc", "-q"}));
@@ -1018,7 +1108,7 @@ TEST(GdalAlgorithmTest, ParseCommandLineArgumentsComprehensive) {
     EXPECT_TRUE(run_top.Finalize());
   }
 
-  // 2. Options parsing: long, short, combined short, errors, suggestions
+  // 2. Options parsing: long, short, combined short, suggestions.
   {
     ConfigurableAlg alg;
     bool b1 = false;
@@ -1043,71 +1133,93 @@ TEST(GdalAlgorithmTest, ParseCommandLineArgumentsComprehensive) {
     alg.AddArg("dl-opt", 0, "DL", &dlval);
     alg.AddArg("dsl-opt", 0, "DSL", &dslval).SetAutoOpenDataset(false);
 
+    const std::string foo_tif = VsiMemPath("foo.tif");
+    CPLErrorReset();
     EXPECT_TRUE(alg.ParseCommandLineArguments(
         {"-xb", "--integer-opt=10", "--hidden-real", "2.5", "--str-opt", "hi",
-         "--ds-opt=/vsimem/foo.tif", "--sl-opt=s1,s2", "--il-opt=1,2",
+         "--ds-opt=" + foo_tif, "--sl-opt=s1,s2", "--il-opt=1,2",
          "--dl-opt=1.5,2.5", "--dsl-opt={\"json\":1}",
          "--dsl-opt=d1.tif,d2.tif", "--config", "FOO=BAR"}));
+    CPLErrorReset();
     EXPECT_TRUE(b1);
     EXPECT_TRUE(b2);
     EXPECT_EQ(10, ival);
     EXPECT_DOUBLE_EQ(2.5, dval);
     EXPECT_EQ("hi", sval);
-    EXPECT_EQ("/vsimem/foo.tif", dsval.GetName());
+    EXPECT_EQ(foo_tif, dsval.GetName());
     EXPECT_THAT(slval, ElementsAre("s1", "s2"));
     EXPECT_THAT(ilval, ElementsAre(1, 2));
     EXPECT_THAT(dlval, ElementsAre(1.5, 2.5));
     EXPECT_EQ(3u, dslval.size());
   }
 
-  // 3. Option parsing errors & edge cases
+  // 3. Option parsing errors & edge cases.
   {
-    QuietErrorGuard quiet;
-
-    // Unknown long option with suggestion
+    // Unknown long option with suggestion.
     {
       ConfigurableAlg alg;
       int v = 0;
       alg.AddArg("my-option", 0, "desc", &v);
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(alg.ParseCommandLineArguments({"--my-optio=1"}));
+      CPLErrorReset();
     }
-    // Unknown long option without suggestion
+    // Unknown long option without suggestion.
     {
       ConfigurableAlg alg;
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(alg.ParseCommandLineArguments({"--zzzzzzzzzz"}));
+      CPLErrorReset();
     }
-    // Unknown short option matching long option name (-help instead of --help)
+    // Unknown short option matching long option name (-help instead of --help).
     {
       ConfigurableAlg alg;
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(alg.ParseCommandLineArguments({"-help"}));
+      CPLErrorReset();
     }
-    // Unknown short option close to long option name (-helx instead of --help)
+    // Unknown short option close to long option name (-helx instead of --help).
     {
       ConfigurableAlg alg;
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(alg.ParseCommandLineArguments({"-helx"}));
+      CPLErrorReset();
     }
-    // Unknown single-char short option
+    // Unknown single-char short option.
     {
       ConfigurableAlg alg;
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(alg.ParseCommandLineArguments({"-z"}));
+      CPLErrorReset();
     }
-    // Combined short option where one is non-boolean
+    // Combined short option where one is non-boolean.
     {
       ConfigurableAlg alg;
       bool b = false;
       int i = 0;
       alg.AddArg("bool-a", 'a', "desc", &b);
       alg.AddArg("int-i", 'i', "desc", &i);
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(alg.ParseCommandLineArguments({"-ai"}));
+      CPLErrorReset();
     }
-    // Missing value at end of tokens
+    // Missing value at end of tokens.
     {
       ConfigurableAlg alg;
       int i = 0;
       alg.AddArg("int-i", 'i', "desc", &i);
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(alg.ParseCommandLineArguments({"--int-i"}));
+      CPLErrorReset();
     }
-    // Missing value at end of tokens when SetParseForAutoCompletion() is set
+    // Missing value at end of tokens when SetParseForAutoCompletion() is set.
     {
       ConfigurableAlg alg;
       int i = 0;
@@ -1115,7 +1227,7 @@ TEST(GdalAlgorithmTest, ParseCommandLineArgumentsComprehensive) {
       alg.SetParseForAutoCompletion();
       EXPECT_TRUE(alg.ParseCommandLineArguments({"--int-i"}));
     }
-    // Scalar specified twice (with and without SkipIfAlreadySet)
+    // Scalar specified twice (with and without SkipIfAlreadySet).
     {
       ConfigurableAlg alg;
       int i = 0;
@@ -1124,60 +1236,67 @@ TEST(GdalAlgorithmTest, ParseCommandLineArgumentsComprehensive) {
       arg.SetSkipIfAlreadySet(true);
       EXPECT_TRUE(alg.ParseCommandLineArguments({"--int-i=2"}));
       EXPECT_EQ(1, i);
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(alg.ParseCommandLineArguments({"--int-i=2", "--int-i=3"}));
+      CPLErrorReset();
     }
-    // List arg with RepeatedArgAllowed(false) specified twice
+    // List arg with RepeatedArgAllowed(false) specified twice.
     {
       ConfigurableAlg alg;
       std::vector<int> il;
       alg.AddArg("il", 0, "desc", &il).SetRepeatedArgAllowed(false);
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(alg.ParseCommandLineArguments({"--il=1", "--il=2"}));
+      CPLErrorReset();
     }
-    // Invalid boolean value, int value, real value, int list value, real list
-    // value
+    // Boolean "--bool-a=false" succeeds.
     {
       ConfigurableAlg alg;
-      bool b = false;
-      alg.AddArg("bool-a", 0, "desc", &b);
-      EXPECT_FALSE(alg.ParseCommandLineArguments({"--bool-a=maybe"}));
-    }
-    {
-      ConfigurableAlg alg;
-      bool b = false;
+      bool b = true;
       alg.AddArg("bool-a", 0, "desc", &b);
       EXPECT_TRUE(alg.ParseCommandLineArguments({"--bool-a=false"}));
       EXPECT_FALSE(b);
     }
+    // Invalid boolean, int, real, int list, and real list values.
     {
-      ConfigurableAlg alg;
+      ConfigurableAlg alg_b;
+      bool b = false;
+      alg_b.AddArg("bool-a", 0, "desc", &b);
+
+      ConfigurableAlg alg_i;
       int i = 0;
-      alg.AddArg("int-a", 0, "desc", &i);
-      EXPECT_FALSE(alg.ParseCommandLineArguments({"--int-a=xyz"}));
-    }
-    {
-      ConfigurableAlg alg;
+      alg_i.AddArg("int-a", 0, "desc", &i);
+
+      ConfigurableAlg alg_r;
       double d = 0;
-      alg.AddArg("real-a", 0, "desc", &d);
-      EXPECT_FALSE(alg.ParseCommandLineArguments({"--real-a=xyz"}));
-    }
-    {
-      ConfigurableAlg alg;
+      alg_r.AddArg("real-a", 0, "desc", &d);
+
+      ConfigurableAlg alg_il;
       std::vector<int> il;
-      alg.AddArg("il", 0, "desc", &il);
-      EXPECT_FALSE(alg.ParseCommandLineArguments({"--il=1,xyz"}));
-    }
-    {
-      ConfigurableAlg alg;
+      alg_il.AddArg("il", 0, "desc", &il);
+
+      ConfigurableAlg alg_dl;
       std::vector<double> dl;
-      alg.AddArg("dl", 0, "desc", &dl);
-      EXPECT_FALSE(alg.ParseCommandLineArguments({"--dl=1.0,xyz"}));
+      alg_dl.AddArg("dl", 0, "desc", &dl);
+
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_FALSE(alg_b.ParseCommandLineArguments({"--bool-a=maybe"}));
+      EXPECT_FALSE(alg_i.ParseCommandLineArguments({"--int-a=xyz"}));
+      EXPECT_FALSE(alg_r.ParseCommandLineArguments({"--real-a=xyz"}));
+      EXPECT_FALSE(alg_il.ParseCommandLineArguments({"--il=1,xyz"}));
+      EXPECT_FALSE(alg_dl.ParseCommandLineArguments({"--dl=1.0,xyz"}));
+      CPLErrorReset();
     }
   }
 
-  // 4. Positional arguments: 3-arg special case (<INPUT> <AUX>... <OUTPUT>)
+  // 4. Positional arguments: 3-arg special case (<INPUT> <AUX>... <OUTPUT>).
   {
     ConfigurableAlg alg;
-    std::string in, out;
+    std::string in;
+    std::string out;
     std::vector<std::string> aux;
     alg.AddArg("in", 0, "In", &in).SetPositional().SetRequired();
     alg.AddArg("aux", 0, "Aux", &aux).SetPositional().SetMinCount(1);
@@ -1189,18 +1308,22 @@ TEST(GdalAlgorithmTest, ParseCommandLineArgumentsComprehensive) {
     EXPECT_THAT(aux, ElementsAre("a1.tif", "a2.tif"));
     EXPECT_EQ("out.tif", out);
 
-    QuietErrorGuard quiet;
     ConfigurableAlg alg_short;
     alg_short.AddArg("in", 0, "In", &in).SetPositional().SetRequired();
     alg_short.AddArg("aux", 0, "Aux", &aux).SetPositional().SetMinCount(1);
     alg_short.AddArg("out", 0, "Out", &out).SetPositional().SetRequired();
-    EXPECT_FALSE(alg_short.ParseCommandLineArguments({"in.tif", "out.tif"}));
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_FALSE(alg_short.ParseCommandLineArguments({"in.tif", "out.tif"}));
+      CPLErrorReset();
+    }
   }
 
   // 5. Positional arguments: variable-count list first or last, and ambiguity
-  // errors
+  // errors.
   {
-    // Variable list first, followed by fixed required scalar and fixed list
+    // Variable list first, followed by fixed required scalar and fixed list.
     ConfigurableAlg alg;
     std::vector<std::string> first_list;
     std::vector<int> mid_fixed_list;
@@ -1218,7 +1341,7 @@ TEST(GdalAlgorithmTest, ParseCommandLineArgumentsComprehensive) {
     EXPECT_THAT(mid_fixed_list, ElementsAre(10, 20));
     EXPECT_EQ("end_val", last_req);
 
-    // Variable list at the end, with first positional already set by option
+    // Variable list at the end, with first positional already set by option.
     ConfigurableAlg alg_last;
     std::string p1;
     std::vector<std::string> p2;
@@ -1229,80 +1352,108 @@ TEST(GdalAlgorithmTest, ParseCommandLineArgumentsComprehensive) {
     EXPECT_EQ("set_by_opt", p1);
     EXPECT_THAT(p2, ElementsAre("v1", "v2"));
 
-    QuietErrorGuard quiet;
-    // Ambiguity 1: two variable-count list positional args
+    // Ambiguity 1: two variable-count list positional args.
     {
       ConfigurableAlg amb1;
-      std::vector<std::string> l1, l2;
+      std::vector<std::string> l1;
+      std::vector<std::string> l2;
       amb1.AddArg("l1", 0, "L1", &l1).SetPositional();
       amb1.AddArg("l2", 0, "L2", &l2).SetPositional();
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(amb1.ParseCommandLineArguments({"a", "b"}));
+      CPLErrorReset();
     }
-    // Ambiguity 2: variable-count list followed by optional scalar
+    // Ambiguity 2: variable-count list followed by optional scalar.
     {
       ConfigurableAlg amb2;
       std::vector<std::string> l1;
       std::string opt_s;
       amb2.AddArg("l1", 0, "L1", &l1).SetPositional();
       amb2.AddArg("opt-s", 0, "OptS", &opt_s).SetPositional();
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(amb2.ParseCommandLineArguments({"a", "b"}));
+      CPLErrorReset();
     }
     // Ambiguity 3: variable-count list in the middle (when first is already
-    // set)
+    // set).
     {
       ConfigurableAlg amb3;
-      std::string s1, s3;
+      std::string s1;
+      std::string s3;
       std::vector<std::string> l2;
       amb3.AddArg("s1", 0, "S1", &s1).SetPositional().SetRequired();
       amb3.AddArg("l2", 0, "L2", &l2).SetPositional();
       amb3.AddArg("s3", 0, "S3", &s3).SetPositional().SetRequired();
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(amb3.ParseCommandLineArguments({"--s1=val", "a", "b"}));
+      CPLErrorReset();
     }
-    // Unexpected extra positional values
+    // Unexpected extra positional values.
     {
       ConfigurableAlg extra;
       std::string s1;
       extra.AddArg("s1", 0, "S1", &s1).SetPositional();
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(extra.ParseCommandLineArguments({"a", "unexpected"}));
+      CPLErrorReset();
     }
-    // Missing required positional value
+    // Missing required positional value.
     {
       ConfigurableAlg miss;
       std::string s1;
       miss.AddArg("s1", 0, "S1", &s1).SetPositional().SetRequired();
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(miss.ParseCommandLineArguments({}));
+      CPLErrorReset();
     }
   }
 
-  // 6. Help value "?": single choice vs multiple choices
+  // 6. Help value "?": single choice vs multiple choices.
   {
-    QuietErrorGuard quiet;
     ConfigurableAlg alg1;
     std::string c1;
     alg1.AddArg("c1", 0, "C1", &c1).SetChoices("only_one");
     alg1.SetCalledFromCommandLine();
-    EXPECT_FALSE(alg1.ParseCommandLineArguments({"--c1=?"}));
-    EXPECT_THAT(CPLGetLastErrorMsg(), HasSubstr("Single potential value"));
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_FALSE(alg1.ParseCommandLineArguments({"--c1=?"}));
+      EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+      EXPECT_THAT(CPLGetLastErrorMsg(), HasSubstr("Single potential value"));
+      CPLErrorReset();
+    }
 
     ConfigurableAlg alg2;
     std::vector<std::string> c2;
     alg2.AddArg("c2", 0, "C2", &c2).SetChoices("opt_a", "opt_b");
     alg2.SetCalledFromCommandLine();
-    EXPECT_FALSE(alg2.ParseCommandLineArguments({"--c2=?"}));
-    EXPECT_THAT(CPLGetLastErrorMsg(), HasSubstr("Potential values"));
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_FALSE(alg2.ParseCommandLineArguments({"--c2=?"}));
+      EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+      EXPECT_THAT(CPLGetLastErrorMsg(), HasSubstr("Potential values"));
+      CPLErrorReset();
+    }
   }
 }
 
 TEST(GdalAlgorithmTest, ProcessDatasetArgAndValidateArguments) {
-  GDALAllRegister();
+  GDALRegister_MEM();
+  GDALRegister_GTiff();
+  absl::Cleanup cleanup_dir = [] { VSIRmdirRecursive(kVsiMemDir); };
 
-  const std::string in_tif = "/vsimem/proc_in.tif";
-  const std::string out_tif = "/vsimem/proc_out.tif";
-  ASSERT_TRUE(CreateGTiffFile(in_tif));
-  ASSERT_TRUE(CreateGTiffFile(out_tif));
+  const std::string in_tif = VsiMemPath("proc_in.tif");
+  const std::string out_tif = VsiMemPath("proc_out.tif");
+  CreateGTiffFile(in_tif);
+  CreateGTiffFile(out_tif);
 
-  // 1. Auto-opening input dataset, overview delete special case, pre-mapped
-  // dataset
+  // 1. Auto-opening input dataset and overview delete special case.
   {
     ConfigurableAlg alg("delete");
     alg.SetCallPath({"gdal", "raster", "overview", "delete"});
@@ -1320,24 +1471,26 @@ TEST(GdalAlgorithmTest, ProcessDatasetArgAndValidateArguments) {
     EXPECT_TRUE(alg.Finalize());
   }
 
-  // 2. Pre-mapped dataset in m_oMapDatasetNameToDataset
+  // 2. Pre-mapped dataset in m_oMapDatasetNameToDataset.
   {
     ConfigurableAlg alg;
     GDALArgDatasetValue in_ds;
     alg.AddInputDatasetArg(&in_ds, GDAL_OF_RASTER);
     auto mem_ds = CreateMemRaster();
-    test_gdal_algorithm::test_gdal_algorithm::SetMapDataset(alg, "mapped_ds",
-                                                            mem_ds.get());
+    ASSERT_NE(nullptr, mem_ds);
+    ::test_gdal_algorithm::test_gdal_algorithm::SetMapDataset(alg, "mapped_ds",
+                                                              mem_ds.get());
     EXPECT_TRUE(alg.ParseCommandLineArguments({"mapped_ds"}));
     EXPECT_EQ(mem_ds.get(), in_ds.GetDatasetRef());
     EXPECT_TRUE(alg.Finalize());
   }
 
   // 3. Input and output same dataset in update mode +
-  // onlyInputSpecifiedInUpdateAndOutputNotRequired
+  // onlyInputSpecifiedInUpdateAndOutputNotRequired.
   {
     ConfigurableAlg alg;
-    GDALArgDatasetValue in_ds, out_ds;
+    GDALArgDatasetValue in_ds;
+    GDALArgDatasetValue out_ds;
     bool update = false;
     bool overwrite = false;
     std::vector<std::string> out_oo;
@@ -1355,9 +1508,8 @@ TEST(GdalAlgorithmTest, ProcessDatasetArgAndValidateArguments) {
   }
 
   // 4. Overwriting existing file vs error when --overwrite not set vs directory
-  // error
+  // error.
   {
-    QuietErrorGuard quiet;
     ConfigurableAlg alg1;
     GDALArgDatasetValue out_ds;
     bool overwrite = false;
@@ -1370,11 +1522,17 @@ TEST(GdalAlgorithmTest, ProcessDatasetArgAndValidateArguments) {
     alg1.AddOverwriteLayerArg(&overwrite_layer);
     alg1.AddAppendLayerArg(&append);
 
-    // Fails because out_tif exists and --overwrite is not set
-    EXPECT_FALSE(alg1.ParseCommandLineArguments({out_tif}));
-    EXPECT_THAT(CPLGetLastErrorMsg(), HasSubstr("already exists"));
+    // Fails because out_tif exists and --overwrite is not set.
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_FALSE(alg1.ParseCommandLineArguments({out_tif}));
+      EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+      EXPECT_THAT(CPLGetLastErrorMsg(), HasSubstr("already exists"));
+      CPLErrorReset();
+    }
 
-    // Succeeds when --overwrite is set (deletes existing file)
+    // Succeeds when --overwrite is set (deletes existing file).
     ConfigurableAlg alg2;
     GDALArgDatasetValue out_ds2;
     bool overwrite2 = false;
@@ -1382,25 +1540,29 @@ TEST(GdalAlgorithmTest, ProcessDatasetArgAndValidateArguments) {
     alg2.AddOverwriteArg(&overwrite2);
     EXPECT_TRUE(alg2.ParseCommandLineArguments({out_tif, "--overwrite"}));
 
-    // Directory that is not a GDAL dataset cannot be overwritten
-    VSIMkdir("/vsimem/non_gdal_dir", 0755);
-    VSILFILE* fp = VSIFOpenL("/vsimem/non_gdal_dir/random.bin", "wb");
-    VSIFWriteL("xyz", 1, 3, fp);
-    VSIFCloseL(fp);
+    // Directory that is not a GDAL dataset cannot be overwritten.
+    const std::string non_gdal_dir = VsiMemPath("non_gdal_dir");
+    ASSERT_EQ(0, VSIMkdir(non_gdal_dir.c_str(), 0755));
+    const std::string random_bin =
+        (std::filesystem::path(non_gdal_dir) / "random.bin").string();
+    VsiMemTempWrapper random_wrapper(random_bin, "xyz");
 
     ConfigurableAlg alg3;
     GDALArgDatasetValue out_ds3;
     bool overwrite3 = false;
     alg3.AddOutputDatasetArg(&out_ds3, GDAL_OF_RASTER);
     alg3.AddOverwriteArg(&overwrite3);
-    EXPECT_FALSE(alg3.ParseCommandLineArguments(
-        {"/vsimem/non_gdal_dir", "--overwrite"}));
-    VSIUnlink("/vsimem/non_gdal_dir/random.bin");
-    VSIRmdir("/vsimem/non_gdal_dir");
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_FALSE(
+          alg3.ParseCommandLineArguments({non_gdal_dir, "--overwrite"}));
+      CPLErrorReset();
+    }
   }
 
   // 5. Output to "-" (/vsistdout/) turns on quiet; outputFormat=MEM sets empty
-  // output name
+  // output name.
   {
     ConfigurableAlg alg;
     GDALArgDatasetValue out_ds;
@@ -1423,44 +1585,50 @@ TEST(GdalAlgorithmTest, ProcessDatasetArgAndValidateArguments) {
     EXPECT_TRUE(alg_stdout.GetArg(GDAL_ARG_NAME_QUIET)->Get<bool>());
   }
 
-  // 6. Mutual exclusion groups and required args in mutual exclusion group
+  // 6. Mutual exclusion groups and required args in mutual exclusion group.
   {
-    QuietErrorGuard quiet;
     ConfigurableAlg alg;
-    std::string a, b;
+    std::string a;
+    std::string b;
     alg.AddArg("opt-a", 0, "A", &a)
         .SetMutualExclusionGroup("grp1")
         .SetRequired();
     alg.AddArg("opt-b", 0, "B", &b).SetMutualExclusionGroup("grp1");
 
     // Setting opt-b satisfies the required constraint of opt-a in the same
-    // group
+    // group.
     EXPECT_TRUE(alg.ParseCommandLineArguments({"--opt-b=val"}));
 
-    // Setting both fails
+    // Setting both fails.
     ConfigurableAlg alg_both;
     alg_both.AddArg("opt-a", 0, "A", &a).SetMutualExclusionGroup("grp1");
     alg_both.AddArg("opt-b", 0, "B", &b).SetMutualExclusionGroup("grp1");
-    EXPECT_FALSE(
-        alg_both.ParseCommandLineArguments({"--opt-a=1", "--opt-b=2"}));
 
-    // Setting neither fails when opt-a is required
+    // Setting neither fails when opt-a is required.
     ConfigurableAlg alg_none;
     alg_none.AddArg("opt-a", 0, "A", &a)
         .SetMutualExclusionGroup("grp1")
         .SetRequired();
     alg_none.AddArg("opt-b", 0, "B", &b).SetMutualExclusionGroup("grp1");
-    EXPECT_FALSE(alg_none.ParseCommandLineArguments({}));
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_FALSE(
+          alg_both.ParseCommandLineArguments({"--opt-a=1", "--opt-b=2"}));
+      EXPECT_FALSE(alg_none.ParseCommandLineArguments({}));
+      CPLErrorReset();
+    }
   }
 
-  // 7. GAAT_DATASET_LIST auto-open with multiple datasets
+  // 7. GAAT_DATASET_LIST auto-open with multiple datasets.
   {
-    const std::string in_tif2 = "/vsimem/proc_in2.tif";
-    ASSERT_TRUE(CreateGTiffFile(in_tif2));
+    const std::string in_tif2 = VsiMemPath("proc_in2.tif");
+    CreateGTiffFile(in_tif2);
 
     ConfigurableAlg alg;
     std::vector<GDALArgDatasetValue> in_list;
-    std::vector<std::string> oo, ifmts;
+    std::vector<std::string> oo;
+    std::vector<std::string> ifmts;
     bool update = false;
     alg.AddInputDatasetArg(&in_list, GDAL_OF_RASTER);
     alg.AddOpenOptionsArg(&oo);
@@ -1473,23 +1641,23 @@ TEST(GdalAlgorithmTest, ProcessDatasetArgAndValidateArguments) {
     EXPECT_NE(nullptr, in_list[0].GetDatasetRef());
     EXPECT_NE(nullptr, in_list[1].GetDatasetRef());
     EXPECT_TRUE(alg.Finalize());
-
-    VSIUnlink(in_tif2.c_str());
   }
-
-  VSIUnlink(in_tif.c_str());
-  VSIUnlink(out_tif.c_str());
 }
 
 TEST(GdalAlgorithmTest, BuiltinHelperAddArgsAndValidations) {
-  GDALAllRegister();
+  GDALRegister_GTiff();
+  GDALRegister_JPEG();
+  GDALRegister_MEM();
+  GDALRegister_VRT();
+  RegisterOGRGeoJSON();
+  absl::Cleanup cleanup_dir = [] { VSIRmdirRecursive(kVsiMemDir); };
 
-  const std::string tif_path = "/vsimem/helper_test.tif";
-  const std::string json_path = "/vsimem/helper_test.geojson";
-  ASSERT_TRUE(CreateGTiffFile(tif_path, /*bands=*/2));
-  ASSERT_TRUE(CreateGeoJSONFile(json_path));
+  const std::string tif_path = VsiMemPath("helper_test.tif");
+  const std::string json_path = VsiMemPath("helper_test.geojson");
+  CreateGTiffFile(tif_path, /*bands=*/2);
+  VsiMemTempWrapper json_wrapper(json_path, std::string(kSampleGeoJson));
 
-  // 1. AddFormats, ValidateFormat, FormatAutoCompleteFunction
+  // 1. AddFormats, ValidateFormat, FormatAutoCompleteFunction.
   {
     ConfigurableAlg alg;
     std::string out_fmt;
@@ -1518,15 +1686,6 @@ TEST(GdalAlgorithmTest, BuiltinHelperAddArgsAndValidations) {
     EXPECT_THAT(fmt_choices, Not(Contains("VRT")));
     EXPECT_THAT(fmt_choices, Not(Contains("JPEG")));
 
-    QuietErrorGuard quiet;
-    EXPECT_FALSE(of_arg.Set("VRT"));
-    EXPECT_FALSE(of_arg.Set("JPEG"));
-    EXPECT_FALSE(of_arg.Set("NON_EXISTENT_DRIVER_XYZ"));
-    // VRTSourcedRasterBand / other non-allowed format without extensions
-    EXPECT_FALSE(of_arg.Set("VRT"));
-
-    // Output dataset with .vrt when VRT_COMPATIBLE=false, and .gdalg.json when
-    // GDALG not allowed
     ConfigurableAlg alg_out_vrt;
     GDALArgDatasetValue out_ds;
     std::string out_fmt2;
@@ -1535,18 +1694,32 @@ TEST(GdalAlgorithmTest, BuiltinHelperAddArgsAndValidations) {
         .AddOutputFormatArg(&out_fmt2, /*bStreamAllowed=*/false,
                             /*bGDALGAllowed=*/false)
         .AddMetadataItem(GAAMDI_VRT_COMPATIBLE, {"false"});
-    EXPECT_FALSE(alg_out_vrt.ParseCommandLineArguments({"/vsimem/test.vrt"}));
-    EXPECT_FALSE(
-        alg_out_vrt.ParseCommandLineArguments({"/vsimem/test.gdalg.json"}));
-    EXPECT_FALSE(alg_out_vrt.GetArg(GDAL_ARG_NAME_OUTPUT_FORMAT)->Set("GDALG"));
+
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_FALSE(of_arg.Set("VRT"));
+      EXPECT_FALSE(of_arg.Set("JPEG"));
+      EXPECT_FALSE(of_arg.Set("NON_EXISTENT_DRIVER_XYZ"));
+      // Output dataset with .vrt when VRT_COMPATIBLE=false, and .gdalg.json
+      // when GDALG not allowed.
+      EXPECT_FALSE(
+          alg_out_vrt.ParseCommandLineArguments({VsiMemPath("test.vrt")}));
+      EXPECT_FALSE(alg_out_vrt.ParseCommandLineArguments(
+          {VsiMemPath("test.gdalg.json")}));
+      EXPECT_FALSE(
+          alg_out_vrt.GetArg(GDAL_ARG_NAME_OUTPUT_FORMAT)->Set("GDALG"));
+      CPLErrorReset();
+    }
   }
 
   // 2. AddOutputDataTypeArg, AddNodataArg, AddMemorySizeArg,
-  // AddGeometryTypeArg, AddBBOXArg, AddBandArg, AddNumThreadsArg
+  // AddGeometryTypeArg, AddBBOXArg, AddBandArg, AddNumThreadsArg.
   {
     ConfigurableAlg alg;
     std::string dt;
-    std::string nodata_with_none, nodata_no_none;
+    std::string nodata_with_none;
+    std::string nodata_no_none;
     size_t mem_bytes = 0;
     std::string mem_str = "10MB";
     std::string geom_type;
@@ -1593,62 +1766,80 @@ TEST(GdalAlgorithmTest, BuiltinHelperAddArgsAndValidations) {
     EXPECT_TRUE(nd1.Set("nan"));
     EXPECT_TRUE(nd2.Set("inf"));
     {
-      QuietErrorGuard quiet;
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(nd2.Set("none"));
       EXPECT_FALSE(nd1.Set("not_a_number"));
+      CPLErrorReset();
     }
 
     EXPECT_TRUE(mem_arg.Set("20MB"));
     EXPECT_EQ(20u * 1024u * 1024u, mem_bytes);
     {
-      QuietErrorGuard quiet;
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(mem_arg.Set("1024"));  // missing unit
       EXPECT_FALSE(mem_arg.Set("invalid_mem"));
+      CPLErrorReset();
     }
 
     EXPECT_FALSE(geom_arg.GetAutoCompleteChoices("POINT").empty());
     EXPECT_TRUE(geom_arg.Set("POINTZ"));
     EXPECT_TRUE(geom_arg.Set("GEOMETRY"));
     {
-      QuietErrorGuard quiet;
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(geom_arg.Set("NOT_A_GEOM_TYPE"));
+      CPLErrorReset();
     }
 
     EXPECT_TRUE(bbox_arg.Set(std::vector<double>{1.0, 2.0, 3.0, 4.0}));
     {
-      QuietErrorGuard quiet;
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(bbox_arg.Set(std::vector<double>{5.0, 2.0, 3.0, 4.0}));
+      CPLErrorReset();
     }
 
     EXPECT_TRUE(band_arg.Set(1));
     EXPECT_TRUE(bands_arg.Set(std::vector<int>{1, 2}));
     {
-      QuietErrorGuard quiet;
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(band_arg.Set(0));
       EXPECT_FALSE(bands_arg.Set(std::vector<int>{1, 0}));
+      CPLErrorReset();
     }
 
     CPLSetThreadLocalConfigOption("GDAL_NUM_THREADS", "4");
+    absl::Cleanup clear_num_threads = [] {
+      CPLSetThreadLocalConfigOption("GDAL_NUM_THREADS", nullptr);
+    };
     EXPECT_TRUE(threads_arg.Set("ALL_CPUS"));
     EXPECT_GE(num_threads, 1);
     EXPECT_TRUE(threads_arg.Set("2"));
     EXPECT_LE(num_threads, 2);
     {
-      QuietErrorGuard quiet;
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(threads_arg.Set("invalid_threads"));
+      CPLErrorReset();
     }
-    CPLSetThreadLocalConfigOption("GDAL_NUM_THREADS", nullptr);
   }
 
-  // 3. ValidateBandArg against actual dataset raster count
+  // 3. ValidateBandArg against actual dataset raster count.
   {
-    QuietErrorGuard quiet;
     ConfigurableAlg alg;
     GDALArgDatasetValue in_ds;
     int band = 0;
     alg.AddInputDatasetArg(&in_ds, GDAL_OF_RASTER);
     alg.AddBandArg(&band);
-    EXPECT_FALSE(alg.ParseCommandLineArguments({tif_path, "--band=5"}));
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_FALSE(alg.ParseCommandLineArguments({tif_path, "--band=5"}));
+      CPLErrorReset();
+    }
 
     ConfigurableAlg alg_ok;
     GDALArgDatasetValue in_ds_ok;
@@ -1661,7 +1852,7 @@ TEST(GdalAlgorithmTest, BuiltinHelperAddArgsAndValidations) {
   }
 
   // 4. AddFieldTypeSubtypeArg, SetAutoCompleteFunctionForLayerName,
-  // SetAutoCompleteFunctionForFieldName
+  // SetAutoCompleteFunctionForFieldName.
   {
     ConfigurableAlg alg;
     std::vector<GDALArgDatasetValue> in_ds_list;
@@ -1683,18 +1874,32 @@ TEST(GdalAlgorithmTest, BuiltinHelperAddArgsAndValidations) {
 
     EXPECT_EQ(OFTInteger, ftype);
     EXPECT_FALSE(ft_arg.GetAutoCompleteChoices("Int").empty());
-    EXPECT_TRUE(ft_arg.Set("Boolean"));
-    EXPECT_EQ(OFTInteger, ftype);
-    EXPECT_EQ(OFSTBoolean, fsubtype);
-    EXPECT_TRUE(ft_arg.Set("Float32"));
-    EXPECT_EQ(OFTReal, ftype);
-    EXPECT_EQ(OFSTFloat32, fsubtype);
-    EXPECT_TRUE(ft_arg.Set("JSON"));
-    EXPECT_EQ(OFTString, ftype);
-    EXPECT_EQ(OFSTJSON, fsubtype);
+    struct FieldTypeCase {
+      std::string_view name;
+      OGRFieldType expected_type;
+      OGRFieldSubType expected_subtype;
+    };
+    constexpr FieldTypeCase kFieldTypeCases[] = {
+        {.name = "Boolean",
+         .expected_type = OFTInteger,
+         .expected_subtype = OFSTBoolean},
+        {.name = "Float32",
+         .expected_type = OFTReal,
+         .expected_subtype = OFSTFloat32},
+        {.name = "JSON",
+         .expected_type = OFTString,
+         .expected_subtype = OFSTJSON},
+    };
+    for (const auto& tc : kFieldTypeCases) {
+      EXPECT_TRUE(ft_arg.Set(std::string(tc.name)));
+      EXPECT_EQ(tc.expected_type, ftype);
+      EXPECT_EQ(tc.expected_subtype, fsubtype);
+    }
     {
-      QuietErrorGuard quiet;
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(ft_arg.Set("InvalidFieldType"));
+      CPLErrorReset();
     }
 
     ASSERT_TRUE(ds_arg.Set(std::vector<std::string>{json_path}));
@@ -1704,7 +1909,7 @@ TEST(GdalAlgorithmTest, BuiltinHelperAddArgsAndValidations) {
     EXPECT_THAT(layers_exact, ElementsAre("test_layer"));
 
     // Field autocomplete with empty layer name (scans all layers) and specific
-    // layer name
+    // layer name.
     auto fields_all = fld_arg.GetAutoCompleteChoices("");
     EXPECT_THAT(fields_all, Contains("name_field"));
     EXPECT_THAT(fields_all, Contains("int_field"));
@@ -1715,9 +1920,9 @@ TEST(GdalAlgorithmTest, BuiltinHelperAddArgsAndValidations) {
   }
 
   // 5. AddOptionsSuggestions, OpenOptions, CreationOptions,
-  // LayerCreationOptions, PixelFunction
+  // LayerCreationOptions, PixelFunction.
   {
-    const char* test_xml = R"xml(
+    constexpr char kOptionListXml[] = R"xml(
       <OptionList>
         <Option name="SEL_OPT" type="string-select" scope="raster">
           <Value>VAL_A</Value>
@@ -1736,56 +1941,53 @@ TEST(GdalAlgorithmTest, BuiltinHelperAddArgsAndValidations) {
     EXPECT_FALSE(ConfigurableAlg::AddOptionsSuggestions(nullptr, GDAL_OF_RASTER,
                                                         "", suggestions));
     EXPECT_FALSE(ConfigurableAlg::AddOptionsSuggestions(
-        test_xml, GDAL_OF_RASTER | GDAL_OF_VECTOR, "", suggestions));
+        kOptionListXml, GDAL_OF_RASTER | GDAL_OF_VECTOR, "", suggestions));
     EXPECT_THAT(suggestions, Contains("SEL_OPT="));
     EXPECT_THAT(suggestions, Contains("BOOL_OPT="));
 
     suggestions.clear();
     EXPECT_TRUE(ConfigurableAlg::AddOptionsSuggestions(
-        test_xml, GDAL_OF_RASTER, "SEL_OPT=", suggestions));
+        kOptionListXml, GDAL_OF_RASTER, "SEL_OPT=", suggestions));
     EXPECT_THAT(suggestions, ElementsAre("VAL_A", "VAL_B"));
 
     suggestions.clear();
     EXPECT_TRUE(ConfigurableAlg::AddOptionsSuggestions(
-        test_xml, GDAL_OF_VECTOR, "BOOL_OPT=", suggestions));
+        kOptionListXml, GDAL_OF_VECTOR, "BOOL_OPT=", suggestions));
     EXPECT_THAT(suggestions, ElementsAre("NO", "YES"));
 
     suggestions.clear();
     EXPECT_TRUE(ConfigurableAlg::AddOptionsSuggestions(
-        test_xml, GDAL_OF_VECTOR, "BOOL_OPT=YES", suggestions));
+        kOptionListXml, GDAL_OF_VECTOR, "BOOL_OPT=YES", suggestions));
     EXPECT_THAT(suggestions, ElementsAre("BOOL_OPT=YES"));
 
     suggestions.clear();
     EXPECT_TRUE(ConfigurableAlg::AddOptionsSuggestions(
-        test_xml, GDAL_OF_RASTER, "SMALL_INT=", suggestions));
+        kOptionListXml, GDAL_OF_RASTER, "SMALL_INT=", suggestions));
     EXPECT_THAT(suggestions, ElementsAre("1", "2", "3"));
 
-    suggestions.clear();
-    EXPECT_TRUE(ConfigurableAlg::AddOptionsSuggestions(
-        test_xml, GDAL_OF_RASTER, "RANGE_BOTH=", suggestions));
-    EXPECT_EQ(2u, suggestions.size());
+    constexpr std::string_view kTwoSuggestionPrefixes[] = {
+        "RANGE_BOTH=",
+        "RANGE_MIN=",
+        "RANGE_MAX=",
+        "DESC_ONLY=",
+    };
+    for (const std::string_view prefix : kTwoSuggestionPrefixes) {
+      suggestions.clear();
+      EXPECT_TRUE(ConfigurableAlg::AddOptionsSuggestions(
+          kOptionListXml, GDAL_OF_RASTER, std::string(prefix), suggestions));
+      EXPECT_EQ(2u, suggestions.size());
+    }
 
-    suggestions.clear();
-    EXPECT_TRUE(ConfigurableAlg::AddOptionsSuggestions(
-        test_xml, GDAL_OF_RASTER, "RANGE_MIN=", suggestions));
-    EXPECT_EQ(2u, suggestions.size());
-
-    suggestions.clear();
-    EXPECT_TRUE(ConfigurableAlg::AddOptionsSuggestions(
-        test_xml, GDAL_OF_RASTER, "RANGE_MAX=", suggestions));
-    EXPECT_EQ(2u, suggestions.size());
-
-    suggestions.clear();
-    EXPECT_TRUE(ConfigurableAlg::AddOptionsSuggestions(
-        test_xml, GDAL_OF_RASTER, "DESC_ONLY=", suggestions));
-    EXPECT_EQ(2u, suggestions.size());
-
-    // OpenOptions / CreationOptions / LayerCreationOptions / PixelFunction args
+    // OpenOptions / CreationOptions / LayerCreationOptions / PixelFunction
+    // args.
     ConfigurableAlg alg;
-    GDALArgDatasetValue in_ds, out_ds;
+    GDALArgDatasetValue in_ds;
+    GDALArgDatasetValue out_ds;
     std::vector<std::string> in_fmts;
     std::string out_fmt;
-    std::vector<std::string> oo, co, lco;
+    std::vector<std::string> oo;
+    std::vector<std::string> co;
+    std::vector<std::string> lco;
     std::string pf_name;
     std::vector<std::string> pf_args;
 
@@ -1799,26 +2001,27 @@ TEST(GdalAlgorithmTest, BuiltinHelperAddArgsAndValidations) {
     auto& pf_arg = alg.AddPixelFunctionNameArg(&pf_name);
     auto& pfa_arg = alg.AddPixelFunctionArgsArg(&pf_args);
 
-    // Key=Value splitting on comma when unambiguous
+    // Key=Value splitting on comma when unambiguous.
     EXPECT_TRUE(oo_arg.Set(std::vector<std::string>{"A=B,C=\"D,E\""}));
     EXPECT_THAT(oo, ElementsAre("A=B", "C=\"D,E\""));
     {
-      QuietErrorGuard quiet;
+      WithQuietHandler quiet;
+      CPLErrorReset();
       EXPECT_FALSE(oo_arg.Set(std::vector<std::string>{"NO_EQUAL_SIGN"}));
+      CPLErrorReset();
     }
 
-    // Autocomplete open/creation/layer-creation options by filename extension
-    // first
+    // Autocomplete open/creation/layer-creation options by filename extension.
     ASSERT_TRUE(alg.GetArg(GDAL_ARG_NAME_INPUT)->SetDatasetName(tif_path));
     EXPECT_FALSE(oo_arg.GetAutoCompleteChoices("").empty());
     ASSERT_TRUE(
-        alg.GetArg(GDAL_ARG_NAME_OUTPUT)->SetDatasetName("/vsimem/o.tif"));
+        alg.GetArg(GDAL_ARG_NAME_OUTPUT)->SetDatasetName(VsiMemPath("o.tif")));
     EXPECT_FALSE(co_arg.GetAutoCompleteChoices("").empty());
-    ASSERT_TRUE(
-        alg.GetArg(GDAL_ARG_NAME_OUTPUT)->SetDatasetName("/vsimem/o.geojson"));
+    ASSERT_TRUE(alg.GetArg(GDAL_ARG_NAME_OUTPUT)
+                    ->SetDatasetName(VsiMemPath("o.geojson")));
     EXPECT_FALSE(lco_arg.GetAutoCompleteChoices("").empty());
 
-    // Now with explicit format
+    // Now with explicit format.
     ASSERT_TRUE(alg.GetArg(GDAL_ARG_NAME_INPUT_FORMAT)
                     ->Set(std::vector<std::string>{"GTiff"}));
     EXPECT_FALSE(oo_arg.GetAutoCompleteChoices("").empty());
@@ -1829,7 +2032,7 @@ TEST(GdalAlgorithmTest, BuiltinHelperAddArgsAndValidations) {
     ASSERT_TRUE(alg.GetArg(GDAL_ARG_NAME_OUTPUT_FORMAT)->Set("GeoJSON"));
     EXPECT_FALSE(lco_arg.GetAutoCompleteChoices("").empty());
 
-    // Pixel function args autocomplete
+    // Pixel function args autocomplete.
     EXPECT_TRUE(pf_arg.Set("min"));
     EXPECT_FALSE(pfa_arg.GetAutoCompleteChoices("").empty());
     EXPECT_TRUE(pf_arg.Set("scale"));
@@ -1838,10 +2041,10 @@ TEST(GdalAlgorithmTest, BuiltinHelperAddArgsAndValidations) {
     EXPECT_FALSE(pfa_arg.GetAutoCompleteChoices("").empty());
   }
 
-  // 6. AutoCompleteArrayName with multidimensional VRT dataset
+  // 6. AutoCompleteArrayName with multidimensional VRT dataset.
   {
-    const char* mdim_vrt = "/vsimem/test_mdim.vrt";
-    const char* mdim_xml = R"xml(<VRTDataset>
+    const std::string mdim_vrt = VsiMemPath("test_mdim.vrt");
+    constexpr std::string_view kMdimXml = R"xml(<VRTDataset>
       <Group name="/">
         <Array name="temperature">
           <DataType>Float32</DataType>
@@ -1849,14 +2052,12 @@ TEST(GdalAlgorithmTest, BuiltinHelperAddArgsAndValidations) {
         </Array>
       </Group>
     </VRTDataset>)xml";
-    VSILFILE* fp = VSIFOpenL(mdim_vrt, "wb");
-    ASSERT_NE(nullptr, fp);
-    VSIFWriteL(mdim_xml, 1, strlen(mdim_xml), fp);
-    VSIFCloseL(fp);
+    VsiMemTempWrapper mdim_wrapper(mdim_vrt, std::string(kMdimXml));
 
     ConfigurableAlg alg1;
     GDALArgDatasetValue in_ds;
-    std::vector<std::string> in_fmts, oo;
+    std::vector<std::string> in_fmts;
+    std::vector<std::string> oo;
     std::string arr;
     alg1.AddInputDatasetArg(&in_ds, GDAL_OF_MULTIDIM_RASTER);
     alg1.AddInputFormatsArg(&in_fmts);
@@ -1873,15 +2074,15 @@ TEST(GdalAlgorithmTest, BuiltinHelperAddArgsAndValidations) {
     ASSERT_TRUE(alg2.GetArg(GDAL_ARG_NAME_INPUT)
                     ->Set(std::vector<std::string>{mdim_vrt}));
     EXPECT_THAT(arr_arg2.GetAutoCompleteChoices(""), Contains("/temperature"));
-
-    VSIUnlink(mdim_vrt);
   }
 
   // 7. AddOverwriteLayerArg and AddAppendLayerArg actions and missing --update
-  // error
+  // error.
   {
     ConfigurableAlg alg_ok;
-    bool update = false, ov_lyr = false, app_lyr = false;
+    bool update = false;
+    bool ov_lyr = false;
+    bool app_lyr = false;
     alg_ok.AddUpdateArg(&update);
     auto& ov_arg = alg_ok.AddOverwriteLayerArg(&ov_lyr);
     auto& app_arg = alg_ok.AddAppendLayerArg(&app_lyr);
@@ -1891,24 +2092,26 @@ TEST(GdalAlgorithmTest, BuiltinHelperAddArgsAndValidations) {
     EXPECT_TRUE(app_arg.Set(true));
     EXPECT_TRUE(update);
 
-    QuietErrorGuard quiet;
     ConfigurableAlg alg_no_upd1;
     alg_no_upd1.AddOverwriteLayerArg(&ov_lyr);
-    EXPECT_FALSE(alg_no_upd1.ValidateArguments());
 
     ConfigurableAlg alg_no_upd2;
     alg_no_upd2.AddAppendLayerArg(&app_lyr);
-    EXPECT_FALSE(alg_no_upd2.ValidateArguments());
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_FALSE(alg_no_upd1.ValidateArguments());
+      EXPECT_FALSE(alg_no_upd2.ValidateArguments());
+      CPLErrorReset();
+    }
   }
-
-  VSIUnlink(tif_path.c_str());
-  VSIUnlink(json_path.c_str());
 }
 
 TEST(GdalAlgorithmTest, GDALGOutputAndStreamedExecution) {
-  GDALAllRegister();
+  GDALRegister_GTiff();
+  absl::Cleanup cleanup_dir = [] { VSIRmdirRecursive(kVsiMemDir); };
 
-  const std::string gdalg_file = "/vsimem/test_out.gdalg.json";
+  const std::string gdalg_file = VsiMemPath("test_out.gdalg.json");
   std::string out_json;
   EXPECT_TRUE(
       GDALAlgorithm::SaveGDALG("", out_json, "gdal raster info in.tif"));
@@ -1916,10 +2119,11 @@ TEST(GdalAlgorithmTest, GDALGOutputAndStreamedExecution) {
 
   ConfigurableAlg alg("convert");
   alg.SetCallPath({"gdal", "raster", "convert"});
-  test_gdal_algorithm::test_gdal_algorithm::SetSupportsStreamedOutput(alg,
-                                                                      true);
+  ::test_gdal_algorithm::test_gdal_algorithm::SetSupportsStreamedOutput(alg,
+                                                                        true);
 
-  GDALArgDatasetValue in_ds, out_ds;
+  GDALArgDatasetValue in_ds;
+  GDALArgDatasetValue out_ds;
   std::string out_fmt;
   bool overwrite = false;
   alg.AddInputDatasetArg(&in_ds, GDAL_OF_RASTER).SetAutoOpenDataset(false);
@@ -1928,19 +2132,21 @@ TEST(GdalAlgorithmTest, GDALGOutputAndStreamedExecution) {
                          /*bGDALGAllowed=*/true);
   alg.AddOverwriteArg(&overwrite);
 
-  EXPECT_TRUE(alg.ParseCommandLineArguments({"/vsimem/in.tif", gdalg_file}));
+  const std::string in_tif = VsiMemPath("in.tif");
+  EXPECT_TRUE(alg.ParseCommandLineArguments({in_tif, gdalg_file}));
   EXPECT_TRUE(alg.IsGDALGOutput());
   EXPECT_TRUE(alg.Run());
   EXPECT_FALSE(alg.run_called_);  // Handled by ProcessGDALGOutput!
 
-  // Running again without --overwrite should fail because gdalg_file now exists
+  // Running again without --overwrite should fail because gdalg_file now
+  // exists.
   {
-    QuietErrorGuard quiet;
     ConfigurableAlg alg2("convert");
     alg2.SetCallPath({"gdal", "raster", "convert"});
-    test_gdal_algorithm::test_gdal_algorithm::SetSupportsStreamedOutput(alg2,
-                                                                        true);
-    GDALArgDatasetValue in_ds2, out_ds2;
+    ::test_gdal_algorithm::test_gdal_algorithm::SetSupportsStreamedOutput(alg2,
+                                                                          true);
+    GDALArgDatasetValue in_ds2;
+    GDALArgDatasetValue out_ds2;
     std::string out_fmt2;
     bool overwrite2 = false;
     alg2.AddInputDatasetArg(&in_ds2, GDAL_OF_RASTER).SetAutoOpenDataset(false);
@@ -1950,35 +2156,40 @@ TEST(GdalAlgorithmTest, GDALGOutputAndStreamedExecution) {
     alg2.AddOverwriteArg(&overwrite2);
     // ProcessGDALGOutput checks VSIStatL when --output-format=GDALG is passed
     // and --overwrite is false (bypassing ProcessDatasetArg
-    // ifAutoOpenDataset=false)
-    in_ds2.Set("/vsimem/in.tif");
+    // ifAutoOpenDataset=false).
+    in_ds2.Set(in_tif);
     out_ds2.Set(gdalg_file);
-    alg2.GetArg(GDAL_ARG_NAME_OUTPUT_FORMAT)->Set("GDALG");
+    ASSERT_TRUE(alg2.GetArg(GDAL_ARG_NAME_OUTPUT_FORMAT)->Set("GDALG"));
+    WithQuietHandler quiet;
+    CPLErrorReset();
     EXPECT_EQ(ConfigurableAlg::ProcessGDALGOutputRet::GDALG_ERROR,
               alg2.ProcessGDALGOutput());
+    CPLErrorReset();
   }
 
-  // Streamed output execution safety check
+  // Streamed output execution safety check.
   {
-    QuietErrorGuard quiet;
     ConfigurableAlg stream_alg("convert");
     std::string fmt;
     stream_alg.AddOutputFormatArg(&fmt, /*bStreamAllowed=*/true);
     stream_alg.SetExecutionForStreamedOutput();
     ASSERT_TRUE(stream_alg.GetArg(GDAL_ARG_NAME_OUTPUT_FORMAT)->Set("GTiff"));
-    EXPECT_FALSE(stream_alg.Run());
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_FALSE(stream_alg.Run());
+      CPLErrorReset();
+    }
 
     ASSERT_TRUE(stream_alg.GetArg(GDAL_ARG_NAME_OUTPUT_FORMAT)->Set("stream"));
     EXPECT_TRUE(stream_alg.Run());
   }
-
-  VSIUnlink(gdalg_file.c_str());
 }
 
 TEST(GdalAlgorithmTest, UsageForCLIAndJSONAndAutoComplete) {
-  GDALAllRegister();
+  absl::Cleanup cleanup_dir = [] { VSIRmdirRecursive(kVsiMemDir); };
 
-  // 1. Container algorithm with sub-algorithms
+  // 1. Container algorithm with sub-algorithms.
   {
     ConfigurableAlg container("gdal", "Main GDAL CLI", "/programs/gdal.html");
     container.SetCallPath({"gdal"});
@@ -1999,7 +2210,7 @@ TEST(GdalAlgorithmTest, UsageForCLIAndJSONAndAutoComplete) {
     std::string json_usage = container.GetUsageAsJSON();
     EXPECT_THAT(json_usage, HasSubstr("sub_algorithms"));
 
-    // AutoComplete on subalgorithms: prefix matching 2 subalgorithms ("sub_")
+    // AutoComplete on subalgorithms: prefix matching 2 subalgorithms ("sub_").
     std::vector<std::string> ac_args = {"sub_"};
     auto ac_res =
         container.GetAutoComplete(ac_args, /*lastWordIsComplete=*/false,
@@ -2007,7 +2218,7 @@ TEST(GdalAlgorithmTest, UsageForCLIAndJSONAndAutoComplete) {
     EXPECT_THAT(ac_res, Contains("sub_alpha"));
     EXPECT_THAT(ac_res, Contains("sub_beta"));
 
-    // AutoComplete recursing into sub_alpha
+    // AutoComplete recursing into sub_alpha.
     std::vector<std::string> ac_sub_args = {"sub_alpha", "--"};
     auto ac_sub_res =
         container.GetAutoComplete(ac_sub_args, false, /*showAllOptions=*/false);
@@ -2015,25 +2226,29 @@ TEST(GdalAlgorithmTest, UsageForCLIAndJSONAndAutoComplete) {
     EXPECT_THAT(ac_sub_res, Contains("--text"));
   }
 
-  // 2. Leaf algorithm with rich argument types for CLI and JSON usage
+  // 2. Leaf algorithm with rich argument types for CLI and JSON usage.
   {
     ConfigurableAlg alg("rich_alg", "Rich description", "/programs/rich.html");
     alg.SetCallPath({"gdal", "raster", "rich_alg"});
-    test_gdal_algorithm::test_gdal_algorithm::SetLongDescription(
+    ::test_gdal_algorithm::test_gdal_algorithm::SetLongDescription(
         alg, "Detailed long description.");
-    test_gdal_algorithm::test_gdal_algorithm::SetSupportsStreamedOutput(alg,
-                                                                        true);
+    ::test_gdal_algorithm::test_gdal_algorithm::SetSupportsStreamedOutput(alg,
+                                                                          true);
     alg.AllowArbitraryLongNameArgs();
 
-    GDALArgDatasetValue in_ds, out_ds;
+    GDALArgDatasetValue in_ds;
+    GDALArgDatasetValue out_ds;
     std::vector<GDALArgDatasetValue> opt_ds_list;
     bool b_def_true = true;
     std::string s_def = "hello";
     int i_def = 5;
     double d_def = 1.5;
-    std::vector<std::string> sl_def1, sl_def2;
-    std::vector<int> il_def1, il_def2;
-    std::vector<double> dl_def1, dl_def2;
+    std::vector<std::string> sl_def1;
+    std::vector<std::string> sl_def2;
+    std::vector<int> il_def1;
+    std::vector<int> il_def2;
+    std::vector<double> dl_def1;
+    std::vector<double> dl_def2;
     std::string out_only_str;
 
     alg.AddInputDatasetArg(&in_ds, GDAL_OF_RASTER);
@@ -2098,7 +2313,7 @@ TEST(GdalAlgorithmTest, UsageForCLIAndJSONAndAutoComplete) {
     EXPECT_THAT(json_str, HasSubstr("output_arguments"));
     EXPECT_THAT(json_str, HasSubstr("input_output_arguments"));
 
-    // Arbitrary user-provided arguments via GetArg
+    // Arbitrary user-provided arguments via GetArg.
     EXPECT_NE(nullptr, alg.GetArg("--custom.overwrite"));
     EXPECT_NE(nullptr, alg.GetArg("--oo"));
     EXPECT_NE(nullptr, alg.GetArg("--co"));
@@ -2106,7 +2321,7 @@ TEST(GdalAlgorithmTest, UsageForCLIAndJSONAndAutoComplete) {
     EXPECT_NE(nullptr, alg.GetArg("--if"));
     EXPECT_NE(nullptr, alg.GetArg("--custom-str-arg"));
 
-    // AutoComplete options & values
+    // AutoComplete options & values.
     std::vector<std::string> ac1 = {"-"};
     EXPECT_FALSE(
         alg.GetAutoComplete(ac1, false, /*showAllOptions=*/true).empty());
@@ -2118,44 +2333,43 @@ TEST(GdalAlgorithmTest, UsageForCLIAndJSONAndAutoComplete) {
     EXPECT_THAT(alg.GetAutoComplete(ac3, false, false),
                 ElementsAre("hello", "world"));
 
-    // When value already matches the last choice, returns empty
+    // When value already matches the last choice, returns empty.
     std::vector<std::string> ac4 = {"--str-opt=world"};
     EXPECT_TRUE(alg.GetAutoComplete(ac4, false, false).empty());
 
     // When option has no choices or autocomplete function, returns description
-    // hint
+    // hint.
     std::vector<std::string> ac5 = {"--int-opt", "5"};
     EXPECT_EQ(2u, alg.GetAutoComplete(ac5, false, false).size());
 
-    // Filename completion via SetAutoCompleteFunctionForFilename
-    VSILFILE* fp = VSIFOpenL("/vsimem/ac_file.tif", "wb");
-    VSIFCloseL(fp);
-    VSIMkdir("/vsimem/ac_subdir", 0755);
+    // Filename completion via SetAutoCompleteFunctionForFilename.
+    const std::string ac_file_path = VsiMemPath("ac_file.tif");
+    const std::string ac_subdir_path = VsiMemPath("ac_subdir");
+    VsiMemTempWrapper ac_file(ac_file_path, "");
+    ASSERT_EQ(0, VSIMkdir(ac_subdir_path.c_str(), 0755));
 
     std::vector<std::string> ac_vsi = {"/vsim"};
     EXPECT_THAT(alg.GetAutoComplete(ac_vsi, false, false),
                 Contains("/vsimem/"));
 
-    std::vector<std::string> ac_dir = {"/vsimem/"};
+    std::vector<std::string> ac_dir = {std::string(kVsiMemDir) + "/"};
     auto dir_res = alg.GetAutoComplete(ac_dir, false, false);
-    EXPECT_THAT(dir_res, Contains("/vsimem/ac_file.tif"));
-    EXPECT_THAT(dir_res, Contains("/vsimem/ac_subdir/"));
+    EXPECT_THAT(dir_res, Contains(ac_file_path));
+    EXPECT_THAT(dir_res, Contains(ac_subdir_path + "/"));
 
-    // Existing file returns empty
-    std::vector<std::string> ac_existing = {"/vsimem/ac_file.tif"};
+    // Existing file returns empty.
+    std::vector<std::string> ac_existing = {ac_file_path};
     EXPECT_TRUE(alg.GetAutoComplete(ac_existing, false, false).empty());
-
-    VSIUnlink("/vsimem/ac_file.tif");
-    VSIRmdir("/vsimem/ac_subdir");
   }
 
   // 3. GDALContainerAlgorithm and special action propagation (--help,
-  // --json-usage)
+  // --json-usage).
   {
     GDALContainerAlgorithm container("cont", "Container desc");
     EXPECT_FALSE(container.Run());
 
-    ConfigurableAlg a1, a2;
+    ConfigurableAlg a1;
+    ConfigurableAlg a2;
     EXPECT_TRUE(a1.ParseCommandLineArguments({"--help"}));
     EXPECT_TRUE(a1.PropagateSpecialActionTo(&a2));
     EXPECT_TRUE(a2.IsHelpRequested());
@@ -2167,33 +2381,57 @@ TEST(GdalAlgorithmTest, UsageForCLIAndJSONAndAutoComplete) {
     EXPECT_TRUE(j1.Run());
   }
 
-  // 4. AddArg / AddAliasFor / AddShortNameAliasFor error paths & operator[]
+  // 4. AddArg / AddAliasFor / AddShortNameAliasFor error paths & operator[].
   {
-    QuietErrorGuard quiet;
     ConfigurableAlg alg;
-    int v1 = 0, v2 = 0;
-    alg.AddArg("-bad-start", 0, "desc", &v1);
-    alg.AddArg("bad=equal", 0, "desc", &v1);
-    alg.AddArg("bad-short", '-', "desc", &v1);
+    int v1 = 0;
+    int v2 = 0;
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      alg.AddArg("-bad-start", 0, "desc", &v1);
+      alg.AddArg("bad=equal", 0, "desc", &v1);
+      alg.AddArg("bad-short", '-', "desc", &v1);
+      CPLErrorReset();
+    }
     auto& good = alg.AddArg("good", 'g', "desc", &v1);
-    alg.AddArg("good", 'g', "dup", &v2);
-    good.AddAlias("good");
-    good.AddShortNameAlias('g');
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      alg.AddArg("good", 'g', "dup", &v2);
+      good.AddAlias("good");
+      good.AddShortNameAlias('g');
+      CPLErrorReset();
+    }
 
     EXPECT_EQ(nullptr, alg.GetArg("---"));
     EXPECT_EQ(nullptr, alg.GetArg("goo", /*suggestionAllowed=*/true));
-    EXPECT_EQ("dummy", alg["nonexistent"].GetName());
+
     const ConfigurableAlg& calg = alg;
-    EXPECT_EQ("dummy", calg["nonexistent"].GetName());
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_EQ("dummy", alg["nonexistent"].GetName());
+      EXPECT_EQ("dummy", calg["nonexistent"].GetName());
+      CPLErrorReset();
+    }
   }
 }
 
 TEST(GdalAlgorithmTest, CAPI) {
-  GDALAllRegister();
+  GDALRegister_MEM();
+
+  using GDALAlgorithmPtr =
+      std::unique_ptr<GDALAlgorithmHS, decltype(&GDALAlgorithmRelease)>;
+  using GDALAlgorithmArgPtr =
+      std::unique_ptr<GDALAlgorithmArgHS, decltype(&GDALAlgorithmArgRelease)>;
+  using GDALArgDatasetValuePtr =
+      std::unique_ptr<GDALArgDatasetValueHS,
+                      decltype(&GDALArgDatasetValueRelease)>;
 
   ConfigurableAlg cpp_alg("c_test_alg", "Short desc", "/programs/c_test.html");
-  test_gdal_algorithm::test_gdal_algorithm::SetLongDescription(cpp_alg,
-                                                               "Long desc");
+  ::test_gdal_algorithm::test_gdal_algorithm::SetLongDescription(cpp_alg,
+                                                                 "Long desc");
   cpp_alg.RegisterSubAlgorithm<CustomSubAlg1>();
 
   bool b_val = false;
@@ -2238,185 +2476,219 @@ TEST(GdalAlgorithmTest, CAPI) {
                GDALAlgorithmGetHelpFullURL(h_alg));
   EXPECT_TRUE(GDALAlgorithmHasSubAlgorithms(h_alg));
 
-  char** sub_names = GDALAlgorithmGetSubAlgorithmNames(h_alg);
-  EXPECT_NE(nullptr, sub_names);
-  CSLDestroy(sub_names);
+  StringListPtr sub_names(GDALAlgorithmGetSubAlgorithmNames(h_alg), CSLDestroy);
+  ASSERT_NE(nullptr, sub_names);
+  EXPECT_THAT(CslToVector(sub_names.get()), ElementsAre("sub_alpha"));
 
-  GDALAlgorithmH h_sub =
-      GDALAlgorithmInstantiateSubAlgorithm(h_alg, "sub_alpha");
+  GDALAlgorithmPtr h_sub(
+      GDALAlgorithmInstantiateSubAlgorithm(h_alg, "sub_alpha"),
+      GDALAlgorithmRelease);
   ASSERT_NE(nullptr, h_sub);
   const char* sub_cli[] = {"-f", nullptr};
-  EXPECT_TRUE(GDALAlgorithmParseCommandLineArguments(h_sub, sub_cli));
-  GDALAlgorithmH h_actual = GDALAlgorithmGetActualAlgorithm(h_sub);
+  EXPECT_TRUE(GDALAlgorithmParseCommandLineArguments(h_sub.get(), sub_cli));
+  GDALAlgorithmPtr h_actual(GDALAlgorithmGetActualAlgorithm(h_sub.get()),
+                            GDALAlgorithmRelease);
   ASSERT_NE(nullptr, h_actual);
-  GDALAlgorithmRelease(h_actual);
-  EXPECT_TRUE(GDALAlgorithmRun(h_sub, nullptr, nullptr));
-  EXPECT_TRUE(GDALAlgorithmFinalize(h_sub));
-  GDALAlgorithmRelease(h_sub);
+  EXPECT_TRUE(GDALAlgorithmRun(h_sub.get(), nullptr, nullptr));
+  EXPECT_TRUE(GDALAlgorithmFinalize(h_sub.get()));
 
-  char* json_usage = GDALAlgorithmGetUsageAsJSON(h_alg);
+  std::unique_ptr<char, CplFreeDeleter> json_usage(
+      GDALAlgorithmGetUsageAsJSON(h_alg));
   EXPECT_NE(nullptr, json_usage);
-  CPLFree(json_usage);
 
-  char** arg_names = GDALAlgorithmGetArgNames(h_alg);
+  StringListPtr arg_names(GDALAlgorithmGetArgNames(h_alg), CSLDestroy);
   EXPECT_NE(nullptr, arg_names);
-  CSLDestroy(arg_names);
 
-  // Test GDALAlgorithmGetArgNonConst creating user-provided arg
-  GDALAlgorithmArgH h_user_arg =
-      GDALAlgorithmGetArgNonConst(h_alg, "user-created");
+  // Test GDALAlgorithmGetArgNonConst creating user-provided arg.
+  GDALAlgorithmArgPtr h_user_arg(
+      GDALAlgorithmGetArgNonConst(h_alg, "user-created"),
+      GDALAlgorithmArgRelease);
   ASSERT_NE(nullptr, h_user_arg);
-  GDALAlgorithmArgRelease(h_user_arg);
 
-  // Inspect and mutate each argument type via C API
-  GDALAlgorithmArgH hb = GDALAlgorithmGetArg(h_alg, "b-arg");
-  GDALAlgorithmArgH hs = GDALAlgorithmGetArg(h_alg, "s-arg");
-  GDALAlgorithmArgH hi = GDALAlgorithmGetArg(h_alg, "i-arg");
-  GDALAlgorithmArgH hd = GDALAlgorithmGetArg(h_alg, "d-arg");
-  GDALAlgorithmArgH hds = GDALAlgorithmGetArg(h_alg, "ds-arg");
-  GDALAlgorithmArgH hsl = GDALAlgorithmGetArg(h_alg, "sl-arg");
-  GDALAlgorithmArgH hil = GDALAlgorithmGetArg(h_alg, "il-arg");
-  GDALAlgorithmArgH hdl = GDALAlgorithmGetArg(h_alg, "dl-arg");
-  GDALAlgorithmArgH hdsl = GDALAlgorithmGetArg(h_alg, "dsl-arg");
+  // Inspect and mutate each argument type via C API.
+  GDALAlgorithmArgPtr hb(GDALAlgorithmGetArg(h_alg, "b-arg"),
+                         GDALAlgorithmArgRelease);
+  GDALAlgorithmArgPtr hs(GDALAlgorithmGetArg(h_alg, "s-arg"),
+                         GDALAlgorithmArgRelease);
+  GDALAlgorithmArgPtr hi(GDALAlgorithmGetArg(h_alg, "i-arg"),
+                         GDALAlgorithmArgRelease);
+  GDALAlgorithmArgPtr hd(GDALAlgorithmGetArg(h_alg, "d-arg"),
+                         GDALAlgorithmArgRelease);
+  GDALAlgorithmArgPtr hds(GDALAlgorithmGetArg(h_alg, "ds-arg"),
+                          GDALAlgorithmArgRelease);
+  GDALAlgorithmArgPtr hsl(GDALAlgorithmGetArg(h_alg, "sl-arg"),
+                          GDALAlgorithmArgRelease);
+  GDALAlgorithmArgPtr hil(GDALAlgorithmGetArg(h_alg, "il-arg"),
+                          GDALAlgorithmArgRelease);
+  GDALAlgorithmArgPtr hdl(GDALAlgorithmGetArg(h_alg, "dl-arg"),
+                          GDALAlgorithmArgRelease);
+  GDALAlgorithmArgPtr hdsl(GDALAlgorithmGetArg(h_alg, "dsl-arg"),
+                           GDALAlgorithmArgRelease);
+  ASSERT_NE(nullptr, hb);
+  ASSERT_NE(nullptr, hs);
+  ASSERT_NE(nullptr, hi);
+  ASSERT_NE(nullptr, hd);
+  ASSERT_NE(nullptr, hds);
+  ASSERT_NE(nullptr, hsl);
+  ASSERT_NE(nullptr, hil);
+  ASSERT_NE(nullptr, hdl);
+  ASSERT_NE(nullptr, hdsl);
 
-  EXPECT_STREQ("b-arg", GDALAlgorithmArgGetName(hb));
-  EXPECT_EQ(GAAT_BOOLEAN, GDALAlgorithmArgGetType(hb));
-  EXPECT_STREQ("Bool arg", GDALAlgorithmArgGetDescription(hb));
-  EXPECT_STREQ("b", GDALAlgorithmArgGetShortName(hb));
-  char** aliases = GDALAlgorithmArgGetAliases(hb);
-  CSLDestroy(aliases);
-  EXPECT_STREQ("", GDALAlgorithmArgGetMetaVar(hb));
-  EXPECT_STREQ("Base", GDALAlgorithmArgGetCategory(hb));
-  EXPECT_TRUE(GDALAlgorithmArgIsPositional(hb));
-  EXPECT_TRUE(GDALAlgorithmArgIsRequired(hb));
-  EXPECT_EQ(0, GDALAlgorithmArgGetMinCount(hb));
-  EXPECT_EQ(1, GDALAlgorithmArgGetMaxCount(hb));
-  EXPECT_TRUE(GDALAlgorithmArgGetPackedValuesAllowed(hb));
-  EXPECT_TRUE(GDALAlgorithmArgGetRepeatedArgAllowed(hb));
-  EXPECT_FALSE(GDALAlgorithmArgIsExplicitlySet(hb));
-  EXPECT_TRUE(GDALAlgorithmArgHasDefaultValue(hb));
-  EXPECT_TRUE(GDALAlgorithmArgGetDefaultAsBoolean(hb));
-  EXPECT_FALSE(GDALAlgorithmArgIsHidden(hb));
-  EXPECT_FALSE(GDALAlgorithmArgIsHiddenForCLI(hb));
-  EXPECT_FALSE(GDALAlgorithmArgIsHiddenForAPI(hb));
-  EXPECT_TRUE(GDALAlgorithmArgIsInput(hb));
-  EXPECT_FALSE(GDALAlgorithmArgIsOutput(hb));
-  EXPECT_STREQ("mex_c", GDALAlgorithmArgGetMutualExclusionGroup(hb));
+  EXPECT_STREQ("b-arg", GDALAlgorithmArgGetName(hb.get()));
+  EXPECT_EQ(GAAT_BOOLEAN, GDALAlgorithmArgGetType(hb.get()));
+  EXPECT_STREQ("Bool arg", GDALAlgorithmArgGetDescription(hb.get()));
+  EXPECT_STREQ("b", GDALAlgorithmArgGetShortName(hb.get()));
+  StringListPtr aliases(GDALAlgorithmArgGetAliases(hb.get()), CSLDestroy);
+  EXPECT_THAT(CslToVector(aliases.get()), ElementsAre("bool-alias"));
+  EXPECT_STREQ("", GDALAlgorithmArgGetMetaVar(hb.get()));
+  EXPECT_STREQ("Base", GDALAlgorithmArgGetCategory(hb.get()));
+  EXPECT_TRUE(GDALAlgorithmArgIsPositional(hb.get()));
+  EXPECT_TRUE(GDALAlgorithmArgIsRequired(hb.get()));
+  EXPECT_EQ(0, GDALAlgorithmArgGetMinCount(hb.get()));
+  EXPECT_EQ(1, GDALAlgorithmArgGetMaxCount(hb.get()));
+  EXPECT_TRUE(GDALAlgorithmArgGetPackedValuesAllowed(hb.get()));
+  EXPECT_TRUE(GDALAlgorithmArgGetRepeatedArgAllowed(hb.get()));
+  EXPECT_FALSE(GDALAlgorithmArgIsExplicitlySet(hb.get()));
+  EXPECT_TRUE(GDALAlgorithmArgHasDefaultValue(hb.get()));
+  EXPECT_TRUE(GDALAlgorithmArgGetDefaultAsBoolean(hb.get()));
+  EXPECT_FALSE(GDALAlgorithmArgIsHidden(hb.get()));
+  EXPECT_FALSE(GDALAlgorithmArgIsHiddenForCLI(hb.get()));
+  EXPECT_FALSE(GDALAlgorithmArgIsHiddenForAPI(hb.get()));
+  EXPECT_TRUE(GDALAlgorithmArgIsInput(hb.get()));
+  EXPECT_FALSE(GDALAlgorithmArgIsOutput(hb.get()));
+  EXPECT_STREQ("mex_c", GDALAlgorithmArgGetMutualExclusionGroup(hb.get()));
 
-  char** mitem = GDALAlgorithmArgGetMetadataItem(hb, "meta_key");
-  EXPECT_NE(nullptr, mitem);
-  CSLDestroy(mitem);
-  EXPECT_EQ(nullptr, GDALAlgorithmArgGetMetadataItem(hb, "nonexistent"));
+  StringListPtr mitem(GDALAlgorithmArgGetMetadataItem(hb.get(), "meta_key"),
+                      CSLDestroy);
+  ASSERT_NE(nullptr, mitem);
+  EXPECT_THAT(CslToVector(mitem.get()), ElementsAre("meta_val"));
+  EXPECT_EQ(nullptr, GDALAlgorithmArgGetMetadataItem(hb.get(), "nonexistent"));
 
-  char** choices = GDALAlgorithmArgGetChoices(hs);
-  EXPECT_NE(nullptr, choices);
-  CSLDestroy(choices);
+  StringListPtr choices(GDALAlgorithmArgGetChoices(hs.get()), CSLDestroy);
+  ASSERT_NE(nullptr, choices);
+  EXPECT_THAT(CslToVector(choices.get()), ElementsAre("def_s", "other_s"));
 
-  // Defaults & Getters/Setters across types
-  EXPECT_STREQ("def_s", GDALAlgorithmArgGetDefaultAsString(hs));
-  EXPECT_EQ(42, GDALAlgorithmArgGetDefaultAsInteger(hi));
-  EXPECT_DOUBLE_EQ(3.5, GDALAlgorithmArgGetDefaultAsDouble(hd));
-  char** def_sl = GDALAlgorithmArgGetDefaultAsStringList(hsl);
-  CSLDestroy(def_sl);
+  // Defaults & Getters/Setters across types.
+  EXPECT_STREQ("def_s", GDALAlgorithmArgGetDefaultAsString(hs.get()));
+  EXPECT_EQ(42, GDALAlgorithmArgGetDefaultAsInteger(hi.get()));
+  EXPECT_DOUBLE_EQ(3.5, GDALAlgorithmArgGetDefaultAsDouble(hd.get()));
+  StringListPtr def_sl(GDALAlgorithmArgGetDefaultAsStringList(hsl.get()),
+                       CSLDestroy);
+  ASSERT_NE(nullptr, def_sl);
+  EXPECT_THAT(CslToVector(def_sl.get()), ElementsAre("s1", "s2"));
   size_t count = 0;
-  EXPECT_NE(nullptr, GDALAlgorithmArgGetDefaultAsIntegerList(hil, &count));
-  EXPECT_EQ(2u, count);
-  EXPECT_NE(nullptr, GDALAlgorithmArgGetDefaultAsDoubleList(hdl, &count));
-  EXPECT_EQ(2u, count);
+  const int* def_il =
+      GDALAlgorithmArgGetDefaultAsIntegerList(hil.get(), &count);
+  ASSERT_NE(nullptr, def_il);
+  EXPECT_THAT(std::span<const int>(def_il, count), ElementsAre(1, 2));
+  const double* def_dl =
+      GDALAlgorithmArgGetDefaultAsDoubleList(hdl.get(), &count);
+  ASSERT_NE(nullptr, def_dl);
+  EXPECT_THAT(std::span<const double>(def_dl, count), ElementsAre(1.5, 2.5));
 
-  EXPECT_TRUE(GDALAlgorithmArgSetAsBoolean(hb, false));
-  EXPECT_FALSE(GDALAlgorithmArgGetAsBoolean(hb));
+  EXPECT_TRUE(GDALAlgorithmArgSetAsBoolean(hb.get(), false));
+  EXPECT_FALSE(GDALAlgorithmArgGetAsBoolean(hb.get()));
 
-  EXPECT_TRUE(GDALAlgorithmArgSetAsString(hs, "other_s"));
-  EXPECT_STREQ("other_s", GDALAlgorithmArgGetAsString(hs));
+  EXPECT_TRUE(GDALAlgorithmArgSetAsString(hs.get(), "other_s"));
+  EXPECT_STREQ("other_s", GDALAlgorithmArgGetAsString(hs.get()));
 
-  EXPECT_TRUE(GDALAlgorithmArgSetAsInteger(hi, 99));
-  EXPECT_EQ(99, GDALAlgorithmArgGetAsInteger(hi));
+  EXPECT_TRUE(GDALAlgorithmArgSetAsInteger(hi.get(), 99));
+  EXPECT_EQ(99, GDALAlgorithmArgGetAsInteger(hi.get()));
 
-  EXPECT_TRUE(GDALAlgorithmArgSetAsDouble(hd, 7.25));
-  EXPECT_DOUBLE_EQ(7.25, GDALAlgorithmArgGetAsDouble(hd));
+  EXPECT_TRUE(GDALAlgorithmArgSetAsDouble(hd.get(), 7.25));
+  EXPECT_DOUBLE_EQ(7.25, GDALAlgorithmArgGetAsDouble(hd.get()));
 
   const char* sl_c[] = {"x", "y", nullptr};
-  EXPECT_TRUE(GDALAlgorithmArgSetAsStringList(hsl, sl_c));
-  char** got_sl = GDALAlgorithmArgGetAsStringList(hsl);
-  CSLDestroy(got_sl);
+  EXPECT_TRUE(GDALAlgorithmArgSetAsStringList(hsl.get(), sl_c));
+  StringListPtr got_sl(GDALAlgorithmArgGetAsStringList(hsl.get()), CSLDestroy);
+  ASSERT_NE(nullptr, got_sl);
+  EXPECT_THAT(CslToVector(got_sl.get()), ElementsAre("x", "y"));
 
-  const int il_c[] = {10, 20, 30};
-  EXPECT_TRUE(GDALAlgorithmArgSetAsIntegerList(hil, 3, il_c));
-  EXPECT_NE(nullptr, GDALAlgorithmArgGetAsIntegerList(hil, &count));
-  EXPECT_EQ(3u, count);
+  constexpr std::array<int, 3> kIntList = {10, 20, 30};
+  EXPECT_TRUE(GDALAlgorithmArgSetAsIntegerList(hil.get(), kIntList.size(),
+                                               kIntList.data()));
+  const int* got_il = GDALAlgorithmArgGetAsIntegerList(hil.get(), &count);
+  ASSERT_NE(nullptr, got_il);
+  EXPECT_THAT(std::span<const int>(got_il, count), ElementsAre(10, 20, 30));
 
-  const double dl_c[] = {1.1, 2.2};
-  EXPECT_TRUE(GDALAlgorithmArgSetAsDoubleList(hdl, 2, dl_c));
-  EXPECT_NE(nullptr, GDALAlgorithmArgGetAsDoubleList(hdl, &count));
-  EXPECT_EQ(2u, count);
+  constexpr std::array<double, 2> kDoubleList = {1.1, 2.2};
+  EXPECT_TRUE(GDALAlgorithmArgSetAsDoubleList(hdl.get(), kDoubleList.size(),
+                                              kDoubleList.data()));
+  const double* got_dl = GDALAlgorithmArgGetAsDoubleList(hdl.get(), &count);
+  ASSERT_NE(nullptr, got_dl);
+  EXPECT_THAT(std::span<const double>(got_dl, count), ElementsAre(1.1, 2.2));
 
-  // Dataset Value C API
-  EXPECT_EQ(GDAL_OF_RASTER, GDALAlgorithmArgGetDatasetType(hds));
-  EXPECT_EQ(GADV_NAME | GADV_OBJECT, GDALAlgorithmArgGetDatasetInputFlags(hds));
-  EXPECT_EQ(GADV_OBJECT, GDALAlgorithmArgGetDatasetOutputFlags(hds));
-
-  GDALArgDatasetValueH h_dsv = GDALArgDatasetValueCreate();
-  ASSERT_NE(nullptr, h_dsv);
-  GDALArgDatasetValueSetName(h_dsv, "/vsimem/c_api.tif");
-  EXPECT_STREQ("/vsimem/c_api.tif", GDALArgDatasetValueGetName(h_dsv));
+  // Dataset Value C API.
+  EXPECT_EQ(GDAL_OF_RASTER, GDALAlgorithmArgGetDatasetType(hds.get()));
+  EXPECT_EQ(GADV_NAME | GADV_OBJECT,
+            GDALAlgorithmArgGetDatasetInputFlags(hds.get()));
+  EXPECT_EQ(GADV_OBJECT, GDALAlgorithmArgGetDatasetOutputFlags(hds.get()));
 
   auto mem_ds = CreateMemRaster();
-  GDALArgDatasetValueSetDataset(h_dsv, GDALDataset::ToHandle(mem_ds.get()));
+  ASSERT_NE(nullptr, mem_ds);
+
+  GDALArgDatasetValuePtr h_dsv(GDALArgDatasetValueCreate(),
+                               GDALArgDatasetValueRelease);
+  ASSERT_NE(nullptr, h_dsv);
+  const std::string c_api_tif = VsiMemPath("c_api.tif");
+  GDALArgDatasetValueSetName(h_dsv.get(), c_api_tif.c_str());
+  EXPECT_STREQ(c_api_tif.c_str(), GDALArgDatasetValueGetName(h_dsv.get()));
+
+  GDALArgDatasetValueSetDataset(h_dsv.get(),
+                                GDALDataset::ToHandle(mem_ds.get()));
   EXPECT_EQ(GDALDataset::ToHandle(mem_ds.get()),
-            GDALArgDatasetValueGetDatasetRef(h_dsv));
-  GDALDatasetH h_inc_ds = GDALArgDatasetValueGetDatasetIncreaseRefCount(h_dsv);
-  EXPECT_EQ(GDALDataset::ToHandle(mem_ds.get()), h_inc_ds);
-  GDALReleaseDataset(h_inc_ds);
-
-  EXPECT_TRUE(GDALAlgorithmArgSetAsDatasetValue(hds, h_dsv));
-  GDALArgDatasetValueH h_got_dsv = GDALAlgorithmArgGetAsDatasetValue(hds);
-  ASSERT_NE(nullptr, h_got_dsv);
-  EXPECT_EQ(GDALDataset::ToHandle(mem_ds.get()),
-            GDALArgDatasetValueGetDatasetRef(h_got_dsv));
-  GDALArgDatasetValueRelease(h_got_dsv);
-  GDALArgDatasetValueRelease(h_dsv);
-
-  EXPECT_TRUE(
-      GDALAlgorithmArgSetDataset(hds, GDALDataset::ToHandle(mem_ds.get())));
-
-  GDALDatasetH ds_arr[] = {GDALDataset::ToHandle(mem_ds.get())};
-  EXPECT_TRUE(GDALAlgorithmArgSetDatasets(hdsl, 1, ds_arr));
-  const char* ds_names[] = {"/vsimem/n1.tif", "/vsimem/n2.tif", nullptr};
-  EXPECT_TRUE(GDALAlgorithmArgSetDatasetNames(hdsl, ds_names));
-  EXPECT_TRUE(GDALAlgorithmArgSetDataset(hds, nullptr));
-  EXPECT_TRUE(GDALAlgorithmArgSetDatasets(hdsl, 0, nullptr));
-
-  // Wrong-type calls on C API getters (error paths)
+            GDALArgDatasetValueGetDatasetRef(h_dsv.get()));
+  GDALDatasetH h_inc_ds =
+      GDALArgDatasetValueGetDatasetIncreaseRefCount(h_dsv.get());
+  ASSERT_NE(nullptr, h_inc_ds);
   {
-    QuietErrorGuard quiet;
-    EXPECT_FALSE(GDALAlgorithmArgGetDefaultAsBoolean(hs));
-    EXPECT_EQ(nullptr, GDALAlgorithmArgGetDefaultAsString(hb));
-    EXPECT_EQ(0, GDALAlgorithmArgGetDefaultAsInteger(hb));
-    EXPECT_DOUBLE_EQ(0.0, GDALAlgorithmArgGetDefaultAsDouble(hb));
-    EXPECT_EQ(nullptr, GDALAlgorithmArgGetDefaultAsStringList(hb));
-    EXPECT_EQ(nullptr, GDALAlgorithmArgGetDefaultAsIntegerList(hb, &count));
-    EXPECT_EQ(nullptr, GDALAlgorithmArgGetDefaultAsDoubleList(hb, &count));
-
-    EXPECT_FALSE(GDALAlgorithmArgGetAsBoolean(hs));
-    EXPECT_EQ(nullptr, GDALAlgorithmArgGetAsString(hb));
-    EXPECT_EQ(nullptr, GDALAlgorithmArgGetAsDatasetValue(hb));
-    EXPECT_EQ(0, GDALAlgorithmArgGetAsInteger(hb));
-    EXPECT_DOUBLE_EQ(0.0, GDALAlgorithmArgGetAsDouble(hb));
-    EXPECT_EQ(nullptr, GDALAlgorithmArgGetAsStringList(hb));
-    EXPECT_EQ(nullptr, GDALAlgorithmArgGetAsIntegerList(hb, &count));
-    EXPECT_EQ(nullptr, GDALAlgorithmArgGetAsDoubleList(hb, &count));
+    absl::Cleanup release_inc_ds = [h_inc_ds] { GDALReleaseDataset(h_inc_ds); };
+    EXPECT_EQ(GDALDataset::ToHandle(mem_ds.get()), h_inc_ds);
   }
 
-  GDALAlgorithmArgRelease(hb);
-  GDALAlgorithmArgRelease(hs);
-  GDALAlgorithmArgRelease(hi);
-  GDALAlgorithmArgRelease(hd);
-  GDALAlgorithmArgRelease(hds);
-  GDALAlgorithmArgRelease(hsl);
-  GDALAlgorithmArgRelease(hil);
-  GDALAlgorithmArgRelease(hdl);
-  GDALAlgorithmArgRelease(hdsl);
+  EXPECT_TRUE(GDALAlgorithmArgSetAsDatasetValue(hds.get(), h_dsv.get()));
+  GDALArgDatasetValuePtr h_got_dsv(GDALAlgorithmArgGetAsDatasetValue(hds.get()),
+                                   GDALArgDatasetValueRelease);
+  ASSERT_NE(nullptr, h_got_dsv);
+  EXPECT_EQ(GDALDataset::ToHandle(mem_ds.get()),
+            GDALArgDatasetValueGetDatasetRef(h_got_dsv.get()));
+
+  EXPECT_TRUE(GDALAlgorithmArgSetDataset(hds.get(),
+                                         GDALDataset::ToHandle(mem_ds.get())));
+
+  GDALDatasetH ds_arr[] = {GDALDataset::ToHandle(mem_ds.get())};
+  EXPECT_TRUE(GDALAlgorithmArgSetDatasets(hdsl.get(), 1, ds_arr));
+  const std::string n1_tif = VsiMemPath("n1.tif");
+  const std::string n2_tif = VsiMemPath("n2.tif");
+  const char* ds_names[] = {n1_tif.c_str(), n2_tif.c_str(), nullptr};
+  EXPECT_TRUE(GDALAlgorithmArgSetDatasetNames(hdsl.get(), ds_names));
+  EXPECT_TRUE(GDALAlgorithmArgSetDataset(hds.get(), nullptr));
+  EXPECT_TRUE(GDALAlgorithmArgSetDatasets(hdsl.get(), 0, nullptr));
+
+  // Wrong-type calls on C API getters (error paths).
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_FALSE(GDALAlgorithmArgGetDefaultAsBoolean(hs.get()));
+    EXPECT_EQ(nullptr, GDALAlgorithmArgGetDefaultAsString(hb.get()));
+    EXPECT_EQ(0, GDALAlgorithmArgGetDefaultAsInteger(hb.get()));
+    EXPECT_DOUBLE_EQ(0.0, GDALAlgorithmArgGetDefaultAsDouble(hb.get()));
+    EXPECT_EQ(nullptr, GDALAlgorithmArgGetDefaultAsStringList(hb.get()));
+    EXPECT_EQ(nullptr,
+              GDALAlgorithmArgGetDefaultAsIntegerList(hb.get(), &count));
+    EXPECT_EQ(nullptr,
+              GDALAlgorithmArgGetDefaultAsDoubleList(hb.get(), &count));
+    EXPECT_FALSE(GDALAlgorithmArgGetAsBoolean(hs.get()));
+    EXPECT_EQ(nullptr, GDALAlgorithmArgGetAsString(hb.get()));
+    EXPECT_EQ(nullptr, GDALAlgorithmArgGetAsDatasetValue(hb.get()));
+    EXPECT_EQ(0, GDALAlgorithmArgGetAsInteger(hb.get()));
+    EXPECT_DOUBLE_EQ(0.0, GDALAlgorithmArgGetAsDouble(hb.get()));
+    EXPECT_EQ(nullptr, GDALAlgorithmArgGetAsStringList(hb.get()));
+    EXPECT_EQ(nullptr, GDALAlgorithmArgGetAsIntegerList(hb.get(), &count));
+    EXPECT_EQ(nullptr, GDALAlgorithmArgGetAsDoubleList(hb.get(), &count));
+    CPLErrorReset();
+  }
 }
 
 }  // namespace
+}  // namespace autotest2

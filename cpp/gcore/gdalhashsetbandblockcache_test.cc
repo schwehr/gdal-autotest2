@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,19 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests gcore/gdalhashsetbandblockcache.cpp.
+// Tests hash-set band block cache (gcore/gdalhashsetbandblockcache.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdalhashsetbandblockcache.cpp
 
+#include <array>
 #include <cstring>
 #include <memory>
-#include <vector>
+#include <utility>
 
 #include "testing/base/public/gunit.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/gcore/gdal.h"
 #include "third_party/gdal/gcore/gdal_abstractbandblockcache.h"
 #include "third_party/gdal/gcore/gdal_priv.h"
 #include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/port/cpl_port.h"
 
+namespace autotest2 {
 namespace {
 
 class HashSetTestBand : public GDALRasterBand {
@@ -45,7 +52,7 @@ class HashSetTestBand : public GDALRasterBand {
 
  protected:
   CPLErr IReadBlock(int x_off, int y_off, void* image) override {
-    memset(image, 7, nBlockXSize * nBlockYSize);
+    std::memset(image, 7, static_cast<size_t>(nBlockXSize) * nBlockYSize);
     return CE_None;
   }
 
@@ -73,18 +80,21 @@ class HashSetTestDataset : public GDALDataset {
   }
 };
 
-TEST(GdalhashsetbandblockcacheTest, BandAndDirectCacheOperations) {
-  CPLSetThreadLocalConfigOption("GDAL_BAND_BLOCK_CACHE", "HASHSET");
+TEST(GdalHashSetBandBlockCacheTest, BandAndDirectCacheOperations) {
+  CPLConfigOptionSetter block_cache_setter("GDAL_BAND_BLOCK_CACHE", "HASHSET",
+                                           /*bSetOnlyIfUndefined=*/false);
   HashSetTestDataset ds;
   HashSetTestBand* band = ds.GetTestBand();
+  ASSERT_NE(nullptr, band);
 
   // Trigger Init(), IsInitOK(), CreateBlock(), AdoptBlock(), and
   // TryGetLockedBlockRef() via GDALRasterBand::GetLockedBlockRef() across
   // multiple (x, y) coordinates so BlockComparator (< y, > y, == y && < x) is
   // exercised.
-  int coords[4][2] = {{1, 1}, {0, 0}, {2, 1}, {0, 2}};
-  for (const auto& c : coords) {
-    GDALRasterBlock* block = band->GetLockedBlockRef(c[0], c[1], TRUE);
+  constexpr auto kCoords =
+      std::to_array<std::pair<int, int>>({{1, 1}, {0, 0}, {2, 1}, {0, 2}});
+  for (const auto& [x, y] : kCoords) {
+    GDALRasterBlock* block = band->GetLockedBlockRef(x, y, TRUE);
     ASSERT_NE(nullptr, block);
     block->MarkDirty();
     block->DropLock();
@@ -100,19 +110,25 @@ TEST(GdalhashsetbandblockcacheTest, BandAndDirectCacheOperations) {
   EXPECT_EQ(CE_None, band->FlushBlock(1, 1, TRUE));
   EXPECT_EQ(1, band->write_count());
 
-  // UnreferenceBlock is called when a block is evicted from the global block
-  // cache list via FlushCacheBlock().
-  GDALRasterBlock* to_evict = band->GetLockedBlockRef(0, 0, FALSE);
-  ASSERT_NE(nullptr, to_evict);
-  to_evict->MarkClean();
-  to_evict->DropLock();
+  // Touch (0, 0) via GetLockedBlockRef (making (0, 0) MRU) and
+  // FlushCacheBlock() evicts the oldest remaining dirty block (2, 1) from the
+  // global block cache via UnreferenceBlock(), triggering an IWriteBlock.
+  GDALRasterBlock* touch_block = band->GetLockedBlockRef(0, 0, FALSE);
+  ASSERT_NE(nullptr, touch_block);
+  touch_block->DropLock();
   GDALRasterBlock::FlushCacheBlock();
+  EXPECT_EQ(nullptr, band->TryGetLockedBlockRef(2, 1));
+  EXPECT_EQ(2, band->write_count());
 
-  // FlushCache with a failing write to exercise error propagation.
+  // FlushCache with a failing write to exercise error propagation on remaining
+  // dirty blocks (0, 2) and (0, 0).
   band->SetFailWrite(true);
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(CE_Failure, band->FlushCache(false));
-  CPLPopErrorHandler();
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, band->FlushCache(false));
+    CPLErrorReset();
+  }
 
   // Also directly exercise IsInitOK() on a standalone instance.
   std::unique_ptr<GDALAbstractBandBlockCache> direct_cache(
@@ -120,8 +136,7 @@ TEST(GdalhashsetbandblockcacheTest, BandAndDirectCacheOperations) {
   ASSERT_NE(nullptr, direct_cache);
   EXPECT_TRUE(direct_cache->Init());
   EXPECT_TRUE(direct_cache->IsInitOK());
-
-  CPLSetThreadLocalConfigOption("GDAL_BAND_BLOCK_CACHE", nullptr);
 }
 
 }  // namespace
+}  // namespace autotest2

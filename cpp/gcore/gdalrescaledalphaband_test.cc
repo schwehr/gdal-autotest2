@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,20 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests gcore/gdalrescaledalphaband.cpp.
+// Tests GDALRescaledAlphaBand (gcore/gdalrescaledalphaband.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdalrescaledalphaband.cpp
 
-#include <cstring>
-#include <memory>
 #include <vector>
 
 #include "testing/base/public/gunit.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_maskbands.h"
 #include "third_party/gdal/gcore/gdal_priv.h"
 #include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/port/cpl_port.h"
 
+namespace autotest2 {
 namespace {
 
-class MockUInt16Band : public GDALRasterBand {
+class MockUInt16Band final : public GDALRasterBand {
  public:
   MockUInt16Band(GDALDataset* ds, int width, int height, int block_x,
                  int block_y, bool fail_read = false)
@@ -68,7 +73,7 @@ class MockUInt16Band : public GDALRasterBand {
   std::vector<GUInt16> data_;
 };
 
-class DummyDataset : public GDALDataset {
+class DummyDataset final : public GDALDataset {
  public:
   DummyDataset(int width, int height, int block_x, int block_y,
                bool fail_read = false) {
@@ -77,14 +82,16 @@ class DummyDataset : public GDALDataset {
     SetBand(1, new MockUInt16Band(this, width, height, block_x, block_y,
                                   fail_read));
   }
+
   MockUInt16Band* GetMockBand() {
     return static_cast<MockUInt16Band*>(GetRasterBand(1));
   }
 };
 
-TEST(GdalrescaledalphabandTest, ReadBlockAndRasterIO) {
+TEST(GdalRescaledAlphaBandTest, ReadBlockAndRasterIO) {
   DummyDataset ds(5, 5, 4, 4);
   MockUInt16Band* parent = ds.GetMockBand();
+  ASSERT_NE(nullptr, parent);
   parent->SetPixel(0, 0, 0);
   parent->SetPixel(1, 0, 1);      // 1..256 -> rescaled to 1
   parent->SetPixel(2, 0, 256);    // 1..256 -> rescaled to 1
@@ -105,12 +112,12 @@ TEST(GdalrescaledalphabandTest, ReadBlockAndRasterIO) {
   EXPECT_EQ(127, block[3]);
 
   // Partial edge block (1, 1) covering pixel (4, 4).
-  std::vector<GByte> edge_block(16, 0);
+  std::vector<GByte> edge_block(16, 99);
   EXPECT_EQ(CE_None, alpha.ReadBlock(1, 1, edge_block.data()));
   EXPECT_EQ(255, edge_block[0]);
 
   // Fast path IRasterIO (GDT_Byte, 1:1 size, pixel_space = 1).
-  std::vector<GByte> fast_buf(5, 0);
+  std::vector<GByte> fast_buf(5, 99);
   EXPECT_EQ(CE_None, alpha.RasterIO(GF_Read, 0, 0, 5, 1, fast_buf.data(), 5, 1,
                                     GDT_Byte, 1, 5, nullptr));
   EXPECT_EQ(0, fast_buf[0]);
@@ -119,7 +126,7 @@ TEST(GdalrescaledalphabandTest, ReadBlockAndRasterIO) {
   EXPECT_EQ(127, fast_buf[3]);
 
   // Fallback path IRasterIO (eBufType != GDT_Byte, e.g., GDT_UInt16).
-  std::vector<GUInt16> slow_buf(5, 0);
+  std::vector<GUInt16> slow_buf(5, 99);
   EXPECT_EQ(CE_None, alpha.RasterIO(GF_Read, 0, 0, 5, 1, slow_buf.data(), 5, 1,
                                     GDT_UInt16, 0, 0, nullptr));
   EXPECT_EQ(0, slow_buf[0]);
@@ -127,21 +134,34 @@ TEST(GdalrescaledalphabandTest, ReadBlockAndRasterIO) {
   EXPECT_EQ(127, slow_buf[3]);
 
   // Write attempt emits error via EmitErrorMessageIfWriteNotSupported.
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(CE_Failure, alpha.Fill(0));
-  EXPECT_EQ(CE_Failure, alpha.RasterIO(GF_Write, 0, 0, 5, 1, fast_buf.data(), 5,
-                                       1, GDT_Byte, 1, 5, nullptr));
-  CPLPopErrorHandler();
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, alpha.Fill(0));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, alpha.RasterIO(GF_Write, 0, 0, 5, 1, fast_buf.data(),
+                                         5, 1, GDT_Byte, 1, 5, nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
 }
 
-TEST(GdalrescaledalphabandTest, ParentReadErrorPropagates) {
+TEST(GdalRescaledAlphaBandTest, ParentReadErrorPropagates) {
   DummyDataset ds(4, 4, 4, 4, /*fail_read=*/true);
-  GDALRescaledAlphaBand alpha(ds.GetMockBand());
-  std::vector<GByte> buf(4, 0);
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(CE_Failure, alpha.RasterIO(GF_Read, 0, 0, 4, 1, buf.data(), 4, 1,
-                                       GDT_Byte, 1, 4, nullptr));
-  CPLPopErrorHandler();
+  MockUInt16Band* parent = ds.GetMockBand();
+  ASSERT_NE(nullptr, parent);
+  GDALRescaledAlphaBand alpha(parent);
+  std::vector<GByte> buf(4, 99);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, alpha.RasterIO(GF_Read, 0, 0, 4, 1, buf.data(), 4, 1,
+                                         GDT_Byte, 1, 4, nullptr));
+    CPLErrorReset();
+  }
 }
 
 }  // namespace
+}  // namespace autotest2

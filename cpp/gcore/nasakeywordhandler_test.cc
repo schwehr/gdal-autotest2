@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,21 +11,37 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Tests PDS/ISIS NASA keyword handler (gcore/nasakeywordhandler.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/nasakeywordhandler.cpp
 
 #include "third_party/gdal/gcore/nasakeywordhandler.h"
 
 #include <string>
+#include <string_view>
 
-#include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
+#include "third_party/gdal/autotest2/cpp/util/vsimem.h"
 #include "third_party/gdal/port/cpl_error.h"
 #include "third_party/gdal/port/cpl_json.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 
-namespace gdal {
+namespace autotest2 {
 namespace {
 
+constexpr char kTestDir[] = "/vsimem/nasakeywordhandler_test";
+constexpr char kMainPath[] = "/vsimem/nasakeywordhandler_test/nasa_test.lbl";
+constexpr char kNegOffsetPath[] =
+    "/vsimem/nasakeywordhandler_test/nasa_neg.lbl";
+
 TEST(NasaKeywordHandlerTest, ParseAndIngestFullFeatures) {
+  ASSERT_EQ(0, VSIMkdir(kTestDir, 0755));
+  absl::Cleanup cleanup_dir = [] { VSIRmdirRecursive(kTestDir); };
+
   const std::string pds_text =
       "/* PDS Header comment */ extra text on comment line\n"
       " # Hash comment line\n"
@@ -59,95 +75,89 @@ TEST(NasaKeywordHandlerTest, ParseAndIngestFullFeatures) {
       "End_Object\n" +
       std::string(600, ' ') + "\nEND\n";
 
-  const char* mem_path = "/vsimem/nasa_test.lbl";
-  VSILFILE* fp = VSIFOpenL(mem_path, "wb+");
-  ASSERT_NE(fp, nullptr);
-  VSIFWriteL(pds_text.data(), 1, pds_text.size(), fp);
+  VsiMemTempWrapper temp_file(kMainPath, pds_text);
+  VSILFILE* fp = VSIFOpenL(kMainPath, "rb");
+  ASSERT_NE(nullptr, fp);
+  absl::Cleanup fp_closer = [fp] { EXPECT_EQ(0, VSIFCloseL(fp)); };
 
   NASAKeywordHandler handler;
   handler.SetStripSurroundingQuotes(false);
   EXPECT_TRUE(handler.Ingest(fp, 0));
 
-  EXPECT_STREQ(handler.GetKeyword("PDS_VERSION_ID", ""), "PDS3");
-  EXPECT_STREQ(handler.GetKeyword("INT_VAL", ""), "42");
-  EXPECT_STREQ(handler.GetKeyword("CONTINUED_WORD", ""), "PART1PART2");
-  EXPECT_STREQ(handler.GetKeyword("IMAGE.LINES", ""), "100");
-  EXPECT_STREQ(handler.GetKeyword("NON_EXISTENT", "DEF"), "DEF");
-  EXPECT_NE(handler.GetKeywordList(), nullptr);
+  EXPECT_STREQ("PDS3", handler.GetKeyword("PDS_VERSION_ID", ""));
+  EXPECT_STREQ("42", handler.GetKeyword("INT_VAL", ""));
+  EXPECT_STREQ("PART1PART2", handler.GetKeyword("CONTINUED_WORD", ""));
+  EXPECT_STREQ("100", handler.GetKeyword("IMAGE.LINES", ""));
+  EXPECT_STREQ("DEF", handler.GetKeyword("NON_EXISTENT", "DEF"));
+  EXPECT_NE(nullptr, handler.GetKeywordList());
 
   CPLJSONObject json = handler.GetJsonObject();
   EXPECT_TRUE(json.IsValid());
-  EXPECT_EQ(json.GetInteger("INT_VAL"), 42);
+  EXPECT_EQ(42, json.GetInteger("INT_VAL"));
   EXPECT_TRUE(json["IMAGE_MAIN_IMG"].IsValid());
   EXPECT_TRUE(json["PARAMS"].IsValid());
   EXPECT_TRUE(json["PARAMS_2"].IsValid());
   EXPECT_TRUE(json["PARAMS_3"].IsValid());
 
-  // Also test with StripSurroundingQuotes(true)
+  // Also test with StripSurroundingQuotes(true).
   NASAKeywordHandler handler_strip;
   handler_strip.SetStripSurroundingQuotes(true);
   EXPECT_TRUE(handler_strip.Parse(pds_text.c_str()));
-  EXPECT_STREQ(handler_strip.GetKeyword("SINGLE_QUOTED", ""), "SYMBOL_VAL");
-
-  VSIFCloseL(fp);
-  VSIUnlink(mem_path);
+  EXPECT_STREQ("SYMBOL_VAL", handler_strip.GetKeyword("SINGLE_QUOTED", ""));
 }
 
 TEST(NasaKeywordHandlerTest, ErrorCases) {
-  CPLErrorStateBackuper quiet(CPLQuietErrorHandler);
+  constexpr std::string_view kInvalidInputs[] = {
+      // Unterminated double quote
+      "KEY = \"unterminated",
+      // Unterminated single quote
+      "KEY = 'unterminated",
+      // Missing '='
+      "KEY_WITHOUT_EQUALS VAL\nEND\n",
+      // Missing value after '='
+      "KEY = \n",
+      // Unpaired ')' in list
+      "KEY = {1, 2)\nEND\n",
+      // Unpaired '}' in list
+      "KEY = (1, 2}\nEND\n",
+      // Unterminated C comment
+      "/* unterminated comment",
+  };
+  for (std::string_view input : kInvalidInputs) {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    NASAKeywordHandler h;
+    EXPECT_FALSE(h.Parse(std::string(input).c_str()));
+    CPLErrorReset();
+  }
 
-  // Unterminated double quote
+  // Too long group prefix (> 256 chars) emits CPLError(CE_Failure).
   {
-    NASAKeywordHandler h;
-    EXPECT_FALSE(h.Parse("KEY = \"unterminated"));
-  }
-  // Unterminated single quote
-  {
-    NASAKeywordHandler h;
-    EXPECT_FALSE(h.Parse("KEY = 'unterminated"));
-  }
-  // Missing '='
-  {
-    NASAKeywordHandler h;
-    EXPECT_FALSE(h.Parse("KEY_WITHOUT_EQUALS VAL\nEND\n"));
-  }
-  // Missing value after '='
-  {
-    NASAKeywordHandler h;
-    EXPECT_FALSE(h.Parse("KEY = \n"));
-  }
-  // Unpaired ')' in list
-  {
-    NASAKeywordHandler h;
-    EXPECT_FALSE(h.Parse("KEY = {1, 2)\nEND\n"));
-  }
-  // Unpaired '}' in list
-  {
-    NASAKeywordHandler h;
-    EXPECT_FALSE(h.Parse("KEY = (1, 2}\nEND\n"));
-  }
-  // Unterminated C comment
-  {
-    NASAKeywordHandler h;
-    EXPECT_FALSE(h.Parse("/* unterminated comment"));
-  }
-  // Too long group prefix (> 256 chars)
-  {
-    std::string long_group =
+    const std::string long_group =
         "GROUP = " + std::string(260, 'A') + "\nA = 1\nEND_GROUP\nEND\n";
+    WithQuietHandler quiet;
+    CPLErrorReset();
     NASAKeywordHandler h;
     EXPECT_FALSE(h.Parse(long_group.c_str()));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
   }
-  // Negative offset in Ingest
+
+  // Negative offset in Ingest.
   {
-    const char* mem_path = "/vsimem/nasa_neg.lbl";
-    VSILFILE* fp = VSIFOpenL(mem_path, "wb+");
+    ASSERT_EQ(0, VSIMkdir(kTestDir, 0755));
+    absl::Cleanup cleanup_dir = [] { VSIRmdirRecursive(kTestDir); };
+    VsiMemTempWrapper temp_file(kNegOffsetPath, "PDS_VERSION_ID = PDS3\nEND\n");
+    VSILFILE* fp = VSIFOpenL(kNegOffsetPath, "rb");
+    ASSERT_NE(nullptr, fp);
+    absl::Cleanup fp_closer = [fp] { EXPECT_EQ(0, VSIFCloseL(fp)); };
+    WithQuietHandler quiet;
+    CPLErrorReset();
     NASAKeywordHandler h;
     EXPECT_FALSE(h.Ingest(fp, -10));
-    VSIFCloseL(fp);
-    VSIUnlink(mem_path);
+    CPLErrorReset();
   }
 }
 
 }  // namespace
-}  // namespace gdal
+}  // namespace autotest2

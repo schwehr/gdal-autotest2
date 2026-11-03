@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,18 +12,43 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests gcore/gdalpamproxydb.cpp.
+// Tests GDAL PAM proxy database (gcore/gdalpamproxydb.cpp).
+//
+// Build caveat in google3: //third_party/gdal/BUILD compiles with PAM_ENABLED
+// undefined, so GDAL_PAM_ENABLED defaults to "NO" unless overridden via
+// CPLConfigOptionSetter.
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdalpamproxydb.cpp
 
+#include <cstddef>
+#include <cstring>
+#include <memory>
 #include <string>
 
 #include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
+#include "third_party/gdal/autotest2/cpp/util/vsimem.h"
 #include "third_party/gdal/gcore/gdal_pam.h"
 #include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/port/cpl_string.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 #include "third_party/gdal/port/cpl_vsi_virtual.h"
 
+namespace autotest2 {
 namespace {
+
+constexpr char kTestDir[] = "/vsimem/gdalpamproxydb_test";
+constexpr char kProxyDir[] = "/vsimem/gdalpamproxydb_test/proxy";
+constexpr char kDbFile[] =
+    "/vsimem/gdalpamproxydb_test/proxy/gdal_pam_proxy.dat";
+constexpr char kFailOpenDir[] = "/vsimem/gdalpamproxydb_test/fail_open";
+constexpr char kFailOpenDbDir[] =
+    "/vsimem/gdalpamproxydb_test/fail_open/gdal_pam_proxy.dat";
+constexpr char kFailFsPrefix[] = "/vsipamproxydb_test_fail/";
+constexpr char kFailFsDir[] = "/vsipamproxydb_test_fail";
 
 class FailingPamProxyHandle final : public VSIVirtualHandle {
  public:
@@ -34,10 +59,10 @@ class FailingPamProxyHandle final : public VSIVirtualHandle {
   size_t Write(const void* buffer, size_t size, size_t count) override {
     ++write_calls_;
     if (mode_ == 1 && write_calls_ == 1) {
-      return 0;  // Fail header write
+      return 0;  // Fail header write.
     }
     if (mode_ == 2 && write_calls_ >= 2) {
-      return 0;  // Fail entry write
+      return 0;  // Fail entry write.
     }
     return count;
   }
@@ -57,7 +82,7 @@ class FailingPamProxyFSHandler final : public VSIFilesystemHandler {
   VSIVirtualHandleUniquePtr Open(const char* filename, const char* access,
                                  bool set_error,
                                  CSLConstList options) override {
-    if (strstr(filename, ".lck") != nullptr) {
+    if (std::strstr(filename, ".lck") != nullptr) {
       return VSIVirtualHandleUniquePtr(new FailingPamProxyHandle(0));
     }
     return VSIVirtualHandleUniquePtr(new FailingPamProxyHandle(mode_));
@@ -73,104 +98,120 @@ class FailingPamProxyFSHandler final : public VSIFilesystemHandler {
 
 TEST(GdalpamproxydbTest, AllocateGetLoadAndCleanProxyDB) {
   PamCleanProxyDB();
+  absl::Cleanup clean_db = [] { PamCleanProxyDB(); };
+
+  ASSERT_EQ(0, VSIMkdir(kTestDir, 0755));
+  absl::Cleanup cleanup_vsimem = [] { VSIRmdirRecursive(kTestDir); };
 
   // Without GDAL_PAM_PROXY_DIR configured, returns nullptr.
-  CPLSetThreadLocalConfigOption("GDAL_PAM_PROXY_DIR", nullptr);
-  EXPECT_EQ(nullptr, PamGetProxy("/vsimem/some_file.tif"));
-  EXPECT_EQ(nullptr, PamAllocateProxy("/vsimem/some_file.tif"));
-  PamCleanProxyDB();
-
-  const std::string proxy_dir = "/vsimem/pam_proxy_test_dir";
-  VSIMkdir(proxy_dir.c_str(), 0755);
-  CPLSetThreadLocalConfigOption("GDAL_PAM_PROXY_DIR", proxy_dir.c_str());
-
-  // Initially not in DB.
-  EXPECT_EQ(nullptr, PamGetProxy("/vsimem/file1.tif"));
-
-  // Allocate standard file, :::OVR file, .gmac file, and very long path (> 220
-  // chars).
-  const char* p1 = PamAllocateProxy("/vsimem/file1.tif");
-  ASSERT_NE(nullptr, p1);
-  EXPECT_STREQ(p1, PamGetProxy("/vsimem/file1.tif"));
-
-  const char* p2 = PamAllocateProxy(":::OVR/vsimem/file1.tif");
-  ASSERT_NE(nullptr, p2);
-
-  const char* p3 = PamAllocateProxy("/vsimem/file1.gmac");
-  ASSERT_NE(nullptr, p3);
-
-  std::string long_path = "/vsimem/";
-  for (int i = 0; i < 25; ++i) {
-    long_path += "verylongsubdir/";
+  {
+    CPLConfigOptionSetter unset_proxy_dir("GDAL_PAM_PROXY_DIR", nullptr,
+                                          /*bSetOnlyIfUndefined=*/false);
+    EXPECT_EQ(nullptr,
+              PamGetProxy("/vsimem/gdalpamproxydb_test/some_file.tif"));
+    EXPECT_EQ(nullptr,
+              PamAllocateProxy("/vsimem/gdalpamproxydb_test/some_file.tif"));
+    PamCleanProxyDB();
   }
-  long_path += "special?chars*file.tif";
-  const char* p4 = PamAllocateProxy(long_path.c_str());
-  ASSERT_NE(nullptr, p4);
 
-  // Clean in-memory DB and reload from the saved gdal_pam_proxy.dat file!
-  std::string saved_p1(p1);
-  PamCleanProxyDB();
-  const char* reloaded_p1 = PamGetProxy("/vsimem/file1.tif");
-  ASSERT_NE(nullptr, reloaded_p1);
-  EXPECT_EQ(saved_p1, std::string(reloaded_p1));
+  ASSERT_EQ(0, VSIMkdir(kProxyDir, 0755));
+  {
+    CPLConfigOptionSetter proxy_dir_opt("GDAL_PAM_PROXY_DIR", kProxyDir,
+                                        /*bSetOnlyIfUndefined=*/false);
 
-  // Corrupt the gdal_pam_proxy.dat file header and test LoadDB error path.
-  PamCleanProxyDB();
-  const std::string db_file = proxy_dir + "/gdal_pam_proxy.dat";
-  VSILFILE* fp = VSIFOpenL(db_file.c_str(), "wb");
-  ASSERT_NE(nullptr, fp);
-  VSIFWriteL("SHORT_CORRUPT_HEADER", 1, 20, fp);
-  VSIFCloseL(fp);
+    // Initially not in DB.
+    EXPECT_EQ(nullptr, PamGetProxy("/vsimem/gdalpamproxydb_test/file1.tif"));
 
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(nullptr, PamGetProxy("/vsimem/file1.tif"));
-  CPLPopErrorHandler();
+    // Allocate standard file, :::OVR file, .gmac file, and very long path
+    // (> 220 chars).
+    const char* p1 = PamAllocateProxy("/vsimem/gdalpamproxydb_test/file1.tif");
+    ASSERT_NE(nullptr, p1);
+    EXPECT_STREQ(p1, PamGetProxy("/vsimem/gdalpamproxydb_test/file1.tif"));
 
-  // Truncated gdal_pam_proxy.dat with valid 100-byte header + original name
-  // without proxy name (hits iNext == nBufLength break in LoadDB).
-  PamCleanProxyDB();
-  fp = VSIFOpenL(db_file.c_str(), "wb");
-  ASSERT_NE(nullptr, fp);
-  std::string hdr(100, ' ');
-  hdr.replace(0, 19, "GDAL_PROXY        1");
-  VSIFWriteL(hdr.data(), 1, 100, fp);
-  VSIFWriteL("unterminated_original", 1, 21, fp);
-  VSIFCloseL(fp);
-  EXPECT_EQ(nullptr, PamGetProxy("unterminated_original"));
+    const char* p2 =
+        PamAllocateProxy(":::OVR/vsimem/gdalpamproxydb_test/file1.tif");
+    ASSERT_NE(nullptr, p2);
+
+    const char* p3 = PamAllocateProxy("/vsimem/gdalpamproxydb_test/file1.gmac");
+    ASSERT_NE(nullptr, p3);
+
+    std::string long_path = "/vsimem/gdalpamproxydb_test/";
+    for (int i = 0; i < 25; ++i) {
+      long_path += "verylongsubdir/";
+    }
+    long_path += "special?chars*file.tif";
+    const char* p4 = PamAllocateProxy(long_path.c_str());
+    ASSERT_NE(nullptr, p4);
+
+    // Clean in-memory DB and reload from the saved gdal_pam_proxy.dat file.
+    const std::string saved_p1(p1);
+    PamCleanProxyDB();
+    const char* reloaded_p1 =
+        PamGetProxy("/vsimem/gdalpamproxydb_test/file1.tif");
+    ASSERT_NE(nullptr, reloaded_p1);
+    EXPECT_EQ(saved_p1, reloaded_p1);
+
+    // Corrupt the gdal_pam_proxy.dat file header and test LoadDB error path.
+    PamCleanProxyDB();
+    {
+      VsiMemTempWrapper corrupt_db(kDbFile, "SHORT_CORRUPT_HEADER");
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_EQ(nullptr, PamGetProxy("/vsimem/gdalpamproxydb_test/file1.tif"));
+      EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+      CPLErrorReset();
+    }
+
+    // Truncated gdal_pam_proxy.dat with valid 100-byte header + original name
+    // without proxy name (hits iNext == nBufLength break in LoadDB).
+    PamCleanProxyDB();
+    {
+      std::string truncated_db(100, ' ');
+      truncated_db.replace(0, 19, "GDAL_PROXY        1");
+      truncated_db += "unterminated_original";
+      VsiMemTempWrapper truncated_file(kDbFile, truncated_db);
+      EXPECT_EQ(nullptr, PamGetProxy("unterminated_original"));
+    }
+  }
 
   // SaveDB failure when osDBName is a directory (VSIFOpenL("w") returns
-  // nullptr) and when proxy_dir has max_size=50 on /vsimem/ (VSIFWriteL header
-  // fails).
+  // nullptr).
   PamCleanProxyDB();
-  const std::string fail_open_dir = "/vsimem/pam_proxy_fail_open";
-  VSIMkdir(fail_open_dir.c_str(), 0755);
-  VSIMkdir((fail_open_dir + "/gdal_pam_proxy.dat").c_str(), 0755);
-  CPLSetThreadLocalConfigOption("GDAL_PAM_PROXY_DIR", fail_open_dir.c_str());
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_NE(nullptr, PamAllocateProxy("/vsimem/file_fail_open.tif"));
-  CPLPopErrorHandler();
-  VSIRmdir((fail_open_dir + "/gdal_pam_proxy.dat").c_str());
-  VSIRmdir(fail_open_dir.c_str());
-
-  // SaveDB write failures (header write fail, entry write fail, close fail)
-  // via custom VSIFilesystemHandler.
-  for (int mode : {1, 2, 3}) {
-    PamCleanProxyDB();
-    auto* handler = new FailingPamProxyFSHandler(mode);
-    VSIFileManager::InstallHandler("/vsipamfail/", handler);
-    CPLSetThreadLocalConfigOption("GDAL_PAM_PROXY_DIR", "/vsipamfail");
-    CPLPushErrorHandler(CPLQuietErrorHandler);
-    PamAllocateProxy("/vsimem/fail_test.tif");
-    CPLPopErrorHandler();
-    PamCleanProxyDB();
-    VSIFileManager::RemoveHandler("/vsipamfail/");
-    delete handler;
+  ASSERT_EQ(0, VSIMkdir(kFailOpenDir, 0755));
+  ASSERT_EQ(0, VSIMkdir(kFailOpenDbDir, 0755));
+  {
+    CPLConfigOptionSetter fail_dir_opt("GDAL_PAM_PROXY_DIR", kFailOpenDir,
+                                       /*bSetOnlyIfUndefined=*/false);
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_NE(nullptr, PamAllocateProxy(
+                           "/vsimem/gdalpamproxydb_test/file_fail_open.tif"));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
   }
 
-  PamCleanProxyDB();
-  CPLSetThreadLocalConfigOption("GDAL_PAM_PROXY_DIR", nullptr);
-  VSIUnlink(db_file.c_str());
-  VSIRmdir(proxy_dir.c_str());
+  // SaveDB write/close failures (header write fail, entry write fail, close
+  // fail) via custom VSIFilesystemHandler.
+  for (int mode : {1, 2, 3}) {
+    PamCleanProxyDB();
+    auto handler = std::make_unique<FailingPamProxyFSHandler>(mode);
+    VSIFileManager::InstallHandler(kFailFsPrefix, handler.get());
+    absl::Cleanup remove_handler = [] {
+      VSIFileManager::RemoveHandler(kFailFsPrefix);
+    };
+    CPLConfigOptionSetter fail_fs_opt("GDAL_PAM_PROXY_DIR", kFailFsDir,
+                                      /*bSetOnlyIfUndefined=*/false);
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_NE(nullptr,
+                PamAllocateProxy("/vsimem/gdalpamproxydb_test/fail_test.tif"));
+      EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+      CPLErrorReset();
+    }
+    PamCleanProxyDB();
+  }
 }
 
 }  // namespace
+}  // namespace autotest2

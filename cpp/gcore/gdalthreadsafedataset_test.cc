@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,21 +11,33 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Tests GDALThreadSafeDataset wrapper and thread-local dataset caching
+// (gcore/gdalthreadsafedataset.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdalthreadsafedataset.cpp
 
+#include <array>
 #include <memory>
-#include <thread>
+#include <thread>  // NOLINT
+#include <utility>
 
-#include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_colortable.h"
+#include "third_party/gdal/gcore/gdal_cpp_functions.h"
+#include "third_party/gdal/gcore/gdal_frmts.h"
 #include "third_party/gdal/gcore/gdal_priv.h"
 #include "third_party/gdal/gcore/gdal_rat.h"
 #include "third_party/gdal/ogr/ogr_spatialref.h"
-#include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 
-namespace gdal {
+namespace autotest2 {
 namespace {
 
 class CustomRAT final : public GDALRasterAttributeTable {
@@ -133,27 +145,34 @@ class BadCloneDataset final : public GDALDataset {
 };
 
 TEST(GdalThreadSafeDatasetTest, ErrorCasesAndMismatchClones) {
-  GDALAllRegister();
-  CPLErrorStateBackuper quiet(CPLQuietErrorHandler);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_FALSE(GDALDatasetIsThreadSafe(nullptr, GDAL_OF_RASTER, nullptr));
+    CPLErrorReset();
+    EXPECT_EQ(nullptr,
+              GDALGetThreadSafeDataset(static_cast<GDALDatasetH>(nullptr),
+                                       GDAL_OF_RASTER, nullptr));
+    CPLErrorReset();
 
-  EXPECT_FALSE(GDALDatasetIsThreadSafe(nullptr, GDAL_OF_RASTER, nullptr));
-  EXPECT_EQ(GDALGetThreadSafeDataset(static_cast<GDALDatasetH>(nullptr),
-                                     GDAL_OF_RASTER, nullptr),
-            nullptr);
-
-  // Non-clonable dataset & invalid scope flags
-  auto non_clonable = std::make_unique<NonClonableDataset>();
-  EXPECT_FALSE(non_clonable->IsThreadSafe(GDAL_OF_RASTER));
-  EXPECT_EQ(GDALGetThreadSafeDataset(non_clonable.get(), GDAL_OF_VECTOR),
-            nullptr);
-  EXPECT_EQ(GDALGetThreadSafeDataset(non_clonable.get(), GDAL_OF_RASTER),
-            nullptr);
-  EXPECT_EQ(GDALGetThreadSafeDataset(std::make_unique<NonClonableDataset>(),
-                                     GDAL_OF_VECTOR),
-            nullptr);
-  EXPECT_EQ(GDALGetThreadSafeDataset(std::make_unique<NonClonableDataset>(),
-                                     GDAL_OF_RASTER),
-            nullptr);
+    // Non-clonable dataset & invalid scope flags
+    auto non_clonable = std::make_unique<NonClonableDataset>();
+    EXPECT_FALSE(non_clonable->IsThreadSafe(GDAL_OF_RASTER));
+    EXPECT_EQ(nullptr,
+              GDALGetThreadSafeDataset(non_clonable.get(), GDAL_OF_VECTOR));
+    CPLErrorReset();
+    EXPECT_EQ(nullptr,
+              GDALGetThreadSafeDataset(non_clonable.get(), GDAL_OF_RASTER));
+    CPLErrorReset();
+    EXPECT_EQ(nullptr,
+              GDALGetThreadSafeDataset(std::make_unique<NonClonableDataset>(),
+                                       GDAL_OF_VECTOR));
+    CPLErrorReset();
+    EXPECT_EQ(nullptr,
+              GDALGetThreadSafeDataset(std::make_unique<NonClonableDataset>(),
+                                       GDAL_OF_RASTER));
+    CPLErrorReset();
+  }
 
   // Clone failures and mismatched clone characteristics
   BadCloneDataset bad_ds(4, 4);
@@ -163,209 +182,241 @@ TEST(GdalThreadSafeDatasetTest, ErrorCasesAndMismatchClones) {
 
   std::unique_ptr<GDALDataset> ts_bad(
       GDALGetThreadSafeDataset(&bad_ds, GDAL_OF_RASTER));
-  ASSERT_NE(ts_bad, nullptr);
+  ASSERT_NE(nullptr, ts_bad);
 
   // Non-GDALDefaultRasterAttributeTable RAT returns nullptr
-  EXPECT_EQ(ts_bad->GetRasterBand(1)->GetDefaultRAT(), nullptr);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, ts_bad->GetRasterBand(1)->GetDefaultRAT());
+    CPLErrorReset();
+  }
   band0->m_rat = nullptr;
-  EXPECT_EQ(ts_bad->GetRasterBand(1)->GetDefaultRAT(), nullptr);
+  EXPECT_EQ(nullptr, ts_bad->GetRasterBand(1)->GetDefaultRAT());
 
   // Mode 0: Clone returns nullptr
   bad_ds.m_clone_mode = 0;
-  EXPECT_EQ(ts_bad->FlushCache(false), CE_None);
-  GByte buf[16] = {0};
-  EXPECT_EQ(ts_bad->GetRasterBand(1)->RasterIO(GF_Read, 0, 0, 4, 4, buf, 4, 4,
-                                               GDT_Byte, 0, 0, nullptr),
-            CE_Failure);
+  EXPECT_EQ(CE_None, ts_bad->FlushCache(false));
+  std::array<GByte, 16> buf{};
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, ts_bad->GetRasterBand(1)->RasterIO(
+                              GF_Read, 0, 0, 4, 4, buf.data(), 4, 4, GDT_Byte,
+                              0, 0, nullptr));
+    CPLErrorReset();
+  }
 
   // Mode 1: Clone returns dataset with different XSize
   bad_ds.m_clone_mode = 1;
-  EXPECT_EQ(ts_bad->GetRasterBand(1)->RasterIO(GF_Read, 0, 0, 4, 4, buf, 4, 4,
-                                               GDT_Byte, 0, 0, nullptr),
-            CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, ts_bad->GetRasterBand(1)->RasterIO(
+                              GF_Read, 0, 0, 4, 4, buf.data(), 4, 4, GDT_Byte,
+                              0, 0, nullptr));
+    CPLErrorReset();
+  }
 
   // Mode 2: Clone returns band with different DataType
   bad_ds.m_clone_mode = 2;
-  EXPECT_EQ(ts_bad->GetRasterBand(1)->RasterIO(GF_Read, 0, 0, 4, 4, buf, 4, 4,
-                                               GDT_Byte, 0, 0, nullptr),
-            CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, ts_bad->GetRasterBand(1)->RasterIO(
+                              GF_Read, 0, 0, 4, 4, buf.data(), 4, 4, GDT_Byte,
+                              0, 0, nullptr));
+    CPLErrorReset();
+  }
 
   // Mode 3: Clone returns band with different BlockSize
   BadCloneDataset bad_ds3(4, 4);
   bad_ds3.m_clone_mode = 3;
   std::unique_ptr<GDALDataset> ts_bad3(
       GDALGetThreadSafeDataset(&bad_ds3, GDAL_OF_RASTER));
-  EXPECT_EQ(ts_bad3->GetRasterBand(1)->RasterIO(GF_Read, 0, 0, 4, 4, buf, 4, 4,
-                                                GDT_Byte, 0, 0, nullptr),
-            CE_Failure);
+  ASSERT_NE(nullptr, ts_bad3);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, ts_bad3->GetRasterBand(1)->RasterIO(
+                              GF_Read, 0, 0, 4, 4, buf.data(), 4, 4, GDT_Byte,
+                              0, 0, nullptr));
+    CPLErrorReset();
+  }
 }
 
 TEST(GdalThreadSafeDatasetTest, FullMultiThreadedOperations) {
-  GDALAllRegister();
+  GDALRegister_GTiff();
+  absl::Cleanup cleanup_dir = [] {
+    VSIRmdirRecursive("/vsimem/gdalthreadsafedataset_test");
+  };
+
   GDALDriver* tiff_drv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(tiff_drv, nullptr);
-  const char* tiff_path = "/vsimem/ts_dataset_test.tif";
+  ASSERT_NE(nullptr, tiff_drv);
+  constexpr char kTiffPath[] =
+      "/vsimem/gdalthreadsafedataset_test/ts_dataset_test.tif";
 
   // Create GTiff with overviews, mask, SRS, GCPs, metadata, RAT, color table,
   // unit
-  const char* tiff_srs_path = "/vsimem/ts_dataset_srs.tif";
+  constexpr char kTiffSrsPath[] =
+      "/vsimem/gdalthreadsafedataset_test/ts_dataset_srs.tif";
   {
-    std::unique_ptr<GDALDataset> ds_srs(
-        tiff_drv->Create(tiff_srs_path, 16, 16, 1, GDT_Byte, nullptr));
-    ASSERT_NE(ds_srs, nullptr);
+    GDALDatasetUniquePtr ds_srs(
+        tiff_drv->Create(kTiffSrsPath, 16, 16, 1, GDT_Byte, nullptr));
+    ASSERT_NE(nullptr, ds_srs);
     OGRSpatialReference srs;
-    srs.importFromEPSG(4326);
-    EXPECT_EQ(ds_srs->SetSpatialRef(&srs), CE_None);
+    EXPECT_EQ(OGRERR_NONE, srs.importFromEPSG(4326));
+    EXPECT_EQ(CE_None, ds_srs->SetSpatialRef(&srs));
     GDALGeoTransform gt(10.0, 1.0, 0.0, 20.0, 0.0, -1.0);
-    EXPECT_EQ(ds_srs->SetGeoTransform(gt), CE_None);
+    EXPECT_EQ(CE_None, ds_srs->SetGeoTransform(gt));
   }
   {
     std::unique_ptr<GDALDataset> src_srs_ds(
-        GDALDataset::Open(tiff_srs_path, GDAL_OF_RASTER));
-    ASSERT_NE(src_srs_ds, nullptr);
+        GDALDataset::Open(kTiffSrsPath, GDAL_OF_RASTER));
+    ASSERT_NE(nullptr, src_srs_ds);
     std::unique_ptr<GDALDataset> ts_srs_ds =
         GDALGetThreadSafeDataset(std::move(src_srs_ds), GDAL_OF_RASTER);
-    ASSERT_NE(ts_srs_ds, nullptr);
-    EXPECT_NE(ts_srs_ds->GetSpatialRef(), nullptr);
-    EXPECT_NE(ts_srs_ds->GetSpatialRef(), nullptr);  // cached
+    ASSERT_NE(nullptr, ts_srs_ds);
+    EXPECT_NE(nullptr, ts_srs_ds->GetSpatialRef());
+    EXPECT_NE(nullptr, ts_srs_ds->GetSpatialRef());  // cached
   }
-  VSIUnlink(tiff_srs_path);
 
   {
-    std::unique_ptr<GDALDataset> ds(
-        tiff_drv->Create(tiff_path, 16, 16, 1, GDT_Byte, nullptr));
-    ASSERT_NE(ds, nullptr);
+    GDALDatasetUniquePtr ds(
+        tiff_drv->Create(kTiffPath, 16, 16, 1, GDT_Byte, nullptr));
+    ASSERT_NE(nullptr, ds);
     OGRSpatialReference srs;
-    srs.importFromEPSG(4326);
+    EXPECT_EQ(OGRERR_NONE, srs.importFromEPSG(4326));
     GDAL_GCP gcp;
     GDALInitGCPs(1, &gcp);
-    gcp.dfGCPPixel = 1.0;
-    gcp.dfGCPLine = 2.0;
-    EXPECT_EQ(ds->SetGCPs(1, &gcp, &srs), CE_None);
-    GDALDeinitGCPs(1, &gcp);
-    EXPECT_EQ(ds->SetMetadataItem("DS_KEY", "DS_VAL", ""), CE_None);
+    {
+      absl::Cleanup deinit_gcp = [&gcp] { GDALDeinitGCPs(1, &gcp); };
+      gcp.dfGCPPixel = 1.0;
+      gcp.dfGCPLine = 2.0;
+      EXPECT_EQ(CE_None, ds->SetGCPs(1, &gcp, &srs));
+    }
+    EXPECT_EQ(CE_None, ds->SetMetadataItem("DS_KEY", "DS_VAL", ""));
 
     GDALRasterBand* b = ds->GetRasterBand(1);
-    EXPECT_EQ(b->Fill(77.0), CE_None);
-    EXPECT_EQ(b->SetMetadataItem("B_KEY", "B_VAL", ""), CE_None);
-    EXPECT_EQ(b->SetUnitType("m"), CE_None);
+    ASSERT_NE(nullptr, b);
+    EXPECT_EQ(CE_None, b->Fill(77.0));
+    EXPECT_EQ(CE_None, b->SetMetadataItem("B_KEY", "B_VAL", ""));
+    EXPECT_EQ(CE_None, b->SetUnitType("m"));
     GDALColorTable ct;
-    GDALColorEntry ce = {1, 2, 3, 255};
-    ct.SetColorEntry(0, &ce);
-    EXPECT_EQ(b->SetColorTable(&ct), CE_None);
+    constexpr GDALColorEntry kColorEntry = {1, 2, 3, 255};
+    ct.SetColorEntry(0, &kColorEntry);
+    EXPECT_EQ(CE_None, b->SetColorTable(&ct));
     GDALDefaultRasterAttributeTable rat;
-    rat.CreateColumn("val", GFT_Integer, GFU_Generic);
-    EXPECT_EQ(b->SetDefaultRAT(&rat), CE_None);
+    EXPECT_EQ(CE_None, rat.CreateColumn("val", GFT_Integer, GFU_Generic));
+    EXPECT_EQ(CE_None, b->SetDefaultRAT(&rat));
 
-    EXPECT_EQ(ds->CreateMaskBand(GMF_PER_DATASET), CE_None);
-    int ovr = 2;
-    EXPECT_EQ(
-        ds->BuildOverviews("NEAREST", 1, &ovr, 0, nullptr, nullptr, nullptr),
-        CE_None);
+    EXPECT_EQ(CE_None, ds->CreateMaskBand(GMF_PER_DATASET));
+    constexpr std::array<int, 1> kOvrLevels = {2};
+    EXPECT_EQ(CE_None, ds->BuildOverviews("NEAREST", 1, kOvrLevels.data(), 0,
+                                          nullptr, nullptr, nullptr));
   }
 
   std::unique_ptr<GDALDataset> src_ds(
-      GDALDataset::Open(tiff_path, GDAL_OF_RASTER));
-  ASSERT_NE(src_ds, nullptr);
+      GDALDataset::Open(kTiffPath, GDAL_OF_RASTER));
+  ASSERT_NE(nullptr, src_ds);
 
   // Test C API and raw pointer API
-  GDALDatasetH h_ts = GDALGetThreadSafeDataset(
-      GDALDataset::ToHandle(src_ds.get()), GDAL_OF_RASTER, nullptr);
-  ASSERT_NE(h_ts, nullptr);
-  EXPECT_TRUE(GDALDatasetIsThreadSafe(h_ts, GDAL_OF_RASTER, nullptr));
+  {
+    GDALDatasetH h_ts = GDALGetThreadSafeDataset(
+        GDALDataset::ToHandle(src_ds.get()), GDAL_OF_RASTER, nullptr);
+    ASSERT_NE(nullptr, h_ts);
+    absl::Cleanup release_h_ts = [h_ts] { GDALReleaseDataset(h_ts); };
+    EXPECT_TRUE(GDALDatasetIsThreadSafe(h_ts, GDAL_OF_RASTER, nullptr));
 
-  // Passing an already thread-safe dataset returns it with incremented ref
-  GDALDataset* ts_raw = GDALDataset::FromHandle(h_ts);
-  GDALDataset* ts_again = GDALGetThreadSafeDataset(ts_raw, GDAL_OF_RASTER);
-  EXPECT_EQ(ts_again, ts_raw);
-  ts_again->ReleaseRef();
-  GDALReleaseDataset(h_ts);
+    // Passing an already thread-safe dataset returns it with incremented ref
+    GDALDataset* ts_raw = GDALDataset::FromHandle(h_ts);
+    GDALDataset* ts_again = GDALGetThreadSafeDataset(ts_raw, GDAL_OF_RASTER);
+    ASSERT_EQ(ts_raw, ts_again);
+    ts_again->ReleaseRef();
+  }
 
   // Test unique_ptr API
   std::unique_ptr<GDALDataset> ts_ds =
       GDALGetThreadSafeDataset(std::move(src_ds), GDAL_OF_RASTER);
-  ASSERT_NE(ts_ds, nullptr);
+  ASSERT_NE(nullptr, ts_ds);
   // Passing already thread-safe unique_ptr returns the same unique_ptr
   GDALDataset* raw_ptr = ts_ds.get();
   ts_ds = GDALGetThreadSafeDataset(std::move(ts_ds), GDAL_OF_RASTER);
-  EXPECT_EQ(ts_ds.get(), raw_ptr);
+  EXPECT_EQ(raw_ptr, ts_ds.get());
 
   // Prototype forwarding methods on dataset
-  EXPECT_EQ(ts_ds->GetSpatialRef(), nullptr);
-  EXPECT_NE(ts_ds->GetGCPSpatialRef(), nullptr);
-  EXPECT_NE(ts_ds->GetGCPSpatialRef(), nullptr);  // cached
-  EXPECT_NE(ts_ds->GetGCPs(), nullptr);
-  EXPECT_STREQ(ts_ds->GetMetadataItem("DS_KEY", ""), "DS_VAL");
-  EXPECT_NE(ts_ds->GetMetadata(""), nullptr);
+  EXPECT_EQ(nullptr, ts_ds->GetSpatialRef());
+  EXPECT_NE(nullptr, ts_ds->GetGCPSpatialRef());
+  EXPECT_NE(nullptr, ts_ds->GetGCPSpatialRef());  // cached
+  EXPECT_NE(nullptr, ts_ds->GetGCPs());
+  EXPECT_STREQ("DS_VAL", ts_ds->GetMetadataItem("DS_KEY", ""));
+  EXPECT_NE(nullptr, ts_ds->GetMetadata(""));
   {
-    CPLErrorStateBackuper quiet(CPLQuietErrorHandler);
-    EXPECT_EQ(ts_ds->BeginAsyncReader(0, 0, 4, 4, nullptr, 4, 4, GDT_Byte, 1,
-                                      nullptr, 0, 0, 0, nullptr),
-              nullptr);
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr,
+              ts_ds->BeginAsyncReader(0, 0, 4, 4, nullptr, 4, 4, GDT_Byte, 1,
+                                      nullptr, 0, 0, 0, nullptr));
+    CPLErrorReset();
   }
 
   // Prototype forwarding methods on band
   GDALRasterBand* ts_b = ts_ds->GetRasterBand(1);
-  ASSERT_NE(ts_b, nullptr);
-  EXPECT_STREQ(ts_b->GetMetadataItem("B_KEY", ""), "B_VAL");
-  EXPECT_NE(ts_b->GetMetadata(""), nullptr);
-  EXPECT_STREQ(ts_b->GetUnitType(), "m");
-  EXPECT_NE(ts_b->GetColorTable(), nullptr);
-  EXPECT_NE(ts_b->GetDefaultRAT(), nullptr);
+  ASSERT_NE(nullptr, ts_b);
+  EXPECT_STREQ("B_VAL", ts_b->GetMetadataItem("B_KEY", ""));
+  EXPECT_NE(nullptr, ts_b->GetMetadata(""));
+  EXPECT_STREQ("m", ts_b->GetUnitType());
+  EXPECT_NE(nullptr, ts_b->GetColorTable());
+  EXPECT_NE(nullptr, ts_b->GetDefaultRAT());
   {
-    CPLErrorStateBackuper quiet(CPLQuietErrorHandler);
+    WithQuietHandler quiet;
+    CPLErrorReset();
     int pspace = 0;
     GIntBig lspace = 0;
-    EXPECT_EQ(ts_b->GetVirtualMemAuto(GF_Read, &pspace, &lspace, nullptr),
-              nullptr);
+    EXPECT_EQ(nullptr,
+              ts_b->GetVirtualMemAuto(GF_Read, &pspace, &lspace, nullptr));
+    CPLErrorReset();
   }
 
-  EXPECT_EQ(ts_b->GetOverviewCount(), 1);
-  EXPECT_EQ(ts_b->GetOverview(-1), nullptr);
-  EXPECT_EQ(ts_b->GetOverview(5), nullptr);
+  EXPECT_EQ(1, ts_b->GetOverviewCount());
+  EXPECT_EQ(nullptr, ts_b->GetOverview(-1));
+  EXPECT_EQ(nullptr, ts_b->GetOverview(5));
   GDALRasterBand* ts_ovr = ts_b->GetOverview(0);
-  ASSERT_NE(ts_ovr, nullptr);
-  EXPECT_NE(ts_b->GetRasterSampleOverview(4), nullptr);
+  ASSERT_NE(nullptr, ts_ovr);
+  EXPECT_NE(nullptr, ts_b->GetRasterSampleOverview(4));
 
   GDALRasterBand* ts_mask = ts_b->GetMaskBand();
-  ASSERT_NE(ts_mask, nullptr);
+  ASSERT_NE(nullptr, ts_mask);
   GDALRasterBand* ts_mask_mask = ts_mask->GetMaskBand();
-  ASSERT_NE(ts_mask_mask, nullptr);
+  ASSERT_NE(nullptr, ts_mask_mask);
 
   // Worker thread reading from dataset, band, overview, mask, and mask-of-mask
-  std::thread worker([&]() {
-    GByte buf[256] = {0};
-    EXPECT_EQ(ts_ds->RasterIO(GF_Read, 0, 0, 16, 16, buf, 16, 16, GDT_Byte, 1,
-                              nullptr, 0, 0, 0, nullptr),
-              CE_None);
-    // Second call hits the thread-local LRU cache!
-    EXPECT_EQ(ts_b->RasterIO(GF_Read, 0, 0, 16, 16, buf, 16, 16, GDT_Byte, 0, 0,
-                             nullptr),
-              CE_None);
-    EXPECT_EQ(buf[0], 77);
-    EXPECT_EQ(ts_ovr->RasterIO(GF_Read, 0, 0, 8, 8, buf, 8, 8, GDT_Byte, 0, 0,
-                               nullptr),
-              CE_None);
-    EXPECT_EQ(ts_mask->RasterIO(GF_Read, 0, 0, 16, 16, buf, 16, 16, GDT_Byte, 0,
-                                0, nullptr),
-              CE_None);
-    EXPECT_EQ(ts_mask_mask->RasterIO(GF_Read, 0, 0, 16, 16, buf, 16, 16,
-                                     GDT_Byte, 0, 0, nullptr),
-              CE_None);
-  });
-  worker.join();
+  {
+    std::jthread worker([&]() {
+      std::array<GByte, 256> buf{};
+      EXPECT_EQ(CE_None,
+                ts_ds->RasterIO(GF_Read, 0, 0, 16, 16, buf.data(), 16, 16,
+                                GDT_Byte, 1, nullptr, 0, 0, 0, nullptr));
+      // Second call hits the thread-local LRU cache!
+      EXPECT_EQ(CE_None, ts_b->RasterIO(GF_Read, 0, 0, 16, 16, buf.data(), 16,
+                                        16, GDT_Byte, 0, 0, nullptr));
+      EXPECT_EQ(77, buf[0]);
+      EXPECT_EQ(CE_None, ts_ovr->RasterIO(GF_Read, 0, 0, 8, 8, buf.data(), 8, 8,
+                                          GDT_Byte, 0, 0, nullptr));
+      EXPECT_EQ(CE_None, ts_mask->RasterIO(GF_Read, 0, 0, 16, 16, buf.data(),
+                                           16, 16, GDT_Byte, 0, 0, nullptr));
+      EXPECT_EQ(CE_None,
+                ts_mask_mask->RasterIO(GF_Read, 0, 0, 16, 16, buf.data(), 16,
+                                       16, GDT_Byte, 0, 0, nullptr));
+    });
+  }
 
   // Also read on main thread so main thread's TLS cache has an entry when ts_ds
   // is destroyed
-  GByte main_buf[256] = {0};
-  EXPECT_EQ(ts_b->RasterIO(GF_Read, 0, 0, 16, 16, main_buf, 16, 16, GDT_Byte, 0,
-                           0, nullptr),
-            CE_None);
-
-  ts_ds.reset();
-  VSIUnlink(tiff_path);
-  VSIUnlink("/vsimem/ts_dataset_test.tif.aux.xml");
+  std::array<GByte, 256> main_buf{};
+  EXPECT_EQ(CE_None, ts_b->RasterIO(GF_Read, 0, 0, 16, 16, main_buf.data(), 16,
+                                    16, GDT_Byte, 0, 0, nullptr));
 }
 
 }  // namespace
-}  // namespace gdal
+}  // namespace autotest2

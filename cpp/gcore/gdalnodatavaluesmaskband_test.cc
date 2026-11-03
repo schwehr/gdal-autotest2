@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,18 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests gcore/gdalnodatavaluesmaskband.cpp.
+// Tests NODATA_VALUES implicit mask band (gcore/gdalnodatavaluesmaskband.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdalnodatavaluesmaskband.cpp
 
+#include <array>
 #include <cstring>
 #include <memory>
 #include <vector>
 
+#include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_frmts.h"
 #include "third_party/gdal/gcore/gdal_priv.h"
 #include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/port/cpl_port.h"
 
+namespace autotest2 {
 namespace {
+
+using ::testing::ElementsAre;
 
 class PartialBlockBand : public GDALRasterBand {
  public:
@@ -43,7 +54,7 @@ class PartialBlockBand : public GDALRasterBand {
     if (fail_read_) {
       return CE_Failure;
     }
-    memset(image, 5, nBlockXSize * nBlockYSize);
+    std::memset(image, 5, static_cast<size_t>(nBlockXSize) * nBlockYSize);
     return CE_None;
   }
 
@@ -62,16 +73,15 @@ class PartialBlockDataset : public GDALDataset {
   }
 };
 
-TEST(GdalnodatavaluesmaskbandTest, AllDataTypes) {
-  GDALAllRegister();
+TEST(GdalNoDataValuesMaskBandTest, AllDataTypes) {
+  GDALRegister_MEM();
   GDALDriver* mem_driver = GetGDALDriverManager()->GetDriverByName("MEM");
   ASSERT_NE(nullptr, mem_driver);
 
-  const GDALDataType types[] = {GDT_Byte,    GDT_UInt16,  GDT_Int16,
-                                GDT_Float32, GDT_Float64, GDT_Int64};
-  for (GDALDataType dt : types) {
-    std::unique_ptr<GDALDataset> ds(
-        mem_driver->Create("", 4, 1, 2, dt, nullptr));
+  constexpr auto kDataTypes = std::to_array<GDALDataType>(
+      {GDT_Byte, GDT_UInt16, GDT_Int16, GDT_Float32, GDT_Float64, GDT_Int64});
+  for (GDALDataType dt : kDataTypes) {
+    GDALDatasetUniquePtr ds(mem_driver->Create("", 4, 1, 2, dt, nullptr));
     ASSERT_NE(nullptr, ds);
     ASSERT_EQ(CE_None, ds->SetMetadataItem("NODATA_VALUES", "10 20"));
 
@@ -79,31 +89,33 @@ TEST(GdalnodatavaluesmaskbandTest, AllDataTypes) {
     // Pixel 1: (10, 99) -> matches only band 1 -> mask = 255
     // Pixel 2: (99, 20) -> matches only band 2 -> mask = 255
     // Pixel 3: (1, 2)   -> matches neither -> mask = 255
-    double b1[4] = {10.0, 10.0, 99.0, 1.0};
-    double b2[4] = {20.0, 99.0, 20.0, 2.0};
+    std::array<double, 4> b1 = {10.0, 10.0, 99.0, 1.0};
+    std::array<double, 4> b2 = {20.0, 99.0, 20.0, 2.0};
     ASSERT_EQ(CE_None,
-              ds->GetRasterBand(1)->RasterIO(GF_Write, 0, 0, 4, 1, b1, 4, 1,
-                                             GDT_Float64, 0, 0, nullptr));
+              ds->GetRasterBand(1)->RasterIO(GF_Write, 0, 0, 4, 1, b1.data(), 4,
+                                             1, GDT_Float64, 0, 0, nullptr));
     ASSERT_EQ(CE_None,
-              ds->GetRasterBand(2)->RasterIO(GF_Write, 0, 0, 4, 1, b2, 4, 1,
-                                             GDT_Float64, 0, 0, nullptr));
+              ds->GetRasterBand(2)->RasterIO(GF_Write, 0, 0, 4, 1, b2.data(), 4,
+                                             1, GDT_Float64, 0, 0, nullptr));
 
     GDALNoDataValuesMaskBand mask_band(ds.get());
     std::vector<GByte> mask(4, 123);
     EXPECT_EQ(CE_None, mask_band.ReadBlock(0, 0, mask.data()));
-    EXPECT_EQ(0, mask[0]);
-    EXPECT_EQ(255, mask[1]);
-    EXPECT_EQ(255, mask[2]);
-    EXPECT_EQ(255, mask[3]);
+    EXPECT_THAT(mask, ElementsAre(0, 255, 255, 255));
 
     // Write attempt triggers EmitErrorMessageIfWriteNotSupported.
-    CPLPushErrorHandler(CPLQuietErrorHandler);
-    EXPECT_EQ(CE_Failure, mask_band.Fill(0));
-    CPLPopErrorHandler();
+    {
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      EXPECT_EQ(CE_Failure, mask_band.Fill(0));
+      EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+      EXPECT_EQ(CPLE_NoWriteAccess, CPLGetLastErrorNo());
+      CPLErrorReset();
+    }
   }
 }
 
-TEST(GdalnodatavaluesmaskbandTest, PartialBlock) {
+TEST(GdalNoDataValuesMaskBandTest, PartialBlock) {
   // Partial block (3x3 raster with 4x4 block size).
   PartialBlockDataset ok_ds(/*fail_read=*/false);
   GDALNoDataValuesMaskBand ok_mask(&ok_ds);
@@ -113,3 +125,4 @@ TEST(GdalnodatavaluesmaskbandTest, PartialBlock) {
 }
 
 }  // namespace
+}  // namespace autotest2

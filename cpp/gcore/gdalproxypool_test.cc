@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,65 +11,81 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Unit tests for gcore/gdalproxypool.cpp.
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdalproxypool.cpp
 
+#include <array>
 #include <memory>
 #include <string>
 
 #include "testing/base/public/gunit.h"
-#include "third_party/gdal/frmts/vrt/gdal_vrt.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
+#include "third_party/gdal/autotest2/cpp/util/vsimem.h"
 #include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_driver.h"
+#include "third_party/gdal/gcore/gdal_drivermanager.h"
+#include "third_party/gdal/gcore/gdal_frmts.h"
 #include "third_party/gdal/gcore/gdal_priv.h"
 #include "third_party/gdal/gcore/gdal_proxy.h"
 #include "third_party/gdal/ogr/ogr_spatialref.h"
 #include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
-#include "third_party/gdal/port/cpl_string.h"
+#include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 
-extern void GDALNullifyProxyPoolSingleton();
+// Internal helper symbols in gcore/gdalproxypool.cpp not exported by a public
+// header; keep in sync with third_party/gdal/gcore/gdalproxypool.cpp.
 extern void GDALDatasetPoolPreventDestroy();
 extern void GDALDatasetPoolForceDestroy();
 
+namespace autotest2 {
 namespace {
 
-void CreateTestGeoTiff(const char* filename, int xsize = 16, int ysize = 16,
-                       int bands = 2, bool with_srs_gt = true,
+constexpr char kTestDir[] = "/vsimem/gdalproxypool_test";
+
+void CreateTestGeoTiff(const std::string& filename, int xsize = 16,
+                       int ysize = 16, int bands = 2, bool with_srs_gt = true,
                        bool with_gcps = false, bool with_ovr_and_mask = false) {
-  GDALDriver* drv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(drv, nullptr);
-  GDALDataset* ds =
-      drv->Create(filename, xsize, ysize, bands, GDT_Byte, nullptr);
-  ASSERT_NE(ds, nullptr);
+  GDALDriver* const drv = GetGDALDriverManager()->GetDriverByName("GTiff");
+  ASSERT_NE(nullptr, drv);
+  GDALDatasetUniquePtr ds(
+      drv->Create(filename.c_str(), xsize, ysize, bands, GDT_Byte, nullptr));
+  ASSERT_NE(nullptr, ds);
 
   if (with_srs_gt) {
     OGRSpatialReference srs;
     srs.SetWellKnownGeogCS("WGS84");
-    EXPECT_EQ(ds->SetSpatialRef(&srs), CE_None);
+    EXPECT_EQ(CE_None, ds->SetSpatialRef(&srs));
     GDALGeoTransform gt(10.0, 1.0, 0.0, 20.0, 0.0, -1.0);
-    EXPECT_EQ(ds->SetGeoTransform(gt), CE_None);
+    EXPECT_EQ(CE_None, ds->SetGeoTransform(gt));
   }
   if (with_gcps) {
     OGRSpatialReference gcp_srs;
     gcp_srs.SetWellKnownGeogCS("WGS84");
     GDAL_GCP gcp;
     GDALInitGCPs(1, &gcp);
+    absl::Cleanup deinit_gcp = [&gcp]() { GDALDeinitGCPs(1, &gcp); };
     gcp.dfGCPPixel = 1.0;
     gcp.dfGCPLine = 2.0;
     gcp.dfGCPX = 100.0;
     gcp.dfGCPY = 200.0;
-    EXPECT_EQ(ds->SetGCPs(1, &gcp, &gcp_srs), CE_None);
-    GDALDeinitGCPs(1, &gcp);
+    EXPECT_EQ(CE_None, ds->SetGCPs(1, &gcp, &gcp_srs));
   }
 
   ds->SetMetadataItem("DS_KEY", "DS_VAL");
   ds->SetMetadataItem("SUB_KEY", "SUB_VAL", "CUSTOM_DOMAIN");
 
-  GDALRasterBand* b1 = ds->GetRasterBand(1);
+  GDALRasterBand* const b1 = ds->GetRasterBand(1);
+  ASSERT_NE(nullptr, b1);
   b1->Fill(42);
   b1->SetMetadataItem("BAND_KEY", "BAND_VAL");
   b1->SetUnitType("meters");
-  const char* cats[] = {"Cat0", "Cat1", nullptr};
-  b1->SetCategoryNames(const_cast<char**>(cats));
+  constexpr auto cats = std::to_array<const char*>({"Cat0", "Cat1", nullptr});
+  b1->SetCategoryNames(const_cast<char**>(cats.data()));
   GDALColorTable ct;
   GDALColorEntry entry = {10, 20, 30, 255};
   ct.SetColorEntry(0, &entry);
@@ -77,31 +93,32 @@ void CreateTestGeoTiff(const char* filename, int xsize = 16, int ysize = 16,
 
   if (with_ovr_and_mask) {
     int ovr_list[] = {2};
-    EXPECT_EQ(ds->BuildOverviews("NEAREST", 1, ovr_list, 0, nullptr, nullptr,
-                                 nullptr),
-              CE_None);
-    EXPECT_EQ(b1->CreateMaskBand(GMF_PER_DATASET), CE_None);
+    EXPECT_EQ(CE_None, ds->BuildOverviews("NEAREST", 1, ovr_list, 0, nullptr,
+                                          nullptr, nullptr));
+    EXPECT_EQ(CE_None, b1->CreateMaskBand(GMF_PER_DATASET));
   }
-
-  GDALClose(ds);
 }
 
 TEST(GdalProxyPoolTest, PoolSizingAndSingletonLifecycle) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
+  absl::Cleanup cleanup_dir = []() { VSIRmdirRecursive(kTestDir); };
+  GDALRegister_GTiff();
+  ASSERT_NE(nullptr, GetGDALDriverManager()->GetDriverByName("GTiff"));
 
   {
     CPLConfigOptionSetter s1("GDAL_MAX_DATASET_POOL_SIZE", "1", false);
-    EXPECT_EQ(GDALGetMaxDatasetPoolSize(), 2);
+    EXPECT_EQ(2, GDALGetMaxDatasetPoolSize());
   }
   {
     CPLConfigOptionSetter s2("GDAL_MAX_DATASET_POOL_SIZE", "5000", false);
-    EXPECT_EQ(GDALGetMaxDatasetPoolSize(), 1000);
+    EXPECT_EQ(1000, GDALGetMaxDatasetPoolSize());
   }
 
-  CreateTestGeoTiff("/vsimem/pool1.tif");
-  CreateTestGeoTiff("/vsimem/pool2.tif");
-  CreateTestGeoTiff("/vsimem/pool3.tif");
+  const std::string pool1_path = std::string(kTestDir) + "/pool1.tif";
+  const std::string pool2_path = std::string(kTestDir) + "/pool2.tif";
+  const std::string pool3_path = std::string(kTestDir) + "/pool3.tif";
+  CreateTestGeoTiff(pool1_path);
+  CreateTestGeoTiff(pool2_path);
+  CreateTestGeoTiff(pool3_path);
 
   // Test GDAL_MAX_DATASET_POOL_RAM_USAGE with MB and GB suffixes, and
   // PreventDestroy / ForceDestroy:
@@ -112,11 +129,11 @@ TEST(GdalProxyPoolTest, PoolSizingAndSingletonLifecycle) {
     GDALDatasetPoolPreventDestroy();  // no-op when singleton is null
     GDALDatasetPoolForceDestroy();    // no-op when singleton is null
 
-    auto* p1 = GDALProxyPoolDataset::Create("/vsimem/pool1.tif", nullptr,
-                                            GA_ReadOnly, TRUE, "owner1");
-    ASSERT_NE(p1, nullptr);
+    std::unique_ptr<GDALProxyPoolDataset> p1(GDALProxyPoolDataset::Create(
+        pool1_path.c_str(), nullptr, GA_ReadOnly, TRUE, "owner1"));
+    ASSERT_NE(nullptr, p1);
     GDALDatasetPoolPreventDestroy();
-    delete p1;
+    p1.reset();
     // Singleton is still alive due to PreventDestroy:
     GDALDatasetPoolForceDestroy();
   }
@@ -124,207 +141,201 @@ TEST(GdalProxyPoolTest, PoolSizingAndSingletonLifecycle) {
   {
     CPLConfigOptionSetter s_ram("GDAL_MAX_DATASET_POOL_RAM_USAGE", "1GB",
                                 false);
-    auto* p1 = GDALProxyPoolDataset::Create("/vsimem/pool1.tif");
-    ASSERT_NE(p1, nullptr);
-    delete p1;
+    std::unique_ptr<GDALProxyPoolDataset> p1(
+        GDALProxyPoolDataset::Create(pool1_path.c_str()));
+    ASSERT_NE(nullptr, p1);
   }
 
   // Test LRU cache hits, moving entries to head, and eviction at maxSize=2:
   {
     CPLConfigOptionSetter s_size("GDAL_MAX_DATASET_POOL_SIZE", "2", false);
-    const char* oo[] = {"NUM_THREADS=1", nullptr};
-    auto* p1 = GDALProxyPoolDataset::Create("/vsimem/pool1.tif", oo,
-                                            GA_ReadOnly, TRUE, "ownerA");
-    auto* p2 = GDALProxyPoolDataset::Create("/vsimem/pool2.tif", oo,
-                                            GA_ReadOnly, TRUE, "ownerA");
-    auto* p3 = GDALProxyPoolDataset::Create("/vsimem/pool3.tif", oo,
-                                            GA_ReadOnly, FALSE, nullptr);
-    ASSERT_NE(p1, nullptr);
-    ASSERT_NE(p2, nullptr);
-    ASSERT_NE(p3, nullptr);
+    constexpr auto oo = std::to_array<const char*>({"NUM_THREADS=1", nullptr});
+    std::unique_ptr<GDALProxyPoolDataset> p1(GDALProxyPoolDataset::Create(
+        pool1_path.c_str(), const_cast<char**>(oo.data()), GA_ReadOnly, TRUE,
+        "ownerA"));
+    std::unique_ptr<GDALProxyPoolDataset> p2(GDALProxyPoolDataset::Create(
+        pool2_path.c_str(), const_cast<char**>(oo.data()), GA_ReadOnly, TRUE,
+        "ownerA"));
+    std::unique_ptr<GDALProxyPoolDataset> p3(GDALProxyPoolDataset::Create(
+        pool3_path.c_str(), const_cast<char**>(oo.data()), GA_ReadOnly, FALSE,
+        nullptr));
+    ASSERT_NE(nullptr, p1);
+    ASSERT_NE(nullptr, p2);
+    ASSERT_NE(nullptr, p3);
 
     // Access p1, then p2, then p1 again (moves p1 from tail to head), then p3
     // (evicts LRU entry with refCount == 0):
-    EXPECT_NE(p1->GetMetadata(""), nullptr);
-    EXPECT_NE(p2->GetMetadata(""), nullptr);
-    EXPECT_NE(p1->GetMetadataItem("DS_KEY", ""), nullptr);
-    EXPECT_NE(p3->GetMetadata(""), nullptr);
+    EXPECT_NE(nullptr, p1->GetMetadata(""));
+    EXPECT_NE(nullptr, p2->GetMetadata(""));
+    EXPECT_NE(nullptr, p1->GetMetadataItem("DS_KEY", ""));
+    EXPECT_NE(nullptr, p3->GetMetadata(""));
     // Access p3 again when it is already at firstEntry:
-    EXPECT_NE(p3->GetMetadata(""), nullptr);
-
-    delete p1;
-    delete p2;
-    delete p3;
+    EXPECT_NE(nullptr, p3->GetMetadata(""));
   }
 
   // Create on non-existent dataset returns nullptr:
-  EXPECT_EQ(GDALProxyPoolDataset::Create("/vsimem/does_not_exist.tif"),
-            nullptr);
-
-  VSIUnlink("/vsimem/pool1.tif");
-  VSIUnlink("/vsimem/pool2.tif");
-  VSIUnlink("/vsimem/pool3.tif");
-  CPLPopErrorHandler();
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    const std::string missing_path =
+        std::string(kTestDir) + "/does_not_exist.tif";
+    EXPECT_EQ(nullptr, GDALProxyPoolDataset::Create(missing_path.c_str()));
+    CPLErrorReset();
+  }
 }
 
 TEST(GdalProxyPoolTest, DatasetAndBandMethodsAndCAPI) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
+  absl::Cleanup cleanup_dir = []() { VSIRmdirRecursive(kTestDir); };
+  GDALRegister_GTiff();
+  GDALRegister_VRT();
+  ASSERT_NE(nullptr, GetGDALDriverManager()->GetDriverByName("GTiff"));
+  ASSERT_NE(nullptr, GetGDALDriverManager()->GetDriverByName("VRT"));
 
-  CreateTestGeoTiff("/vsimem/proxy_full.tif", 16, 16, 2, true, false, true);
-  CreateTestGeoTiff("/vsimem/proxy_gcp.tif", 16, 16, 1, false, true, false);
+  const std::string full_tif_path = std::string(kTestDir) + "/proxy_full.tif";
+  const std::string gcp_tif_path = std::string(kTestDir) + "/proxy_gcp.tif";
+  const std::string vrt_path = std::string(kTestDir) + "/proxy_cats.vrt";
 
-  // Also create a VRT with CategoryNames so GetCategoryNames() returns
-  // non-null:
-  const char* vrt_xml =
-      "<VRTDataset rasterXSize=\"16\" rasterYSize=\"16\">"
-      "  <VRTRasterBand dataType=\"Byte\" band=\"1\">"
-      "    "
-      "<CategoryNames><Category>Cat0</Category><Category>Cat1</Category></"
-      "CategoryNames>"
-      "    <SimpleSource>"
-      "      <SourceFilename "
-      "relativeToVRT=\"0\">/vsimem/proxy_full.tif</SourceFilename>"
+  CreateTestGeoTiff(full_tif_path, 16, 16, 2, true, false, true);
+  CreateTestGeoTiff(gcp_tif_path, 16, 16, 1, false, true, false);
+
+  // Create a VRT with CategoryNames so GetCategoryNames() returns non-null:
+  const std::string vrt_xml =
+      std::string(
+          "<VRTDataset rasterXSize=\"16\" rasterYSize=\"16\">"
+          "  <VRTRasterBand dataType=\"Byte\" band=\"1\">"
+          "    <CategoryNames><Category>Cat0</Category><Category>Cat1</"
+          "Category></CategoryNames>"
+          "    <SimpleSource>"
+          "      <SourceFilename relativeToVRT=\"0\">") +
+      full_tif_path +
+      "</SourceFilename>"
       "      <SourceBand>1</SourceBand>"
       "    </SimpleSource>"
       "  </VRTRasterBand>"
       "</VRTDataset>";
-  VSILFILE* fp_vrt = VSIFOpenL("/vsimem/proxy_cats.vrt", "wb");
-  ASSERT_NE(fp_vrt, nullptr);
-  VSIFWriteL(vrt_xml, 1, strlen(vrt_xml), fp_vrt);
-  VSIFCloseL(fp_vrt);
   {
-    auto* cats_proxy = GDALProxyPoolDataset::Create("/vsimem/proxy_cats.vrt");
-    ASSERT_NE(cats_proxy, nullptr);
-    EXPECT_NE(cats_proxy->GetRasterBand(1)->GetCategoryNames(), nullptr);
-    EXPECT_NE(cats_proxy->GetRasterBand(1)->GetCategoryNames(), nullptr);
-    delete cats_proxy;
+    VsiMemTempWrapper vrt_file(vrt_path, vrt_xml);
+    std::unique_ptr<GDALProxyPoolDataset> cats_proxy(
+        GDALProxyPoolDataset::Create(vrt_path.c_str()));
+    ASSERT_NE(nullptr, cats_proxy);
+    EXPECT_NE(nullptr, cats_proxy->GetRasterBand(1)->GetCategoryNames());
+    EXPECT_NE(nullptr, cats_proxy->GetRasterBand(1)->GetCategoryNames());
   }
-  VSIUnlink("/vsimem/proxy_cats.vrt");
 
   // 1. C API:
   double gt_arr[6] = {0.0, 1.0, 0.0, 0.0, 0.0, -1.0};
-  GDALProxyPoolDatasetH hDS =
-      GDALProxyPoolDatasetCreate("/vsimem/proxy_full.tif", 16, 16, GA_Update,
+  GDALProxyPoolDatasetH h_ds =
+      GDALProxyPoolDatasetCreate(full_tif_path.c_str(), 16, 16, GA_Update,
                                  FALSE, SRS_WKT_WGS84_LAT_LONG, gt_arr);
-  ASSERT_NE(hDS, nullptr);
-  GDALProxyPoolDatasetAddSrcBandDescription(hDS, GDT_Byte, 16, 16);
+  ASSERT_NE(nullptr, h_ds);
+  absl::Cleanup delete_h_ds = [h_ds]() { GDALProxyPoolDatasetDelete(h_ds); };
+
+  GDALProxyPoolDatasetAddSrcBandDescription(h_ds, GDT_Byte, 16, 16);
   // Add second band with 0x0 block size so RefUnderlyingRasterBand loads it:
-  auto* cpp_ds = reinterpret_cast<GDALProxyPoolDataset*>(hDS);
+  auto* cpp_ds = reinterpret_cast<GDALProxyPoolDataset*>(h_ds);
   cpp_ds->AddSrcBand(2, GDT_Byte, 0, 0);
 
   // FlushCache before underlying dataset is opened:
-  EXPECT_EQ(cpp_ds->FlushCache(false), CE_None);
+  EXPECT_EQ(CE_None, cpp_ds->FlushCache(false));
 
   // SpatialRef and GeoTransform (cached from constructor vs delegated):
-  EXPECT_NE(cpp_ds->GetSpatialRef(), nullptr);
+  EXPECT_NE(nullptr, cpp_ds->GetSpatialRef());
   OGRSpatialReference srs2;
   srs2.SetWellKnownGeogCS("NAD83");
-  EXPECT_EQ(cpp_ds->SetSpatialRef(&srs2), CE_None);
-  EXPECT_NE(cpp_ds->GetSpatialRef(), nullptr);
+  EXPECT_EQ(CE_None, cpp_ds->SetSpatialRef(&srs2));
+  EXPECT_NE(nullptr, cpp_ds->GetSpatialRef());
 
   GDALGeoTransform gt_out;
-  EXPECT_EQ(cpp_ds->GetGeoTransform(gt_out), CE_None);
-  EXPECT_DOUBLE_EQ(gt_out[1], 1.0);
+  EXPECT_EQ(CE_None, cpp_ds->GetGeoTransform(gt_out));
+  EXPECT_DOUBLE_EQ(1.0, gt_out[1]);
   GDALGeoTransform gt_new(5.0, 2.0, 0.0, 10.0, 0.0, -2.0);
-  EXPECT_EQ(cpp_ds->SetGeoTransform(gt_new), CE_None);
-  EXPECT_EQ(cpp_ds->GetGeoTransform(gt_out), CE_None);
-  EXPECT_DOUBLE_EQ(gt_out[0], 5.0);
+  EXPECT_EQ(CE_None, cpp_ds->SetGeoTransform(gt_new));
+  EXPECT_EQ(CE_None, cpp_ds->GetGeoTransform(gt_out));
+  EXPECT_DOUBLE_EQ(5.0, gt_out[0]);
 
   // Metadata and MetadataItem on dataset:
-  EXPECT_NE(cpp_ds->GetMetadata(""), nullptr);
-  EXPECT_NE(cpp_ds->GetMetadata("CUSTOM_DOMAIN"), nullptr);
-  EXPECT_NE(cpp_ds->GetMetadata(""),
-            nullptr);  // repeat to test hash set replace
-  EXPECT_STREQ(cpp_ds->GetMetadataItem("DS_KEY", ""), "DS_VAL");
-  EXPECT_STREQ(cpp_ds->GetMetadataItem("DS_KEY", ""), "DS_VAL");
-  EXPECT_EQ(cpp_ds->GetMetadataItem("MISSING", ""), nullptr);
+  EXPECT_NE(nullptr, cpp_ds->GetMetadata(""));
+  EXPECT_NE(nullptr, cpp_ds->GetMetadata("CUSTOM_DOMAIN"));
+  EXPECT_NE(nullptr, cpp_ds->GetMetadata(""));  // repeat tests hash set replace
+  EXPECT_STREQ("DS_VAL", cpp_ds->GetMetadataItem("DS_KEY", ""));
+  EXPECT_STREQ("DS_VAL", cpp_ds->GetMetadataItem("DS_KEY", ""));
+  EXPECT_EQ(nullptr, cpp_ds->GetMetadataItem("MISSING", ""));
 
   // GetInternalHandle:
-  EXPECT_EQ(cpp_ds->GetInternalHandle(" dummy "), nullptr);
+  EXPECT_EQ(nullptr, cpp_ds->GetInternalHandle(" dummy "));
 
   // Band 1 & Band 2 operations:
   auto* band1 =
       dynamic_cast<GDALProxyPoolRasterBand*>(cpp_ds->GetRasterBand(1));
   auto* band2 =
       dynamic_cast<GDALProxyPoolRasterBand*>(cpp_ds->GetRasterBand(2));
-  ASSERT_NE(band1, nullptr);
-  ASSERT_NE(band2, nullptr);
+  ASSERT_NE(nullptr, band1);
+  ASSERT_NE(nullptr, band2);
 
   // Trigger RefUnderlyingRasterBand on band2 (which has block size 0x0):
-  EXPECT_EQ(band2->FlushCache(false), CE_None);
-  int bx = 0, by = 0;
+  EXPECT_EQ(CE_None, band2->FlushCache(false));
+  int bx = 0;
+  int by = 0;
   band2->GetBlockSize(&bx, &by);
   EXPECT_GT(bx, 0);
   EXPECT_GT(by, 0);
 
   // Band metadata, category names, unit type, color table (call twice):
-  EXPECT_NE(band1->GetMetadata(""), nullptr);
-  EXPECT_NE(band1->GetMetadata(""), nullptr);
-  EXPECT_STREQ(band1->GetMetadataItem("BAND_KEY", ""), "BAND_VAL");
-  EXPECT_STREQ(band1->GetMetadataItem("BAND_KEY", ""), "BAND_VAL");
-  EXPECT_EQ(band1->GetCategoryNames(), nullptr);
-  EXPECT_EQ(band1->GetCategoryNames(), nullptr);
-  EXPECT_STREQ(band1->GetUnitType(), "meters");
-  EXPECT_STREQ(band1->GetUnitType(), "meters");
-  EXPECT_NE(band1->GetColorTable(), nullptr);
-  EXPECT_NE(band1->GetColorTable(), nullptr);
+  EXPECT_NE(nullptr, band1->GetMetadata(""));
+  EXPECT_NE(nullptr, band1->GetMetadata(""));
+  EXPECT_STREQ("BAND_VAL", band1->GetMetadataItem("BAND_KEY", ""));
+  EXPECT_STREQ("BAND_VAL", band1->GetMetadataItem("BAND_KEY", ""));
+  EXPECT_EQ(nullptr, band1->GetCategoryNames());
+  EXPECT_EQ(nullptr, band1->GetCategoryNames());
+  EXPECT_STREQ("meters", band1->GetUnitType());
+  EXPECT_STREQ("meters", band1->GetUnitType());
+  EXPECT_NE(nullptr, band1->GetColorTable());
+  EXPECT_NE(nullptr, band1->GetColorTable());
 
   // Overviews:
-  EXPECT_EQ(band1->GetOverview(-1), nullptr);
-  EXPECT_EQ(band1->GetOverview(99), nullptr);
-  GDALRasterBand* ovr0 = band1->GetOverview(0);
-  ASSERT_NE(ovr0, nullptr);
-  EXPECT_EQ(band1->GetOverview(0), ovr0);  // cached
+  EXPECT_EQ(nullptr, band1->GetOverview(-1));
+  EXPECT_EQ(nullptr, band1->GetOverview(99));
+  GDALRasterBand* const ovr0 = band1->GetOverview(0);
+  ASSERT_NE(nullptr, ovr0);
+  EXPECT_EQ(ovr0, band1->GetOverview(0));  // cached
   GByte pixel = 0;
-  EXPECT_EQ(ovr0->RasterIO(GF_Read, 0, 0, 1, 1, &pixel, 1, 1, GDT_Byte, 0, 0,
-                           nullptr),
-            CE_None);
-  EXPECT_EQ(ovr0->FlushCache(false), CE_None);
+  EXPECT_EQ(CE_None, ovr0->RasterIO(GF_Read, 0, 0, 1, 1, &pixel, 1, 1, GDT_Byte,
+                                    0, 0, nullptr));
+  EXPECT_EQ(CE_None, ovr0->FlushCache(false));
 
   // GetRasterSampleOverview (unimplemented -> nullptr):
-  EXPECT_EQ(band1->GetRasterSampleOverview(10), nullptr);
+  EXPECT_EQ(nullptr, band1->GetRasterSampleOverview(10));
 
   // MaskBand via GetMaskBand() on band1, and AddSrcMaskBandDescription on
   // band2:
-  GDALRasterBand* mask1 = band1->GetMaskBand();
-  ASSERT_NE(mask1, nullptr);
-  EXPECT_EQ(band1->GetMaskBand(), mask1);
+  GDALRasterBand* const mask1 = band1->GetMaskBand();
+  ASSERT_NE(nullptr, mask1);
+  EXPECT_EQ(mask1, band1->GetMaskBand());
   EXPECT_TRUE(mask1->IsMaskBand());
-  EXPECT_EQ(mask1->RasterIO(GF_Read, 0, 0, 1, 1, &pixel, 1, 1, GDT_Byte, 0, 0,
-                            nullptr),
-            CE_None);
+  EXPECT_EQ(CE_None, mask1->RasterIO(GF_Read, 0, 0, 1, 1, &pixel, 1, 1,
+                                     GDT_Byte, 0, 0, nullptr));
 
   band2->AddSrcMaskBandDescription(GDT_Byte, 16, 16);
-  EXPECT_NE(band2->GetMaskBand(), nullptr);
+  EXPECT_NE(nullptr, band2->GetMaskBand());
 
   // FlushCache when underlying dataset is open:
-  EXPECT_EQ(cpp_ds->FlushCache(false), CE_None);
-  EXPECT_EQ(band1->FlushCache(false), CE_None);
-
-  GDALProxyPoolDatasetDelete(hDS);
+  EXPECT_EQ(CE_None, cpp_ds->FlushCache(false));
+  EXPECT_EQ(CE_None, band1->FlushCache(false));
 
   // 2. Test AddSrcMaskBandDescriptionFromUnderlying and GCPs on proxy_gcp.tif:
-  auto* gcp_proxy = GDALProxyPoolDataset::Create("/vsimem/proxy_gcp.tif");
-  ASSERT_NE(gcp_proxy, nullptr);
+  std::unique_ptr<GDALProxyPoolDataset> gcp_proxy(
+      GDALProxyPoolDataset::Create(gcp_tif_path.c_str()));
+  ASSERT_NE(nullptr, gcp_proxy);
   auto* gcp_band =
       dynamic_cast<GDALProxyPoolRasterBand*>(gcp_proxy->GetRasterBand(1));
-  ASSERT_NE(gcp_band, nullptr);
+  ASSERT_NE(nullptr, gcp_band);
   gcp_band->AddSrcMaskBandDescriptionFromUnderlying();
   gcp_band->AddSrcMaskBandDescriptionFromUnderlying();  // idempotent
 
-  EXPECT_EQ(gcp_proxy->GetGCPCount(), 1);
-  // Note: GDALProxyPoolDataset::GetGCPSpatialRef() in upstream GDAL calls
-  // m_poGCPSRS->Release() unconditionally when m_poGCPSRS is nullptr, so we
-  // test GetGCPCount() and GetGCPs() instead.
-  EXPECT_NE(gcp_proxy->GetGCPs(), nullptr);
-  EXPECT_NE(gcp_proxy->GetGCPs(), nullptr);  // second call frees first list
-  delete gcp_proxy;
-
-  VSIUnlink("/vsimem/proxy_full.tif");
-  VSIUnlink("/vsimem/proxy_full.tif.msk");
-  VSIUnlink("/vsimem/proxy_gcp.tif");
-  CPLPopErrorHandler();
+  EXPECT_EQ(1, gcp_proxy->GetGCPCount());
+  EXPECT_NE(nullptr, gcp_proxy->GetGCPs());
+  EXPECT_NE(nullptr, gcp_proxy->GetGCPs());  // second call frees first list
 }
 
 }  // namespace
+}  // namespace autotest2

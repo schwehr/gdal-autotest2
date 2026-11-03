@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,17 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests gcore/gdalmultidomainmetadata.cpp.
+// Tests GDALMultiDomainMetadata (gcore/gdalmultidomainmetadata.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdalmultidomainmetadata.cpp
 
 #include "testing/base/public/gunit.h"
-#include "third_party/gdal/gcore/gdal_pam.h"
-#include "third_party/gdal/gcore/gdal_priv.h"
+#include "third_party/gdal/gcore/gdal_multidomainmetadata.h"
+#include "third_party/gdal/port/cpl_error.h"
 #include "third_party/gdal/port/cpl_minixml.h"
+#include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_string.h"
 
+namespace autotest2 {
 namespace {
 
-TEST(GdalmultidomainmetadataTest, GetSetClearAndXMLSerialize) {
+TEST(GdalMultiDomainMetadataTest, GetSetClearAndXMLSerialize) {
   GDALMultiDomainMetadata mdmd;
 
   // Empty state.
@@ -60,24 +65,24 @@ TEST(GdalmultidomainmetadataTest, GetSetClearAndXMLSerialize) {
   EXPECT_EQ(CE_None, mdmd.SetMetadata(nullptr, "EMPTY_DOMAIN"));
 
   // Serialize to XML and re-import via XMLInit into a second instance.
-  CPLXMLNode* serialized = mdmd.Serialize();
+  CPLXMLTreeCloser serialized(mdmd.Serialize());
   ASSERT_NE(nullptr, serialized);
 
-  CPLXMLNode* root = CPLCreateXMLNode(nullptr, CXT_Element, "PAMDataset");
-  CPLAddXMLChild(root, serialized);
+  CPLXMLTreeCloser root(CPLCreateXMLNode(nullptr, CXT_Element, "PAMDataset"));
+  ASSERT_NE(nullptr, root);
+  CPLAddXMLChild(root.get(), serialized.release());
 
   GDALMultiDomainMetadata mdmd2;
-  EXPECT_TRUE(mdmd2.XMLInit(root, FALSE));
+  EXPECT_TRUE(mdmd2.XMLInit(root.get(), FALSE));
   EXPECT_STREQ("V1", mdmd2.GetMetadataItem("K1", ""));
   EXPECT_STREQ("1", mdmd2.GetMetadataItem("A_KEY", "CUSTOM"));
   ASSERT_NE(nullptr, mdmd2.GetMetadata("xml:TREES"));
   ASSERT_NE(nullptr, mdmd2.GetMetadata("json:DATA"));
   EXPECT_STREQ("{\"hello\": \"world\"}", mdmd2.GetMetadata("json:DATA")[0]);
 
-  CPLDestroyXMLNode(root);
-
   mdmd.Clear();
   EXPECT_EQ(nullptr, mdmd.GetMetadata(""));
 }
 
 }  // namespace
+}  // namespace autotest2

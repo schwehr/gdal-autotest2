@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -10,35 +10,91 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
-// limitations under the License.IT
+// limitations under the License.
+//
+// Tests GDALRasterBand and related C/C++ raster band APIs
+// (gcore/gdalrasterband.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdalrasterband.cpp
 
-#include <cmath>
+#include <algorithm>
+#include <array>
 #include <complex>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <span>
-#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_memory.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_colortable.h"
+#include "third_party/gdal/gcore/gdal_computedrasterband.h"
+#include "third_party/gdal/gcore/gdal_dataset.h"
+#include "third_party/gdal/gcore/gdal_driver.h"
+#include "third_party/gdal/gcore/gdal_drivermanager.h"
+#include "third_party/gdal/gcore/gdal_frmts.h"
+#include "third_party/gdal/gcore/gdal_geotransform.h"
+#include "third_party/gdal/gcore/gdal_multidim.h"
 #include "third_party/gdal/gcore/gdal_priv.h"
-#include "third_party/gdal/gcore/gdal_rat.h"
+#include "third_party/gdal/gcore/gdal_rasterband.h"
+#include "third_party/gdal/gcore/gdal_rasterblock.h"
+#include "third_party/gdal/ogr/ogr_core.h"
 #include "third_party/gdal/ogr/ogr_spatialref.h"
 #include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
 #include "third_party/gdal/port/cpl_float.h"
+#include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_string.h"
 #include "third_party/gdal/port/cpl_virtualmem.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 
-namespace gdal {
+namespace autotest2 {
 namespace {
 
-class TestDataset;
+constexpr auto kRealDataTypes = std::to_array<GDALDataType>({
+    GDT_Byte,
+    GDT_Int8,
+    GDT_UInt16,
+    GDT_Int16,
+    GDT_UInt32,
+    GDT_Int32,
+    GDT_UInt64,
+    GDT_Int64,
+    GDT_Float16,
+    GDT_Float32,
+    GDT_Float64,
+});
+static_assert(kRealDataTypes.size() == 11);
+
+constexpr auto kAllDataTypes = std::to_array<GDALDataType>({
+    GDT_Byte,
+    GDT_Int8,
+    GDT_UInt16,
+    GDT_Int16,
+    GDT_UInt32,
+    GDT_Int32,
+    GDT_UInt64,
+    GDT_Int64,
+    GDT_Float16,
+    GDT_Float32,
+    GDT_Float64,
+    GDT_CInt16,
+    GDT_CInt32,
+    GDT_CFloat16,
+    GDT_CFloat32,
+    GDT_CFloat64,
+});
+static_assert(kAllDataTypes.size() == 16);
 
 class TestRasterBand : public GDALRasterBand {
  public:
@@ -92,29 +148,15 @@ class TestRasterBand : public GDALRasterBand {
   void SetAccessMode(GDALAccess acc) { eAccess = acc; }
   void SetBlockReads(int n) { nBlockReads = n; }
 
-  using GDALRasterBand::AddBlockToFreeList;
-  using GDALRasterBand::EmitErrorMessageIfWriteNotSupported;
   using GDALRasterBand::EnterReadWrite;
-  using GDALRasterBand::GetMOFlags;
   using GDALRasterBand::HasBlockCache;
   using GDALRasterBand::HasDirtyBlocks;
   using GDALRasterBand::InitBlockInfo;
   using GDALRasterBand::InitRWLock;
   using GDALRasterBand::InvalidateMaskBand;
   using GDALRasterBand::LeaveReadWrite;
-  using GDALRasterBand::SetMOFlags;
   using GDALRasterBand::SetValidPercent;
   using GDALRasterBand::SplitRasterIO;
-
-  int BaseIGetDataCoverageStatus(int nXOff, int nYOff, int nXSize, int nYSize,
-                                 int nMaskFlagStop, double* pdfDataPct) {
-    return GDALRasterBand::IGetDataCoverageStatus(nXOff, nYOff, nXSize, nYSize,
-                                                  nMaskFlagStop, pdfDataPct);
-  }
-
-  CPLErr BaseIWriteBlock(int x, int y, void* pImage) {
-    return GDALRasterBand::IWriteBlock(x, y, pImage);
-  }
 
   CPLErr IReadBlock(int nBlockXOff, int nBlockYOff, void* pImage) override {
     if (fail_read_) {
@@ -378,19 +420,25 @@ class TestDataset : public GDALDataset {
   OGRSpatialReference srs_;
 };
 
-}  // namespace
-namespace {
+int CPL_STDCALL CancelAtStartProgress(double, const char*, void*) {
+  return FALSE;
+}
+
+int CPL_STDCALL CancelMidwayProgress(double dfComplete, const char*,
+                                     void* pData) {
+  int* calls = static_cast<int*>(pData);
+  (*calls)++;
+  if (*calls > 1 || dfComplete > 0.0) return FALSE;
+  return TRUE;
+}
 
 TEST(GDALRasterBandTest, ConstructorsAndDestructorBranches) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
   // 1. Default and bForceCachedIO constructors via GDAL_FORCE_CACHING
   {
     CPLConfigOptionSetter setter("GDAL_FORCE_CACHING", "YES", false);
     TestRasterBand band_default(FALSE);
-    EXPECT_EQ(band_default.GetXSize(), 16);
-    EXPECT_EQ(band_default.GetYSize(), 16);
+    EXPECT_EQ(16, band_default.GetXSize());
+    EXPECT_EQ(16, band_default.GetYSize());
   }
 
   // 2. Destructor with MarkSuppressOnClose on dataset and active block cache
@@ -399,7 +447,7 @@ TEST(GDALRasterBandTest, ConstructorsAndDestructorBranches) {
     auto* band = new TestRasterBand(ds.get(), 1, GDT_Byte, 8, 8, 4, 4);
     ds->AddTestBand(band);
     GDALRasterBlock* blk = band->GetLockedBlockRef(0, 0, TRUE);
-    ASSERT_NE(blk, nullptr);
+    ASSERT_NE(nullptr, blk);
     blk->MarkDirty();
     blk->DropLock();
     ds->MarkSuppressOnClose();
@@ -410,7 +458,7 @@ TEST(GDALRasterBandTest, ConstructorsAndDestructorBranches) {
     auto ds = std::make_unique<TestDataset>(8, 8, GA_Update);
     auto* band = new TestRasterBand(ds.get(), 1, GDT_Byte, 8, 8, 4, 4);
     ds->AddTestBand(band);
-    ASSERT_TRUE(band->InitBlockInfo());
+    ASSERT_EQ(TRUE, band->InitBlockInfo());
     band->SetBlockReads(100);
   }
 
@@ -420,157 +468,143 @@ TEST(GDALRasterBandTest, ConstructorsAndDestructorBranches) {
     auto* band = new TestRasterBand(ds.get(), 1, GDT_Byte, 8, 8, 4, 4);
     ds->AddTestBand(band);
     double val = 0.0;
-    EXPECT_EQ(
-        band->InterpolateAtPoint(2.5, 2.5, GRIORA_Bilinear, &val, nullptr),
-        CE_None);
+    EXPECT_EQ(CE_None, band->InterpolateAtPoint(2.5, 2.5, GRIORA_Bilinear, &val,
+                                                nullptr));
   }
-
-  CPLPopErrorHandler();
 }
 
 TEST(GDALRasterBandTest, RasterIOAndCWrappers) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
   auto ds = std::make_unique<TestDataset>(10, 10, GA_Update);
   auto* band = new TestRasterBand(ds.get(), 1, GDT_Byte, 10, 10, 5, 5, FALSE);
   ds->AddTestBand(band);
   GDALRasterBandH hBand = GDALRasterBand::ToHandle(band);
 
-  GByte buf[100] = {0};
-
-  // Null hBand
-  EXPECT_EQ(
-      GDALRasterIO(nullptr, GF_Read, 0, 0, 1, 1, buf, 1, 1, GDT_Byte, 0, 0),
-      CE_Failure);
-  EXPECT_EQ(GDALRasterIOEx(nullptr, GF_Read, 0, 0, 1, 1, buf, 1, 1, GDT_Byte, 0,
-                           0, nullptr),
-            CE_Failure);
-
-  // ExtraArg with invalid version
+  std::array<GByte, 100> buf{};
   GDALRasterIOExtraArg extra;
-  INIT_RASTERIO_EXTRA_ARG(extra);
-  extra.nVersion = RASTERIO_EXTRA_ARG_CURRENT_VERSION + 10;
-  EXPECT_EQ(
-      band->RasterIO(GF_Read, 0, 0, 2, 2, buf, 2, 2, GDT_Byte, 0, 0, &extra),
-      CE_Failure);
 
-  // Null pData
-  EXPECT_EQ(band->RasterIO(GF_Read, 0, 0, 2, 2, nullptr, 2, 2, GDT_Byte, 0, 0,
-                           nullptr),
-            CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
 
-  // Zero/negative size -> returns CE_None with warning
-  EXPECT_EQ(
-      band->RasterIO(GF_Read, 0, 0, 0, 2, buf, 2, 2, GDT_Byte, 0, 0, nullptr),
-      CE_None);
-  EXPECT_EQ(
-      band->RasterIO(GF_Read, 0, 0, 2, 0, buf, 2, 2, GDT_Byte, 0, 0, nullptr),
-      CE_None);
-  EXPECT_EQ(
-      band->RasterIO(GF_Read, 0, 0, 2, 2, buf, 0, 2, GDT_Byte, 0, 0, nullptr),
-      CE_None);
-  EXPECT_EQ(
-      band->RasterIO(GF_Read, 0, 0, 2, 2, buf, 2, 0, GDT_Byte, 0, 0, nullptr),
-      CE_None);
+    // Null hBand
+    EXPECT_EQ(CE_Failure, GDALRasterIO(nullptr, GF_Read, 0, 0, 1, 1, buf.data(),
+                                       1, 1, GDT_Byte, 0, 0));
+    EXPECT_EQ(CE_Failure,
+              GDALRasterIOEx(nullptr, GF_Read, 0, 0, 1, 1, buf.data(), 1, 1,
+                             GDT_Byte, 0, 0, nullptr));
 
-  // Out of bounds window
-  EXPECT_EQ(
-      band->RasterIO(GF_Read, -1, 0, 2, 2, buf, 2, 2, GDT_Byte, 0, 0, nullptr),
-      CE_Failure);
-  EXPECT_EQ(
-      band->RasterIO(GF_Read, 0, -1, 2, 2, buf, 2, 2, GDT_Byte, 0, 0, nullptr),
-      CE_Failure);
-  EXPECT_EQ(
-      band->RasterIO(GF_Read, 9, 0, 2, 2, buf, 2, 2, GDT_Byte, 0, 0, nullptr),
-      CE_Failure);
-  EXPECT_EQ(
-      band->RasterIO(GF_Read, 0, 9, 2, 2, buf, 2, 2, GDT_Byte, 0, 0, nullptr),
-      CE_Failure);
+    // ExtraArg with invalid version
+    INIT_RASTERIO_EXTRA_ARG(extra);
+    extra.nVersion = RASTERIO_EXTRA_ARG_CURRENT_VERSION + 10;
+    EXPECT_EQ(CE_Failure, band->RasterIO(GF_Read, 0, 0, 2, 2, buf.data(), 2, 2,
+                                         GDT_Byte, 0, 0, &extra));
 
-  // Invalid eBufType
-  EXPECT_EQ(band->RasterIO(GF_Read, 0, 0, 2, 2, buf, 2, 2, GDT_Unknown, 0, 0,
-                           nullptr),
-            CE_Failure);
-  EXPECT_EQ(band->RasterIO(GF_Read, 0, 0, 2, 2, buf, 2, 2, GDT_TypeCount, 0, 0,
-                           nullptr),
-            CE_Failure);
+    // Null pData
+    EXPECT_EQ(CE_Failure, band->RasterIO(GF_Read, 0, 0, 2, 2, nullptr, 2, 2,
+                                         GDT_Byte, 0, 0, nullptr));
+
+    // Zero/negative size -> returns CE_None with warning
+    EXPECT_EQ(CE_None, band->RasterIO(GF_Read, 0, 0, 0, 2, buf.data(), 2, 2,
+                                      GDT_Byte, 0, 0, nullptr));
+    EXPECT_EQ(CE_None, band->RasterIO(GF_Read, 0, 0, 2, 0, buf.data(), 2, 2,
+                                      GDT_Byte, 0, 0, nullptr));
+    EXPECT_EQ(CE_None, band->RasterIO(GF_Read, 0, 0, 2, 2, buf.data(), 0, 2,
+                                      GDT_Byte, 0, 0, nullptr));
+    EXPECT_EQ(CE_None, band->RasterIO(GF_Read, 0, 0, 2, 2, buf.data(), 2, 0,
+                                      GDT_Byte, 0, 0, nullptr));
+
+    // Out of bounds window
+    EXPECT_EQ(CE_Failure, band->RasterIO(GF_Read, -1, 0, 2, 2, buf.data(), 2, 2,
+                                         GDT_Byte, 0, 0, nullptr));
+    EXPECT_EQ(CE_Failure, band->RasterIO(GF_Read, 0, -1, 2, 2, buf.data(), 2, 2,
+                                         GDT_Byte, 0, 0, nullptr));
+    EXPECT_EQ(CE_Failure, band->RasterIO(GF_Read, 9, 0, 2, 2, buf.data(), 2, 2,
+                                         GDT_Byte, 0, 0, nullptr));
+    EXPECT_EQ(CE_Failure, band->RasterIO(GF_Read, 0, 9, 2, 2, buf.data(), 2, 2,
+                                         GDT_Byte, 0, 0, nullptr));
+
+    // Invalid eBufType
+    EXPECT_EQ(CE_Failure, band->RasterIO(GF_Read, 0, 0, 2, 2, buf.data(), 2, 2,
+                                         GDT_Unknown, 0, 0, nullptr));
+    EXPECT_EQ(CE_Failure, band->RasterIO(GF_Read, 0, 0, 2, 2, buf.data(), 2, 2,
+                                         GDT_TypeCount, 0, 0, nullptr));
+
+    CPLErrorReset();
+  }
 
   // Valid write and read via GDALRasterIO and GDALRasterIOEx
   buf[0] = 42;
   buf[1] = 43;
   INIT_RASTERIO_EXTRA_ARG(extra);
-  EXPECT_EQ(
-      GDALRasterIO(hBand, GF_Write, 0, 0, 2, 1, buf, 2, 1, GDT_Byte, 0, 0),
-      CE_None);
-  GByte read_buf[2] = {0};
-  EXPECT_EQ(GDALRasterIOEx(hBand, GF_Read, 0, 0, 2, 1, read_buf, 2, 1, GDT_Byte,
-                           1, 2, &extra),
-            CE_None);
-  EXPECT_EQ(read_buf[0], 42);
-  EXPECT_EQ(read_buf[1], 43);
+  EXPECT_EQ(CE_None, GDALRasterIO(hBand, GF_Write, 0, 0, 2, 1, buf.data(), 2, 1,
+                                  GDT_Byte, 0, 0));
+  std::array<GByte, 2> read_buf{};
+  EXPECT_EQ(CE_None, GDALRasterIOEx(hBand, GF_Read, 0, 0, 2, 1, read_buf.data(),
+                                    2, 1, GDT_Byte, 1, 2, &extra));
+  EXPECT_EQ(42, read_buf[0]);
+  EXPECT_EQ(43, read_buf[1]);
 
   // bForceCachedIO = TRUE path
   auto* cached_band =
       new TestRasterBand(ds.get(), 2, GDT_Byte, 10, 10, 5, 5, TRUE);
   ds->AddTestBand(cached_band);
-  EXPECT_EQ(cached_band->RasterIO(GF_Write, 0, 0, 2, 1, buf, 2, 1, GDT_Byte, 0,
-                                  0, nullptr),
-            CE_None);
+  EXPECT_EQ(CE_None, cached_band->RasterIO(GF_Write, 0, 0, 2, 1, buf.data(), 2,
+                                           1, GDT_Byte, 0, 0, nullptr));
   read_buf[0] = 0;
-  EXPECT_EQ(cached_band->RasterIO(GF_Read, 0, 0, 2, 1, read_buf, 2, 1, GDT_Byte,
-                                  0, 0, nullptr),
-            CE_None);
-  EXPECT_EQ(read_buf[0], 42);
+  EXPECT_EQ(CE_None, cached_band->RasterIO(GF_Read, 0, 0, 2, 1, read_buf.data(),
+                                           2, 1, GDT_Byte, 0, 0, nullptr));
+  EXPECT_EQ(42, read_buf[0]);
 
   // Read-only write failure
   band->SetAccessMode(GA_ReadOnly);
-  EXPECT_EQ(
-      band->RasterIO(GF_Write, 0, 0, 2, 1, buf, 2, 1, GDT_Byte, 0, 0, nullptr),
-      CE_Failure);
-  // Also with GMO_IGNORE_UNIMPLEMENTED
-  band->SetMOFlags(band->GetMOFlags() | GMO_IGNORE_UNIMPLEMENTED);
-  EXPECT_EQ(
-      band->RasterIO(GF_Write, 0, 0, 2, 1, buf, 2, 1, GDT_Byte, 0, 0, nullptr),
-      CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, band->RasterIO(GF_Write, 0, 0, 2, 1, buf.data(), 2, 1,
+                                         GDT_Byte, 0, 0, nullptr));
+    // Also with GMO_IGNORE_UNIMPLEMENTED
+    band->SetMOFlags(band->GetMOFlags() | GMO_IGNORE_UNIMPLEMENTED);
+    EXPECT_EQ(CE_Failure, band->RasterIO(GF_Write, 0, 0, 2, 1, buf.data(), 2, 1,
+                                         GDT_Byte, 0, 0, nullptr));
+    CPLErrorReset();
+  }
   band->SetMOFlags(0);
   band->SetAccessMode(GA_Update);
 
   // eFlushBlockErr != CE_None on GF_Write
   band->fail_write_ = true;
-  GDALRasterBlock* blk = band->GetLockedBlockRef(0, 0, TRUE);
-  ASSERT_NE(blk, nullptr);
-  blk->MarkDirty();
-  blk->DropLock();
-  GDALRasterBlock::FlushDirtyBlocks();
-  EXPECT_EQ(
-      band->RasterIO(GF_Write, 0, 0, 2, 1, buf, 2, 1, GDT_Byte, 0, 0, nullptr),
-      CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    GDALRasterBlock* blk = band->GetLockedBlockRef(0, 0, TRUE);
+    ASSERT_NE(nullptr, blk);
+    blk->MarkDirty();
+    blk->DropLock();
+    GDALRasterBlock::FlushDirtyBlocks();
+    EXPECT_EQ(CE_Failure, band->RasterIO(GF_Write, 0, 0, 2, 1, buf.data(), 2, 1,
+                                         GDT_Byte, 0, 0, nullptr));
+    CPLErrorReset();
+  }
   band->fail_write_ = false;
-
-  CPLPopErrorHandler();
 }
 
 TEST(GDALRasterBandTest, ReadRasterAllTypesAndEdgeCases) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
   auto ds = std::make_unique<TestDataset>(4, 4, GA_Update);
   auto* band = new TestRasterBand(ds.get(), 1, GDT_Byte, 4, 4, 4, 4);
   ds->AddTestBand(band);
-  band->Fill(7);
+  EXPECT_EQ(CE_None, band->Fill(7));
 
   auto test_type = [&](auto dummy) {
     using T = decltype(dummy);
     std::vector<T> vec;
-    EXPECT_EQ(band->ReadRaster(vec), CE_None);
-    EXPECT_EQ(vec.size(), 16U);
+    EXPECT_EQ(CE_None, band->ReadRaster(vec));
+    EXPECT_EQ(16U, vec.size());
 
-    T arr[16];
-    EXPECT_EQ(band->ReadRaster(arr, 16), CE_None);
+    std::array<T, 16> arr{};
+    EXPECT_EQ(CE_None, band->ReadRaster(arr.data(), arr.size()));
 
-    std::span<T> sp(arr, 16);
-    EXPECT_EQ(band->ReadRaster(sp), CE_None);
+    std::span<T> sp(arr);
+    EXPECT_EQ(CE_None, band->ReadRaster(sp));
   };
 
   test_type(uint8_t{0});
@@ -588,60 +622,79 @@ TEST(GDALRasterBandTest, ReadRasterAllTypesAndEdgeCases) {
   test_type(std::complex<double>{0.0, 0.0});
 
   // Edge cases for pointer overload
-  uint8_t buf[16] = {0};
-  const size_t huge = static_cast<size_t>(1) << 32;
-  EXPECT_EQ(band->ReadRaster(buf, 16, 0, 0, 2, 2, huge, 2), CE_Failure);
-  EXPECT_EQ(band->ReadRaster(buf, 16, -1.0, 0, 2, 2, 2, 2), CE_Failure);
-  EXPECT_EQ(band->ReadRaster(buf, 16, 0, -1.0, 2, 2, 2, 2), CE_Failure);
-  EXPECT_EQ(band->ReadRaster(buf, 16, 0, 0, 0.0, 2, 2, 2), CE_None);
-  EXPECT_EQ(band->ReadRaster(buf, 16, 0, 0, 2, 0.0, 2, 2), CE_None);
-  EXPECT_EQ(band->ReadRaster(buf, 16, 0, 0, 1.5, 2.0, 0, 0), CE_Failure);
-  EXPECT_EQ(band->ReadRaster(buf, 16, 0, 0, 2.0, 1.5, 0, 0), CE_Failure);
-  EXPECT_EQ(band->ReadRaster(buf, 16, 0, 0, 2, 2, 2, 0), CE_None);
-  EXPECT_EQ(band->ReadRaster(buf, 2, 0, 0, 4, 4, 4, 4), CE_Failure);
+  std::array<uint8_t, 16> buf{};
+  constexpr size_t kHuge = static_cast<size_t>(1) << 32;
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure,
+              band->ReadRaster(buf.data(), buf.size(), 0, 0, 2, 2, kHuge, 2));
+    EXPECT_EQ(CE_Failure,
+              band->ReadRaster(buf.data(), buf.size(), -1.0, 0, 2, 2, 2, 2));
+    EXPECT_EQ(CE_Failure,
+              band->ReadRaster(buf.data(), buf.size(), 0, -1.0, 2, 2, 2, 2));
+    EXPECT_EQ(CE_None,
+              band->ReadRaster(buf.data(), buf.size(), 0, 0, 0.0, 2, 2, 2));
+    EXPECT_EQ(CE_None,
+              band->ReadRaster(buf.data(), buf.size(), 0, 0, 2, 0.0, 2, 2));
+    EXPECT_EQ(CE_Failure,
+              band->ReadRaster(buf.data(), buf.size(), 0, 0, 1.5, 2.0, 0, 0));
+    EXPECT_EQ(CE_Failure,
+              band->ReadRaster(buf.data(), buf.size(), 0, 0, 2.0, 1.5, 0, 0));
+    EXPECT_EQ(CE_None,
+              band->ReadRaster(buf.data(), buf.size(), 0, 0, 2, 2, 2, 0));
+    EXPECT_EQ(CE_Failure, band->ReadRaster(buf.data(), 2, 0, 0, 4, 4, 4, 4));
+    CPLErrorReset();
+  }
   // Sub-pixel window with explicit nBufXSize/nBufYSize
-  EXPECT_EQ(band->ReadRaster(buf, 4, 0.25, 0.25, 1.5, 1.5, 2, 2), CE_None);
+  EXPECT_EQ(CE_None,
+            band->ReadRaster(buf.data(), 4, 0.25, 0.25, 1.5, 1.5, 2, 2));
 
   // Edge cases for vector overload
   std::vector<uint8_t> vec;
-  EXPECT_EQ(band->ReadRaster(vec, 0, 0, 2, 2, huge, 2), CE_Failure);
-  EXPECT_EQ(band->ReadRaster(vec, -1.0, 0, 2, 2, 2, 2), CE_Failure);
-  EXPECT_EQ(band->ReadRaster(vec, 0, -1.0, 2, 2, 2, 2), CE_Failure);
-  EXPECT_EQ(band->ReadRaster(vec, 0, 0, 0.0, 2, 2, 2), CE_None);
-  EXPECT_EQ(band->ReadRaster(vec, 0, 0, 2, 0.0, 2, 2), CE_None);
-  EXPECT_EQ(band->ReadRaster(vec, 0, 0, 1.5, 2.0, 0, 0), CE_Failure);
-  EXPECT_EQ(band->ReadRaster(vec, 0, 0, 2.0, 1.5, 0, 0), CE_Failure);
-  EXPECT_EQ(band->ReadRaster(vec, 0, 0, 2, 2, 2, 0), CE_None);
-  EXPECT_EQ(band->ReadRaster(vec, 0.25, 0.25, 1.5, 1.5, 2, 2), CE_None);
-
-  CPLPopErrorHandler();
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, band->ReadRaster(vec, 0, 0, 2, 2, kHuge, 2));
+    EXPECT_EQ(CE_Failure, band->ReadRaster(vec, -1.0, 0, 2, 2, 2, 2));
+    EXPECT_EQ(CE_Failure, band->ReadRaster(vec, 0, -1.0, 2, 2, 2, 2));
+    EXPECT_EQ(CE_None, band->ReadRaster(vec, 0, 0, 0.0, 2, 2, 2));
+    EXPECT_EQ(CE_None, band->ReadRaster(vec, 0, 0, 2, 0.0, 2, 2));
+    EXPECT_EQ(CE_Failure, band->ReadRaster(vec, 0, 0, 1.5, 2.0, 0, 0));
+    EXPECT_EQ(CE_Failure, band->ReadRaster(vec, 0, 0, 2.0, 1.5, 0, 0));
+    EXPECT_EQ(CE_None, band->ReadRaster(vec, 0, 0, 2, 2, 2, 0));
+    CPLErrorReset();
+  }
+  EXPECT_EQ(CE_None, band->ReadRaster(vec, 0.25, 0.25, 1.5, 1.5, 2, 2));
 }
 
 TEST(GDALRasterBandTest, BlockIOAndCacheManagement) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
   // 1. Invalid InitBlockInfo cases
   {
-    TestRasterBand bad_band;
-    bad_band.SetDimsAndType(10, 10, 0, 10, GDT_Byte);
-    GByte dummy[10];
-    EXPECT_EQ(bad_band.ReadBlock(0, 0, dummy), CE_Failure);
-    EXPECT_EQ(bad_band.WriteBlock(0, 0, dummy), CE_Failure);
-    EXPECT_EQ(bad_band.GetLockedBlockRef(0, 0), nullptr);
-    int bx = 0, by = 0;
-    bad_band.GetBlockSize(&bx, &by);
-    bad_band.GetBlockSize(nullptr, nullptr);
-  }
-  {
-    TestRasterBand bad_band;
-    bad_band.SetDimsAndType(0, 10, 4, 4, GDT_Byte);
-    EXPECT_FALSE(bad_band.InitBlockInfo());
-  }
-  {
-    TestRasterBand bad_band;
-    bad_band.SetDimsAndType(10, 10, 4, 4, GDT_Unknown);
-    EXPECT_FALSE(bad_band.InitBlockInfo());
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    {
+      TestRasterBand bad_band;
+      bad_band.SetDimsAndType(10, 10, 0, 10, GDT_Byte);
+      std::array<GByte, 10> dummy{};
+      EXPECT_EQ(CE_Failure, bad_band.ReadBlock(0, 0, dummy.data()));
+      EXPECT_EQ(CE_Failure, bad_band.WriteBlock(0, 0, dummy.data()));
+      EXPECT_EQ(nullptr, bad_band.GetLockedBlockRef(0, 0));
+      int bx = 0, by = 0;
+      bad_band.GetBlockSize(&bx, &by);
+      bad_band.GetBlockSize(nullptr, nullptr);
+    }
+    {
+      TestRasterBand bad_band;
+      bad_band.SetDimsAndType(0, 10, 4, 4, GDT_Byte);
+      EXPECT_EQ(FALSE, bad_band.InitBlockInfo());
+    }
+    {
+      TestRasterBand bad_band;
+      bad_band.SetDimsAndType(10, 10, 4, 4, GDT_Unknown);
+      EXPECT_EQ(FALSE, bad_band.InitBlockInfo());
+    }
+    CPLErrorReset();
   }
 
   // 2. GDAL_BAND_BLOCK_CACHE configurations: HASHSET, ARRAY, AUTO with flag,
@@ -649,32 +702,35 @@ TEST(GDALRasterBandTest, BlockIOAndCacheManagement) {
   {
     CPLConfigOptionSetter s1("GDAL_BAND_BLOCK_CACHE", "HASHSET", false);
     TestRasterBand b;
-    EXPECT_TRUE(b.InitBlockInfo());
-    EXPECT_TRUE(b.InitBlockInfo());  // already initialized
+    EXPECT_EQ(TRUE, b.InitBlockInfo());
+    EXPECT_EQ(TRUE, b.InitBlockInfo());  // already initialized
   }
   {
     CPLConfigOptionSetter s1("GDAL_BAND_BLOCK_CACHE", "ARRAY", false);
     TestRasterBand b;
-    EXPECT_TRUE(b.InitBlockInfo());
+    EXPECT_EQ(TRUE, b.InitBlockInfo());
   }
   {
+    WithQuietHandler quiet;
+    CPLErrorReset();
     CPLConfigOptionSetter s1("GDAL_BAND_BLOCK_CACHE", "INVALID_TYPE", false);
     TestRasterBand b;
-    EXPECT_TRUE(b.InitBlockInfo());
+    EXPECT_EQ(TRUE, b.InitBlockInfo());
+    CPLErrorReset();
   }
   {
     TestDataset ds(16, 16, GA_Update);
     ds.SetOpenFlags(GDAL_OF_HASHSET_BLOCK_ACCESS);
     auto* b = new TestRasterBand(&ds, 1, GDT_Byte, 16, 16, 4, 4);
     ds.AddTestBand(b);
-    EXPECT_TRUE(b->InitBlockInfo());
+    EXPECT_EQ(TRUE, b->InitBlockInfo());
   }
   {
     // Many blocks (> 1000000) triggers HashSet in AUTO mode
     TestRasterBand b;
     b.SetDimsAndType(2000, 2000, 1, 1, GDT_Byte);
     b.storage_.clear();
-    EXPECT_TRUE(b.InitBlockInfo());
+    EXPECT_EQ(TRUE, b.InitBlockInfo());
   }
 
   // 3. ReadBlock / WriteBlock / GetActualBlockSize /
@@ -684,252 +740,317 @@ TEST(GDALRasterBandTest, BlockIOAndCacheManagement) {
   ds->AddTestBand(band);
   GDALRasterBandH hBand = GDALRasterBand::ToHandle(band);
 
-  EXPECT_EQ(band->GetSuggestedBlockAccessPattern(), GSBAP_UNKNOWN);
-  EXPECT_EQ(GDALGetRasterDataType(nullptr), GDT_Unknown);
-  EXPECT_EQ(GDALGetRasterDataType(hBand), GDT_Byte);
+  EXPECT_EQ(GSBAP_UNKNOWN, band->GetSuggestedBlockAccessPattern());
+  EXPECT_EQ(GDT_Unknown, GDALGetRasterDataType(nullptr));
+  EXPECT_EQ(GDT_Byte, GDALGetRasterDataType(hBand));
   GDALGetBlockSize(nullptr, nullptr, nullptr);
   int bx = 0, by = 0;
   GDALGetBlockSize(hBand, &bx, &by);
-  EXPECT_EQ(bx, 4);
-  EXPECT_EQ(by, 4);
+  EXPECT_EQ(4, bx);
+  EXPECT_EQ(4, by);
 
-  GByte block_buf[16] = {1, 2, 3, 4};
-  EXPECT_EQ(GDALReadBlock(nullptr, 0, 0, block_buf), CE_Failure);
-  EXPECT_EQ(band->ReadBlock(-1, 0, block_buf), CE_Failure);
-  EXPECT_EQ(band->ReadBlock(0, -1, block_buf), CE_Failure);
-  EXPECT_EQ(band->ReadBlock(10, 0, block_buf), CE_Failure);
-  EXPECT_EQ(band->ReadBlock(0, 10, block_buf), CE_Failure);
-  EXPECT_EQ(GDALReadBlock(hBand, 0, 0, block_buf), CE_None);
+  std::array<GByte, 16> block_buf = {1, 2, 3, 4};
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, GDALReadBlock(nullptr, 0, 0, block_buf.data()));
+    EXPECT_EQ(CE_Failure, band->ReadBlock(-1, 0, block_buf.data()));
+    EXPECT_EQ(CE_Failure, band->ReadBlock(0, -1, block_buf.data()));
+    EXPECT_EQ(CE_Failure, band->ReadBlock(10, 0, block_buf.data()));
+    EXPECT_EQ(CE_Failure, band->ReadBlock(0, 10, block_buf.data()));
+    CPLErrorReset();
+  }
+  EXPECT_EQ(CE_None, GDALReadBlock(hBand, 0, 0, block_buf.data()));
 
   // Base IWriteBlock (not supported vs GMO_IGNORE_UNIMPLEMENTED)
   band->use_base_iwriteblock_ = true;
-  EXPECT_EQ(band->WriteBlock(0, 0, block_buf), CE_Failure);
-  band->SetMOFlags(GMO_IGNORE_UNIMPLEMENTED);
-  EXPECT_EQ(band->WriteBlock(0, 0, block_buf), CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, band->WriteBlock(0, 0, block_buf.data()));
+    band->SetMOFlags(GMO_IGNORE_UNIMPLEMENTED);
+    EXPECT_EQ(CE_Failure, band->WriteBlock(0, 0, block_buf.data()));
+    CPLErrorReset();
+  }
   band->SetMOFlags(0);
   band->use_base_iwriteblock_ = false;
 
   // WriteBlock error cases and valid case
-  EXPECT_EQ(GDALWriteBlock(nullptr, 0, 0, block_buf), CE_Failure);
-  EXPECT_EQ(band->WriteBlock(-1, 0, block_buf), CE_Failure);
-  EXPECT_EQ(band->WriteBlock(0, -1, block_buf), CE_Failure);
-  EXPECT_EQ(band->WriteBlock(10, 0, block_buf), CE_Failure);
-  EXPECT_EQ(band->WriteBlock(0, 10, block_buf), CE_Failure);
-  band->SetAccessMode(GA_ReadOnly);
-  EXPECT_EQ(band->WriteBlock(0, 0, block_buf), CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, GDALWriteBlock(nullptr, 0, 0, block_buf.data()));
+    EXPECT_EQ(CE_Failure, band->WriteBlock(-1, 0, block_buf.data()));
+    EXPECT_EQ(CE_Failure, band->WriteBlock(0, -1, block_buf.data()));
+    EXPECT_EQ(CE_Failure, band->WriteBlock(10, 0, block_buf.data()));
+    EXPECT_EQ(CE_Failure, band->WriteBlock(0, 10, block_buf.data()));
+    band->SetAccessMode(GA_ReadOnly);
+    EXPECT_EQ(CE_Failure, band->WriteBlock(0, 0, block_buf.data()));
+    CPLErrorReset();
+  }
   band->SetAccessMode(GA_Update);
   block_buf[0] = 99;
-  EXPECT_EQ(GDALWriteBlock(hBand, 0, 0, block_buf), CE_None);
+  EXPECT_EQ(CE_None, GDALWriteBlock(hBand, 0, 0, block_buf.data()));
 
   // GetActualBlockSize
   int xvalid = 0, yvalid = 0;
-  EXPECT_EQ(GDALGetActualBlockSize(nullptr, 0, 0, &xvalid, &yvalid),
-            CE_Failure);
-  EXPECT_EQ(band->GetActualBlockSize(-1, 0, &xvalid, &yvalid), CE_Failure);
-  EXPECT_EQ(band->GetActualBlockSize(0, -1, &xvalid, &yvalid), CE_Failure);
-  EXPECT_EQ(band->GetActualBlockSize(3, 0, &xvalid, &yvalid), CE_Failure);
-  EXPECT_EQ(band->GetActualBlockSize(0, 3, &xvalid, &yvalid), CE_Failure);
-  EXPECT_EQ(GDALGetActualBlockSize(hBand, 0, 0, &xvalid, &yvalid), CE_None);
-  EXPECT_EQ(xvalid, 4);
-  EXPECT_EQ(yvalid, 4);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure,
+              GDALGetActualBlockSize(nullptr, 0, 0, &xvalid, &yvalid));
+    EXPECT_EQ(CE_Failure, band->GetActualBlockSize(-1, 0, &xvalid, &yvalid));
+    EXPECT_EQ(CE_Failure, band->GetActualBlockSize(0, -1, &xvalid, &yvalid));
+    EXPECT_EQ(CE_Failure, band->GetActualBlockSize(3, 0, &xvalid, &yvalid));
+    EXPECT_EQ(CE_Failure, band->GetActualBlockSize(0, 3, &xvalid, &yvalid));
+    CPLErrorReset();
+  }
+  EXPECT_EQ(CE_None, GDALGetActualBlockSize(hBand, 0, 0, &xvalid, &yvalid));
+  EXPECT_EQ(4, xvalid);
+  EXPECT_EQ(4, yvalid);
   // Partial block at edge (block 2 covers pixels 8..9 -> 2 valid pixels)
-  EXPECT_EQ(band->GetActualBlockSize(2, 2, &xvalid, &yvalid), CE_None);
-  EXPECT_EQ(xvalid, 2);
-  EXPECT_EQ(yvalid, 2);
+  EXPECT_EQ(CE_None, band->GetActualBlockSize(2, 2, &xvalid, &yvalid));
+  EXPECT_EQ(2, xvalid);
+  EXPECT_EQ(2, yvalid);
 
   // 4. TryGetLockedBlockRef, GetLockedBlockRef, FlushBlock, FlushCache,
   // DropCache
   TestRasterBand uninit_band;
-  EXPECT_EQ(uninit_band.TryGetLockedBlockRef(0, 0), nullptr);
-  EXPECT_EQ(uninit_band.FlushBlock(0, 0), CE_Failure);
-  EXPECT_EQ(uninit_band.DropCache(), CE_None);
+  EXPECT_EQ(nullptr, uninit_band.TryGetLockedBlockRef(0, 0));
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, uninit_band.FlushBlock(0, 0));
+    CPLErrorReset();
+  }
+  EXPECT_EQ(CE_None, uninit_band.DropCache());
 
-  EXPECT_EQ(band->TryGetLockedBlockRef(-1, 0), nullptr);
-  EXPECT_EQ(band->TryGetLockedBlockRef(0, -1), nullptr);
-  EXPECT_EQ(band->TryGetLockedBlockRef(10, 0), nullptr);
-  EXPECT_EQ(band->TryGetLockedBlockRef(0, 10), nullptr);
-  EXPECT_EQ(band->TryGetLockedBlockRef(0, 0), nullptr);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, band->TryGetLockedBlockRef(-1, 0));
+    EXPECT_EQ(nullptr, band->TryGetLockedBlockRef(0, -1));
+    EXPECT_EQ(nullptr, band->TryGetLockedBlockRef(10, 0));
+    EXPECT_EQ(nullptr, band->TryGetLockedBlockRef(0, 10));
+    CPLErrorReset();
+  }
+  EXPECT_EQ(nullptr, band->TryGetLockedBlockRef(0, 0));
 
-  EXPECT_EQ(band->GetLockedBlockRef(-1, 0), nullptr);
-  EXPECT_EQ(band->GetLockedBlockRef(0, -1), nullptr);
-  EXPECT_EQ(band->GetLockedBlockRef(10, 0), nullptr);
-  EXPECT_EQ(band->GetLockedBlockRef(0, 10), nullptr);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, band->GetLockedBlockRef(-1, 0));
+    EXPECT_EQ(nullptr, band->GetLockedBlockRef(0, -1));
+    EXPECT_EQ(nullptr, band->GetLockedBlockRef(10, 0));
+    EXPECT_EQ(nullptr, band->GetLockedBlockRef(0, 10));
+    CPLErrorReset();
+  }
 
   // Cache miss -> loads block
   GDALRasterBlock* blk = band->GetLockedBlockRef(0, 0, FALSE);
-  ASSERT_NE(blk, nullptr);
+  ASSERT_NE(nullptr, blk);
   blk->DropLock();
 
   // Cache hit via TryGetLockedBlockRef and
   // GetLockedBlockRef(bJustInitialize=TRUE)
   blk = band->TryGetLockedBlockRef(0, 0);
-  ASSERT_NE(blk, nullptr);
+  ASSERT_NE(nullptr, blk);
   blk->DropLock();
 
   blk = band->GetLockedBlockRef(0, 0, TRUE);
-  ASSERT_NE(blk, nullptr);
+  ASSERT_NE(nullptr, blk);
   blk->MarkDirty();
   EXPECT_TRUE(band->HasDirtyBlocks());
   EXPECT_TRUE(band->HasBlockCache());
   blk->DropLock();
 
   // Trigger global cache eviction to cover UnreferenceBlock &
-  // AddBlockToFreeList
+  // AddBlockToFreeList; FlushCacheBlock writes back and evicts the dirty
+  // block (0, 0).
   GDALFlushCacheBlock();
+  EXPECT_FALSE(band->HasDirtyBlocks());
+  EXPECT_EQ(nullptr, band->TryGetLockedBlockRef(0, 0));
 
   // FlushBlock edge cases
-  EXPECT_EQ(band->FlushBlock(-1, 0), CE_Failure);
-  EXPECT_EQ(band->FlushBlock(0, -1), CE_Failure);
-  EXPECT_EQ(band->FlushBlock(10, 0), CE_Failure);
-  EXPECT_EQ(band->FlushBlock(0, 10), CE_Failure);
-  EXPECT_EQ(band->FlushBlock(0, 0), CE_None);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, band->FlushBlock(-1, 0));
+    EXPECT_EQ(CE_Failure, band->FlushBlock(0, -1));
+    EXPECT_EQ(CE_Failure, band->FlushBlock(10, 0));
+    EXPECT_EQ(CE_Failure, band->FlushBlock(0, 10));
+    CPLErrorReset();
+  }
+  EXPECT_EQ(CE_None, band->FlushBlock(0, 0));
 
   // Thrashing warning check in GetLockedBlockRef when nBlockReads ==
   // nBlocksPerRow * nBlocksPerColumn + 1
   band->SetBlockReads(3 * 3);
-  blk = band->GetLockedBlockRef(1, 1, FALSE);
-  ASSERT_NE(blk, nullptr);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    blk = band->GetLockedBlockRef(1, 1, FALSE);
+    CPLErrorReset();
+  }
+  ASSERT_NE(nullptr, blk);
   blk->DropLock();
 
   // IReadBlock failure in GetLockedBlockRef (without and with CPLError)
   band->fail_read_ = true;
   band->emit_error_on_fail_read_ = false;
-  EXPECT_EQ(band->GetLockedBlockRef(2, 0, FALSE), nullptr);
-  band->emit_error_on_fail_read_ = true;
-  EXPECT_EQ(band->GetLockedBlockRef(2, 1, FALSE), nullptr);
+  EXPECT_EQ(nullptr, band->GetLockedBlockRef(2, 0, FALSE));
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    band->emit_error_on_fail_read_ = true;
+    EXPECT_EQ(nullptr, band->GetLockedBlockRef(2, 1, FALSE));
+    CPLErrorReset();
+  }
   band->fail_read_ = false;
 
   // FlushCache and DropCache C wrappers and error propagation
-  EXPECT_EQ(GDALFlushRasterCache(nullptr), CE_Failure);
-  EXPECT_EQ(GDALDropRasterCache(nullptr), CE_Failure);
-  EXPECT_EQ(GDALFlushRasterCache(hBand), CE_None);
-  EXPECT_EQ(GDALDropRasterCache(hBand), CE_None);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, GDALFlushRasterCache(nullptr));
+    EXPECT_EQ(CE_Failure, GDALDropRasterCache(nullptr));
+    CPLErrorReset();
+  }
+  EXPECT_EQ(CE_None, GDALFlushRasterCache(hBand));
+  EXPECT_EQ(CE_None, GDALDropRasterCache(hBand));
 
   // DropCache when eFlushBlockErr is set
   band->fail_write_ = true;
   blk = band->GetLockedBlockRef(0, 0, TRUE);
-  ASSERT_NE(blk, nullptr);
+  ASSERT_NE(nullptr, blk);
   blk->MarkDirty();
   blk->DropLock();
-  EXPECT_EQ(band->FlushBlock(0, 0, TRUE), CE_Failure);
-  EXPECT_EQ(band->DropCache(), CE_None);
-
-  CPLPopErrorHandler();
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, band->FlushBlock(0, 0, TRUE));
+    EXPECT_EQ(CE_None, band->DropCache());
+    CPLErrorReset();
+  }
 }
 
 TEST(GDALRasterBandTest, FillRasterTests) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
 
-  EXPECT_EQ(GDALFillRaster(nullptr, 1.0, 0.0), CE_Failure);
+    EXPECT_EQ(CE_Failure, GDALFillRaster(nullptr, 1.0, 0.0));
 
-  // Read-only failure
-  TestRasterBand ro_band;
-  ro_band.SetAccessMode(GA_ReadOnly);
-  EXPECT_EQ(ro_band.Fill(5.0), CE_Failure);
+    // Read-only failure
+    TestRasterBand ro_band;
+    ro_band.SetAccessMode(GA_ReadOnly);
+    EXPECT_EQ(CE_Failure, ro_band.Fill(5.0));
 
-  // Invalid block info failure
-  TestRasterBand bad_band;
-  bad_band.SetDimsAndType(8, 8, 0, 8, GDT_Byte);
-  EXPECT_EQ(bad_band.Fill(5.0), CE_Failure);
+    // Invalid block info failure
+    TestRasterBand bad_band;
+    bad_band.SetDimsAndType(8, 8, 0, 8, GDT_Byte);
+    EXPECT_EQ(CE_Failure, bad_band.Fill(5.0));
+
+    CPLErrorReset();
+  }
 
   // Real band Fill
   TestRasterBand byte_band;
   byte_band.SetDimsAndType(6, 6, 4, 4, GDT_Byte);
-  EXPECT_EQ(GDALFillRaster(GDALRasterBand::ToHandle(&byte_band), 123.0, 0.0),
-            CE_None);
+  EXPECT_EQ(CE_None,
+            GDALFillRaster(GDALRasterBand::ToHandle(&byte_band), 123.0, 0.0));
   GByte v = 0;
-  EXPECT_EQ(byte_band.RasterIO(GF_Read, 5, 5, 1, 1, &v, 1, 1, GDT_Byte, 0, 0,
-                               nullptr),
-            CE_None);
-  EXPECT_EQ(v, 123);
+  EXPECT_EQ(CE_None, byte_band.RasterIO(GF_Read, 5, 5, 1, 1, &v, 1, 1, GDT_Byte,
+                                        0, 0, nullptr));
+  EXPECT_EQ(123, v);
 
   // Complex band Fill
   TestRasterBand cfloat_band;
   cfloat_band.SetDimsAndType(4, 4, 4, 4, GDT_CFloat32);
-  EXPECT_EQ(cfloat_band.Fill(3.5, -2.5), CE_None);
-  float cv[2] = {0.0f, 0.0f};
-  EXPECT_EQ(cfloat_band.RasterIO(GF_Read, 1, 1, 1, 1, cv, 1, 1, GDT_CFloat32, 0,
-                                 0, nullptr),
-            CE_None);
-  EXPECT_FLOAT_EQ(cv[0], 3.5f);
-  EXPECT_FLOAT_EQ(cv[1], -2.5f);
-
-  CPLPopErrorHandler();
+  EXPECT_EQ(CE_None, cfloat_band.Fill(3.5, -2.5));
+  std::array<float, 2> cv{};
+  EXPECT_EQ(CE_None, cfloat_band.RasterIO(GF_Read, 1, 1, 1, 1, cv.data(), 1, 1,
+                                          GDT_CFloat32, 0, 0, nullptr));
+  EXPECT_FLOAT_EQ(3.5f, cv[0]);
+  EXPECT_FLOAT_EQ(-2.5f, cv[1]);
 }
 
-}  // namespace
-namespace {
-
 TEST(GDALRasterBandTest, PropertiesMetadataNoDataMinMaxOverviews) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
   auto ds = std::make_unique<TestDataset>(16, 16, GA_Update);
   auto* band = new TestRasterBand(ds.get(), 1, GDT_Byte, 16, 16, 8, 8);
   ds->AddTestBand(band);
   GDALRasterBandH hBand = GDALRasterBand::ToHandle(band);
 
   // Access, XSize, YSize, Band, Dataset
-  EXPECT_EQ(GDALGetRasterAccess(nullptr), GA_ReadOnly);
-  EXPECT_EQ(GDALGetRasterAccess(hBand), GA_Update);
-  EXPECT_EQ(band->GetAccess(), GA_Update);
+  EXPECT_EQ(GA_ReadOnly, GDALGetRasterAccess(nullptr));
+  EXPECT_EQ(GA_Update, GDALGetRasterAccess(hBand));
+  EXPECT_EQ(GA_Update, band->GetAccess());
 
-  EXPECT_EQ(GDALGetRasterBandXSize(nullptr), 0);
-  EXPECT_EQ(GDALGetRasterBandXSize(hBand), 16);
-  EXPECT_EQ(GDALGetRasterBandYSize(nullptr), 0);
-  EXPECT_EQ(GDALGetRasterBandYSize(hBand), 16);
-  EXPECT_EQ(GDALGetBandNumber(nullptr), 0);
-  EXPECT_EQ(GDALGetBandNumber(hBand), 1);
-  EXPECT_EQ(GDALGetBandDataset(nullptr), nullptr);
-  EXPECT_EQ(GDALGetBandDataset(hBand), GDALDataset::ToHandle(ds.get()));
+  EXPECT_EQ(0, GDALGetRasterBandXSize(nullptr));
+  EXPECT_EQ(16, GDALGetRasterBandXSize(hBand));
+  EXPECT_EQ(0, GDALGetRasterBandYSize(nullptr));
+  EXPECT_EQ(16, GDALGetRasterBandYSize(hBand));
+  EXPECT_EQ(0, GDALGetBandNumber(nullptr));
+  EXPECT_EQ(1, GDALGetBandNumber(hBand));
+  EXPECT_EQ(nullptr, GDALGetBandDataset(nullptr));
+  EXPECT_EQ(GDALDataset::ToHandle(ds.get()), GDALGetBandDataset(hBand));
 
   // CategoryNames
-  EXPECT_EQ(GDALGetRasterCategoryNames(nullptr), nullptr);
-  EXPECT_EQ(GDALGetRasterCategoryNames(hBand), nullptr);
-  const char* cats[] = {"cat1", "cat2", nullptr};
-  EXPECT_EQ(GDALSetRasterCategoryNames(nullptr, cats), CE_Failure);
-  EXPECT_EQ(GDALSetRasterCategoryNames(hBand, cats), CE_Failure);
-  band->SetMOFlags(GMO_IGNORE_UNIMPLEMENTED);
-  EXPECT_EQ(GDALSetRasterCategoryNames(hBand, cats), CE_Failure);
+  EXPECT_EQ(nullptr, GDALGetRasterCategoryNames(nullptr));
+  EXPECT_EQ(nullptr, GDALGetRasterCategoryNames(hBand));
+  const char* const cats[] = {"cat1", "cat2", nullptr};
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, GDALSetRasterCategoryNames(nullptr, cats));
+    EXPECT_EQ(CE_Failure, GDALSetRasterCategoryNames(hBand, cats));
+    band->SetMOFlags(GMO_IGNORE_UNIMPLEMENTED);
+    EXPECT_EQ(CE_Failure, GDALSetRasterCategoryNames(hBand, cats));
+    CPLErrorReset();
+  }
   band->SetMOFlags(0);
 
   // NoData getters and setters (base class unimplemented vs
   // GMO_IGNORE_UNIMPLEMENTED)
   int success = 1;
-  EXPECT_DOUBLE_EQ(GDALGetRasterNoDataValue(nullptr, &success), 0.0);
-  EXPECT_DOUBLE_EQ(GDALGetRasterNoDataValue(hBand, &success), -1e10);
-  EXPECT_EQ(success, FALSE);
-  EXPECT_DOUBLE_EQ(band->GetNoDataValue(nullptr), -1e10);
+  EXPECT_DOUBLE_EQ(0.0, GDALGetRasterNoDataValue(nullptr, &success));
+  EXPECT_DOUBLE_EQ(-1e10, GDALGetRasterNoDataValue(hBand, &success));
+  EXPECT_EQ(FALSE, success);
+  EXPECT_DOUBLE_EQ(-1e10, band->GetNoDataValue(nullptr));
 
   success = 1;
-  EXPECT_EQ(GDALGetRasterNoDataValueAsInt64(nullptr, &success),
-            std::numeric_limits<int64_t>::min());
-  EXPECT_EQ(GDALGetRasterNoDataValueAsInt64(hBand, &success),
-            std::numeric_limits<int64_t>::min());
-  EXPECT_EQ(success, FALSE);
+  EXPECT_EQ(std::numeric_limits<int64_t>::min(),
+            GDALGetRasterNoDataValueAsInt64(nullptr, &success));
+  EXPECT_EQ(std::numeric_limits<int64_t>::min(),
+            GDALGetRasterNoDataValueAsInt64(hBand, &success));
+  EXPECT_EQ(FALSE, success);
 
   success = 1;
-  EXPECT_EQ(GDALGetRasterNoDataValueAsUInt64(nullptr, &success),
-            std::numeric_limits<uint64_t>::max());
-  EXPECT_EQ(GDALGetRasterNoDataValueAsUInt64(hBand, &success),
-            std::numeric_limits<uint64_t>::max());
-  EXPECT_EQ(success, FALSE);
+  EXPECT_EQ(std::numeric_limits<uint64_t>::max(),
+            GDALGetRasterNoDataValueAsUInt64(nullptr, &success));
+  EXPECT_EQ(std::numeric_limits<uint64_t>::max(),
+            GDALGetRasterNoDataValueAsUInt64(hBand, &success));
+  EXPECT_EQ(FALSE, success);
 
-  EXPECT_EQ(GDALSetRasterNoDataValue(nullptr, 0.0), CE_Failure);
-  EXPECT_EQ(GDALSetRasterNoDataValue(hBand, 0.0), CE_Failure);
-  EXPECT_EQ(GDALSetRasterNoDataValueAsInt64(nullptr, 0), CE_Failure);
-  EXPECT_EQ(GDALSetRasterNoDataValueAsInt64(hBand, 0), CE_Failure);
-  EXPECT_EQ(GDALSetRasterNoDataValueAsUInt64(nullptr, 0), CE_Failure);
-  EXPECT_EQ(GDALSetRasterNoDataValueAsUInt64(hBand, 0), CE_Failure);
-  EXPECT_EQ(GDALDeleteRasterNoDataValue(nullptr), CE_Failure);
-  EXPECT_EQ(GDALDeleteRasterNoDataValue(hBand), CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, GDALSetRasterNoDataValue(nullptr, 0.0));
+    EXPECT_EQ(CE_Failure, GDALSetRasterNoDataValue(hBand, 0.0));
+    EXPECT_EQ(CE_Failure, GDALSetRasterNoDataValueAsInt64(nullptr, 0));
+    EXPECT_EQ(CE_Failure, GDALSetRasterNoDataValueAsInt64(hBand, 0));
+    EXPECT_EQ(CE_Failure, GDALSetRasterNoDataValueAsUInt64(nullptr, 0));
+    EXPECT_EQ(CE_Failure, GDALSetRasterNoDataValueAsUInt64(hBand, 0));
+    EXPECT_EQ(CE_Failure, GDALDeleteRasterNoDataValue(nullptr));
+    EXPECT_EQ(CE_Failure, GDALDeleteRasterNoDataValue(hBand));
 
-  band->SetMOFlags(GMO_IGNORE_UNIMPLEMENTED);
-  EXPECT_EQ(GDALSetRasterNoDataValue(hBand, 0.0), CE_Failure);
-  EXPECT_EQ(GDALSetRasterNoDataValueAsInt64(hBand, 0), CE_Failure);
-  EXPECT_EQ(GDALSetRasterNoDataValueAsUInt64(hBand, 0), CE_Failure);
-  EXPECT_EQ(GDALDeleteRasterNoDataValue(hBand), CE_Failure);
+    band->SetMOFlags(GMO_IGNORE_UNIMPLEMENTED);
+    EXPECT_EQ(CE_Failure, GDALSetRasterNoDataValue(hBand, 0.0));
+    EXPECT_EQ(CE_Failure, GDALSetRasterNoDataValueAsInt64(hBand, 0));
+    EXPECT_EQ(CE_Failure, GDALSetRasterNoDataValueAsUInt64(hBand, 0));
+    EXPECT_EQ(CE_Failure, GDALDeleteRasterNoDataValue(hBand));
+    CPLErrorReset();
+  }
   band->SetMOFlags(0);
 
   // SetNoDataValueAsString across types
@@ -938,73 +1059,111 @@ TEST(GDALRasterBandTest, PropertiesMetadataNoDataMinMaxOverviews) {
 
   // GDT_Int64
   band->SetDimsAndType(4, 4, 4, 4, GDT_Int64);
-  EXPECT_EQ(band->SetNoDataValueAsString("-12345", &cannot_rep), CE_None);
+  EXPECT_EQ(CE_None, band->SetNoDataValueAsString("-12345", &cannot_rep));
   EXPECT_FALSE(cannot_rep);
-  EXPECT_EQ(band->SetNoDataValueAsString("100.0", &cannot_rep), CE_None);
+  EXPECT_EQ(CE_None, band->SetNoDataValueAsString("100.0", &cannot_rep));
   EXPECT_FALSE(cannot_rep);
-  EXPECT_EQ(band->SetNoDataValueAsString("100.5", &cannot_rep), CE_Failure);
-  EXPECT_TRUE(cannot_rep);
-  EXPECT_EQ(band->SetNoDataValueAsString("99999999999999999999999999999",
-                                         &cannot_rep),
-            CE_Failure);
-  EXPECT_TRUE(cannot_rep);
-  EXPECT_EQ(band->SetNoDataValueAsString("not_a_number", &cannot_rep),
-            CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, band->SetNoDataValueAsString("100.5", &cannot_rep));
+    EXPECT_TRUE(cannot_rep);
+    EXPECT_EQ(CE_Failure, band->SetNoDataValueAsString(
+                              "99999999999999999999999999999", &cannot_rep));
+    EXPECT_TRUE(cannot_rep);
+    EXPECT_EQ(CE_Failure,
+              band->SetNoDataValueAsString("not_a_number", &cannot_rep));
+    CPLErrorReset();
+  }
 
   // GDT_UInt64
   band->SetDimsAndType(4, 4, 4, 4, GDT_UInt64);
-  EXPECT_EQ(band->SetNoDataValueAsString("12345", &cannot_rep), CE_None);
+  EXPECT_EQ(CE_None, band->SetNoDataValueAsString("12345", &cannot_rep));
   EXPECT_FALSE(cannot_rep);
-  EXPECT_EQ(band->SetNoDataValueAsString("100.0", &cannot_rep), CE_None);
+  EXPECT_EQ(CE_None, band->SetNoDataValueAsString("100.0", &cannot_rep));
   EXPECT_FALSE(cannot_rep);
-  EXPECT_EQ(band->SetNoDataValueAsString("100.5", &cannot_rep), CE_Failure);
-  EXPECT_TRUE(cannot_rep);
-  EXPECT_EQ(band->SetNoDataValueAsString("-5", &cannot_rep), CE_None);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, band->SetNoDataValueAsString("100.5", &cannot_rep));
+    EXPECT_TRUE(cannot_rep);
+    CPLErrorReset();
+  }
+  EXPECT_EQ(CE_None, band->SetNoDataValueAsString("-5", &cannot_rep));
   EXPECT_FALSE(cannot_rep);
-  EXPECT_EQ(band->SetNoDataValueAsString("99999999999999999999999999999",
-                                         &cannot_rep),
-            CE_Failure);
-  EXPECT_TRUE(cannot_rep);
-  EXPECT_EQ(band->SetNoDataValueAsString("not_a_number", &cannot_rep),
-            CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, band->SetNoDataValueAsString(
+                              "99999999999999999999999999999", &cannot_rep));
+    EXPECT_TRUE(cannot_rep);
+    EXPECT_EQ(CE_Failure,
+              band->SetNoDataValueAsString("not_a_number", &cannot_rep));
+    CPLErrorReset();
+  }
 
   // GDT_Float32
   band->SetDimsAndType(4, 4, 4, 4, GDT_Float32);
-  EXPECT_EQ(band->SetNoDataValueAsString("1.5", &cannot_rep), CE_None);
+  EXPECT_EQ(CE_None, band->SetNoDataValueAsString("1.5", &cannot_rep));
   EXPECT_FALSE(cannot_rep);
-  EXPECT_EQ(band->SetNoDataValueAsString("nan", &cannot_rep), CE_None);
+  EXPECT_EQ(CE_None, band->SetNoDataValueAsString("nan", &cannot_rep));
   EXPECT_FALSE(cannot_rep);
-  EXPECT_EQ(band->SetNoDataValueAsString("invalid_float", &cannot_rep),
-            CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure,
+              band->SetNoDataValueAsString("invalid_float", &cannot_rep));
+    CPLErrorReset();
+  }
 
   // GDT_Byte and GDT_Float64
   band->SetDimsAndType(4, 4, 4, 4, GDT_Byte);
-  EXPECT_EQ(band->SetNoDataValueAsString("200", &cannot_rep), CE_None);
+  EXPECT_EQ(CE_None, band->SetNoDataValueAsString("200", &cannot_rep));
   EXPECT_FALSE(cannot_rep);
-  EXPECT_EQ(band->SetNoDataValueAsString("300", &cannot_rep), CE_Failure);
-  EXPECT_TRUE(cannot_rep);
-  EXPECT_EQ(band->SetNoDataValueAsString("invalid_byte", nullptr), CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, band->SetNoDataValueAsString("300", &cannot_rep));
+    EXPECT_TRUE(cannot_rep);
+    EXPECT_EQ(CE_Failure,
+              band->SetNoDataValueAsString("invalid_byte", nullptr));
+    CPLErrorReset();
+  }
 
   band->SetDimsAndType(4, 4, 4, 4, GDT_Float64);
-  EXPECT_EQ(band->SetNoDataValueAsString("123.456", &cannot_rep), CE_None);
+  EXPECT_EQ(CE_None, band->SetNoDataValueAsString("123.456", &cannot_rep));
   EXPECT_FALSE(cannot_rep);
 
   // GetMinimum and GetMaximum across all data types
-  EXPECT_DOUBLE_EQ(GDALGetRasterMinimum(nullptr, &success), 0.0);
-  EXPECT_DOUBLE_EQ(GDALGetRasterMaximum(nullptr, &success), 0.0);
+  EXPECT_DOUBLE_EQ(0.0, GDALGetRasterMinimum(nullptr, &success));
+  EXPECT_DOUBLE_EQ(0.0, GDALGetRasterMaximum(nullptr, &success));
 
-  const GDALDataType all_types[] = {
-      GDT_Byte,     GDT_Int8,     GDT_UInt16,  GDT_Int16,    GDT_CInt16,
-      GDT_Int32,    GDT_CInt32,   GDT_UInt32,  GDT_Int64,    GDT_UInt64,
-      GDT_Float16,  GDT_CFloat16, GDT_Float32, GDT_CFloat32, GDT_Float64,
-      GDT_CFloat64, GDT_Unknown};
-  for (GDALDataType dt : all_types) {
+  constexpr auto all_types_with_unknown = std::to_array<GDALDataType>({
+      GDT_Byte,
+      GDT_Int8,
+      GDT_UInt16,
+      GDT_Int16,
+      GDT_CInt16,
+      GDT_Int32,
+      GDT_CInt32,
+      GDT_UInt32,
+      GDT_Int64,
+      GDT_UInt64,
+      GDT_Float16,
+      GDT_CFloat16,
+      GDT_Float32,
+      GDT_CFloat32,
+      GDT_Float64,
+      GDT_CFloat64,
+      GDT_Unknown,
+  });
+  for (GDALDataType dt : all_types_with_unknown) {
     band->SetDimsAndType(4, 4, 4, 4, dt);
     int s_min = 1, s_max = 1;
     (void)GDALGetRasterMinimum(hBand, &s_min);
     (void)GDALGetRasterMaximum(hBand, &s_max);
-    EXPECT_EQ(s_min, FALSE);
-    EXPECT_EQ(s_max, FALSE);
+    EXPECT_EQ(FALSE, s_min);
+    EXPECT_EQ(FALSE, s_max);
     (void)band->GetMinimum(nullptr);
     (void)band->GetMaximum(nullptr);
   }
@@ -1012,165 +1171,171 @@ TEST(GDALRasterBandTest, PropertiesMetadataNoDataMinMaxOverviews) {
   // GDT_Byte with PIXELTYPE=SIGNEDBYTE
   band->SetDimsAndType(4, 4, 4, 4, GDT_Byte);
   band->SetMetadataItem("PIXELTYPE", "SIGNEDBYTE", "IMAGE_STRUCTURE");
-  EXPECT_DOUBLE_EQ(band->GetMinimum(&success), -128.0);
-  EXPECT_EQ(success, FALSE);
-  EXPECT_DOUBLE_EQ(band->GetMaximum(&success), 127.0);
-  EXPECT_EQ(success, FALSE);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_DOUBLE_EQ(-128.0, band->GetMinimum(&success));
+    EXPECT_EQ(FALSE, success);
+    EXPECT_DOUBLE_EQ(127.0, band->GetMaximum(&success));
+    EXPECT_EQ(FALSE, success);
+    CPLErrorReset();
+  }
   band->SetMetadata(nullptr, "IMAGE_STRUCTURE");
 
   // With STATISTICS_MINIMUM and STATISTICS_MAXIMUM metadata
   band->SetMetadataItem("STATISTICS_MINIMUM", "10.5");
   band->SetMetadataItem("STATISTICS_MAXIMUM", "90.5");
-  EXPECT_DOUBLE_EQ(GDALGetRasterMinimum(hBand, &success), 10.5);
-  EXPECT_EQ(success, TRUE);
-  EXPECT_DOUBLE_EQ(GDALGetRasterMaximum(hBand, &success), 90.5);
-  EXPECT_EQ(success, TRUE);
+  EXPECT_DOUBLE_EQ(10.5, GDALGetRasterMinimum(hBand, &success));
+  EXPECT_EQ(TRUE, success);
+  EXPECT_DOUBLE_EQ(90.5, GDALGetRasterMaximum(hBand, &success));
+  EXPECT_EQ(TRUE, success);
   band->SetMetadata(nullptr);
 
   // ColorInterpretation & ColorTable
-  EXPECT_EQ(GDALGetRasterColorInterpretation(nullptr), GCI_Undefined);
-  EXPECT_EQ(GDALGetRasterColorInterpretation(hBand), GCI_Undefined);
-  EXPECT_EQ(GDALSetRasterColorInterpretation(nullptr, GCI_RedBand), CE_Failure);
-  EXPECT_EQ(GDALSetRasterColorInterpretation(hBand, GCI_RedBand), CE_Failure);
+  EXPECT_EQ(GCI_Undefined, GDALGetRasterColorInterpretation(nullptr));
+  EXPECT_EQ(GCI_Undefined, GDALGetRasterColorInterpretation(hBand));
+  EXPECT_EQ(nullptr, GDALGetRasterColorTable(nullptr));
+  EXPECT_EQ(nullptr, GDALGetRasterColorTable(hBand));
 
-  EXPECT_EQ(GDALGetRasterColorTable(nullptr), nullptr);
-  EXPECT_EQ(GDALGetRasterColorTable(hBand), nullptr);
-  EXPECT_EQ(GDALSetRasterColorTable(nullptr, nullptr), CE_Failure);
-  EXPECT_EQ(GDALSetRasterColorTable(hBand, nullptr), CE_Failure);
+  // Offset, Scale, UnitType getters
+  EXPECT_DOUBLE_EQ(0.0, GDALGetRasterOffset(nullptr, &success));
+  EXPECT_DOUBLE_EQ(0.0, GDALGetRasterOffset(hBand, &success));
+  EXPECT_EQ(FALSE, success);
+  EXPECT_DOUBLE_EQ(0.0, band->GetOffset(nullptr));
 
-  // Offset, Scale, UnitType
-  EXPECT_DOUBLE_EQ(GDALGetRasterOffset(nullptr, &success), 0.0);
-  EXPECT_DOUBLE_EQ(GDALGetRasterOffset(hBand, &success), 0.0);
-  EXPECT_EQ(success, FALSE);
-  EXPECT_DOUBLE_EQ(band->GetOffset(nullptr), 0.0);
-  EXPECT_EQ(GDALSetRasterOffset(nullptr, 1.0), CE_Failure);
-  EXPECT_EQ(GDALSetRasterOffset(hBand, 1.0), CE_Failure);
+  EXPECT_DOUBLE_EQ(0.0, GDALGetRasterScale(nullptr, &success));
+  EXPECT_DOUBLE_EQ(1.0, GDALGetRasterScale(hBand, &success));
+  EXPECT_EQ(FALSE, success);
+  EXPECT_DOUBLE_EQ(1.0, band->GetScale(nullptr));
 
-  EXPECT_DOUBLE_EQ(GDALGetRasterScale(nullptr, &success), 0.0);
-  EXPECT_DOUBLE_EQ(GDALGetRasterScale(hBand, &success), 1.0);
-  EXPECT_EQ(success, FALSE);
-  EXPECT_DOUBLE_EQ(band->GetScale(nullptr), 1.0);
-  EXPECT_EQ(GDALSetRasterScale(nullptr, 2.0), CE_Failure);
-  EXPECT_EQ(GDALSetRasterScale(hBand, 2.0), CE_Failure);
+  EXPECT_EQ(nullptr, GDALGetRasterUnitType(nullptr));
+  EXPECT_STREQ("", GDALGetRasterUnitType(hBand));
 
-  EXPECT_EQ(GDALGetRasterUnitType(nullptr), nullptr);
-  EXPECT_STREQ(GDALGetRasterUnitType(hBand), "");
-  EXPECT_EQ(GDALSetRasterUnitType(nullptr, "m"), CE_Failure);
-  EXPECT_EQ(GDALSetRasterUnitType(hBand, "m"), CE_Failure);
+  // Setters for ColorInterpretation, ColorTable, Offset, Scale, UnitType
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure,
+              GDALSetRasterColorInterpretation(nullptr, GCI_RedBand));
+    EXPECT_EQ(CE_Failure, GDALSetRasterColorInterpretation(hBand, GCI_RedBand));
+    EXPECT_EQ(CE_Failure, GDALSetRasterColorTable(nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, GDALSetRasterColorTable(hBand, nullptr));
+    EXPECT_EQ(CE_Failure, GDALSetRasterOffset(nullptr, 1.0));
+    EXPECT_EQ(CE_Failure, GDALSetRasterOffset(hBand, 1.0));
+    EXPECT_EQ(CE_Failure, GDALSetRasterScale(nullptr, 2.0));
+    EXPECT_EQ(CE_Failure, GDALSetRasterScale(hBand, 2.0));
+    EXPECT_EQ(CE_Failure, GDALSetRasterUnitType(nullptr, "m"));
+    EXPECT_EQ(CE_Failure, GDALSetRasterUnitType(hBand, "m"));
 
-  band->SetMOFlags(GMO_IGNORE_UNIMPLEMENTED);
-  EXPECT_EQ(GDALSetRasterColorInterpretation(hBand, GCI_RedBand), CE_Failure);
-  EXPECT_EQ(GDALSetRasterColorTable(hBand, nullptr), CE_Failure);
-  EXPECT_EQ(GDALSetRasterOffset(hBand, 1.0), CE_Failure);
-  EXPECT_EQ(GDALSetRasterScale(hBand, 2.0), CE_Failure);
-  EXPECT_EQ(GDALSetRasterUnitType(hBand, "m"), CE_Failure);
+    band->SetMOFlags(GMO_IGNORE_UNIMPLEMENTED);
+    EXPECT_EQ(CE_Failure, GDALSetRasterColorInterpretation(hBand, GCI_RedBand));
+    EXPECT_EQ(CE_Failure, GDALSetRasterColorTable(hBand, nullptr));
+    EXPECT_EQ(CE_Failure, GDALSetRasterOffset(hBand, 1.0));
+    EXPECT_EQ(CE_Failure, GDALSetRasterScale(hBand, 2.0));
+    EXPECT_EQ(CE_Failure, GDALSetRasterUnitType(hBand, "m"));
+    CPLErrorReset();
+  }
   band->SetMOFlags(0);
 
   // Overviews & GetRasterSampleOverview
-  EXPECT_EQ(GDALHasArbitraryOverviews(nullptr), 0);
-  EXPECT_EQ(GDALHasArbitraryOverviews(hBand), 0);
-  EXPECT_EQ(GDALGetOverviewCount(nullptr), 0);
-  EXPECT_EQ(GDALGetOverviewCount(hBand), 0);
-  EXPECT_EQ(GDALGetOverview(nullptr, 0), nullptr);
-  EXPECT_EQ(GDALGetOverview(hBand, 0), nullptr);
-  EXPECT_EQ(GDALGetRasterSampleOverview(nullptr, 100), nullptr);
-  EXPECT_EQ(GDALGetRasterSampleOverviewEx(nullptr, 100), nullptr);
-  EXPECT_EQ(GDALGetRasterSampleOverview(hBand, -1), hBand);
-  EXPECT_EQ(GDALGetRasterSampleOverviewEx(hBand, 0), hBand);
+  EXPECT_EQ(0, GDALHasArbitraryOverviews(nullptr));
+  EXPECT_EQ(0, GDALHasArbitraryOverviews(hBand));
+  EXPECT_EQ(0, GDALGetOverviewCount(nullptr));
+  EXPECT_EQ(0, GDALGetOverviewCount(hBand));
+  EXPECT_EQ(nullptr, GDALGetOverview(nullptr, 0));
+  EXPECT_EQ(nullptr, GDALGetOverview(hBand, 0));
+  EXPECT_EQ(nullptr, GDALGetRasterSampleOverview(nullptr, 100));
+  EXPECT_EQ(nullptr, GDALGetRasterSampleOverviewEx(nullptr, 100));
+  EXPECT_EQ(hBand, GDALGetRasterSampleOverview(hBand, -1));
+  EXPECT_EQ(hBand, GDALGetRasterSampleOverviewEx(hBand, 0));
 
   // Add synthetic overviews to test GetRasterSampleOverview selection logic
   band->SetDimsAndType(100, 100, 10, 10, GDT_Byte);
   TestRasterBand ovr1(nullptr, 1, GDT_Byte, 50, 50, 10, 10);
   TestRasterBand ovr2(nullptr, 1, GDT_Byte, 20, 20, 10, 10);
   band->overviews_ = {&ovr1, &ovr2};
-  EXPECT_EQ(GDALGetOverviewCount(hBand), 2);
-  EXPECT_EQ(GDALGetOverview(hBand, -1), nullptr);
-  EXPECT_EQ(GDALGetOverview(hBand, 2), nullptr);
-  EXPECT_EQ(GDALGetOverview(hBand, 0), GDALRasterBand::ToHandle(&ovr1));
-  EXPECT_EQ(GDALGetRasterSampleOverview(hBand, 1000),
-            GDALRasterBand::ToHandle(&ovr1));
-  EXPECT_EQ(GDALGetRasterSampleOverviewEx(hBand, 100),
-            GDALRasterBand::ToHandle(&ovr2));
-  EXPECT_EQ(GDALGetRasterSampleOverviewEx(hBand, 9000), hBand);
+  EXPECT_EQ(2, GDALGetOverviewCount(hBand));
+  EXPECT_EQ(nullptr, GDALGetOverview(hBand, -1));
+  EXPECT_EQ(nullptr, GDALGetOverview(hBand, 2));
+  EXPECT_EQ(GDALRasterBand::ToHandle(&ovr1), GDALGetOverview(hBand, 0));
+  EXPECT_EQ(GDALRasterBand::ToHandle(&ovr1),
+            GDALGetRasterSampleOverview(hBand, 1000));
+  EXPECT_EQ(GDALRasterBand::ToHandle(&ovr2),
+            GDALGetRasterSampleOverviewEx(hBand, 100));
+  EXPECT_EQ(hBand, GDALGetRasterSampleOverviewEx(hBand, 9000));
   band->overviews_.clear();
 
   // BuildOverviews on base band
-  int ovr_list[1] = {2};
-  EXPECT_EQ(
-      band->BuildOverviews("NEAREST", 1, ovr_list, nullptr, nullptr, nullptr),
-      CE_Failure);
+  constexpr std::array<int, 1> ovr_list = {2};
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure,
+              band->BuildOverviews("NEAREST", ovr_list.size(), ovr_list.data(),
+                                   nullptr, nullptr, nullptr));
+    CPLErrorReset();
+  }
 
   // AdviseRead
-  EXPECT_EQ(GDALRasterAdviseRead(nullptr, 0, 0, 4, 4, 4, 4, GDT_Byte, nullptr),
-            CE_Failure);
-  EXPECT_EQ(GDALRasterAdviseRead(hBand, 0, 0, 4, 4, 4, 4, GDT_Byte, nullptr),
-            CE_None);
-
-  CPLPopErrorHandler();
-}
-
-}  // namespace
-namespace {
-
-int CPL_STDCALL CancelAtStartProgress(double, const char*, void*) {
-  return FALSE;
-}
-
-int CPL_STDCALL CancelMidwayProgress(double dfComplete, const char*,
-                                     void* pData) {
-  int* calls = static_cast<int*>(pData);
-  (*calls)++;
-  if (*calls > 1 || dfComplete > 0.0) return FALSE;
-  return TRUE;
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, GDALRasterAdviseRead(nullptr, 0, 0, 4, 4, 4, 4,
+                                               GDT_Byte, nullptr));
+    CPLErrorReset();
+  }
+  EXPECT_EQ(CE_None,
+            GDALRasterAdviseRead(hBand, 0, 0, 4, 4, 4, 4, GDT_Byte, nullptr));
 }
 
 TEST(GDALRasterBandTest, HistogramAndDefaultHistogramAllPaths) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
   auto ds = std::make_unique<TestDataset>(8, 8, GA_Update);
   auto* band = new TestRasterBand(ds.get(), 1, GDT_Byte, 8, 8, 4, 4);
   ds->AddTestBand(band);
   GDALRasterBandH hBand = GDALRasterBand::ToHandle(band);
 
-  GUIntBig hist[256] = {0};
+  std::array<GUIntBig, 256> hist{};
 
-  // Null checks
-  EXPECT_EQ(GDALGetRasterHistogramEx(nullptr, 0, 255, 256, hist, TRUE, FALSE,
-                                     nullptr, nullptr),
-            CE_Failure);
-  EXPECT_EQ(GDALGetRasterHistogramEx(hBand, 0, 255, 256, nullptr, TRUE, FALSE,
-                                     nullptr, nullptr),
-            CE_Failure);
-  EXPECT_EQ(GDALGetRasterHistogramEx(hBand, 0, 255, 0, hist, TRUE, FALSE,
-                                     nullptr, nullptr),
-            CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
 
-  // Invalid dfMin >= dfMax or non-finite dfScale
-  EXPECT_EQ(
-      band->GetHistogram(10.0, 5.0, 10, hist, TRUE, FALSE, nullptr, nullptr),
-      CE_Failure);
-  EXPECT_EQ(band->GetHistogram(-1e308, 1e308, 10, hist, TRUE, FALSE, nullptr,
-                               nullptr),
-            CE_Failure);
+    // Null checks
+    EXPECT_EQ(CE_Failure,
+              GDALGetRasterHistogramEx(nullptr, 0, 255, 256, hist.data(), TRUE,
+                                       FALSE, nullptr, nullptr));
+    EXPECT_EQ(CE_Failure,
+              GDALGetRasterHistogramEx(hBand, 0, 255, 256, nullptr, TRUE, FALSE,
+                                       nullptr, nullptr));
+    EXPECT_EQ(CE_Failure,
+              GDALGetRasterHistogramEx(hBand, 0, 255, 0, hist.data(), TRUE,
+                                       FALSE, nullptr, nullptr));
 
-  // Progress cancel at start and midway
-  EXPECT_EQ(band->GetHistogram(-0.5, 255.5, 256, hist, TRUE, FALSE,
-                               CancelAtStartProgress, nullptr),
-            CE_Failure);
-  int calls = 0;
-  EXPECT_EQ(band->GetHistogram(-0.5, 255.5, 10, hist, TRUE, FALSE,
-                               CancelMidwayProgress, &calls),
-            CE_Failure);
+    // Invalid dfMin >= dfMax or non-finite dfScale
+    EXPECT_EQ(CE_Failure, band->GetHistogram(10.0, 5.0, 10, hist.data(), TRUE,
+                                             FALSE, nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, band->GetHistogram(-1e308, 1e308, 10, hist.data(),
+                                             TRUE, FALSE, nullptr, nullptr));
+
+    // Progress cancel at start and midway
+    EXPECT_EQ(CE_Failure,
+              band->GetHistogram(-0.5, 255.5, 256, hist.data(), TRUE, FALSE,
+                                 CancelAtStartProgress, nullptr));
+    int calls = 0;
+    EXPECT_EQ(CE_Failure,
+              band->GetHistogram(-0.5, 255.5, 10, hist.data(), TRUE, FALSE,
+                                 CancelMidwayProgress, &calls));
+
+    CPLErrorReset();
+  }
 
   // Overview delegation when bApproxOK=TRUE and GetOverviewCount() > 0
   TestRasterBand ovr(nullptr, 1, GDT_Byte, 4, 4, 4, 4);
-  ovr.Fill(10);
+  EXPECT_EQ(CE_None, ovr.Fill(10));
   band->overviews_ = {&ovr};
-  EXPECT_EQ(
-      band->GetHistogram(-0.5, 255.5, 256, hist, TRUE, TRUE, nullptr, nullptr),
-      CE_None);
-  EXPECT_EQ(hist[10], 16U);
+  EXPECT_EQ(CE_None, band->GetHistogram(-0.5, 255.5, 256, hist.data(), TRUE,
+                                        TRUE, nullptr, nullptr));
+  EXPECT_EQ(16U, hist[10]);
   band->overviews_.clear();
 
   // Fast path: GDT_Byte, !bSignedByte, dfScale == 1.0, dfMin == -0.5, nBuckets
@@ -1181,42 +1346,33 @@ TEST(GDALRasterBandTest, HistogramAndDefaultHistogramAllPaths) {
   band->FlushCache();
   band->has_nodata_ = true;
   band->nodata_val_ = 0.0;
-  EXPECT_EQ(
-      band->GetHistogram(-0.5, 255.5, 256, hist, TRUE, FALSE, nullptr, nullptr),
-      CE_None);
-  EXPECT_EQ(hist[0], 0U);
-  EXPECT_EQ(hist[4], 1U);
+  EXPECT_EQ(CE_None, band->GetHistogram(-0.5, 255.5, 256, hist.data(), TRUE,
+                                        FALSE, nullptr, nullptr));
+  EXPECT_EQ(0U, hist[0]);
+  EXPECT_EQ(1U, hist[4]);
 
   // Fast path with custom mask band
   TestRasterBand mask_band(ds.get(), 1, GDT_Byte, 8, 8, 4, 4);
-  mask_band.Fill(255);
+  EXPECT_EQ(CE_None, mask_band.Fill(255));
   mask_band.storage_[1] = 0;  // mask out pixel 1
   band->has_nodata_ = false;
   band->custom_mask_band_ = &mask_band;
   band->custom_mask_flags_ = GMF_PER_DATASET;
-  EXPECT_EQ(
-      band->GetHistogram(-0.5, 255.5, 256, hist, TRUE, FALSE, nullptr, nullptr),
-      CE_None);
-  EXPECT_EQ(hist[4], 1U);
+  EXPECT_EQ(CE_None, band->GetHistogram(-0.5, 255.5, 256, hist.data(), TRUE,
+                                        FALSE, nullptr, nullptr));
+  EXPECT_EQ(1U, hist[4]);
 
-  // Helper to populate diverse values (below min, in range, above max, nodata)
-  const GDALDataType hist_types[] = {
-      GDT_Byte,    GDT_Int8,     GDT_UInt16,   GDT_Int16,
-      GDT_UInt32,  GDT_Int32,    GDT_UInt64,   GDT_Int64,
-      GDT_Float16, GDT_Float32,  GDT_Float64,  GDT_CInt16,
-      GDT_CInt32,  GDT_CFloat16, GDT_CFloat32, GDT_CFloat64};
-
-  for (GDALDataType dt : hist_types) {
+  // Populate diverse values (below min, in range, above max, nodata)
+  constexpr auto kVals = std::to_array<double>({1.0, 5.0, 15.0, 99.0});
+  for (GDALDataType dt : kAllDataTypes) {
     auto loop_ds = std::make_unique<TestDataset>(8, 8, GA_Update);
     auto* loop_band = new TestRasterBand(loop_ds.get(), 1, dt, 8, 8, 4, 4);
     loop_ds->AddTestBand(loop_band);
-    double vals[4] = {1.0, 5.0, 15.0, 99.0};
     for (int y = 0; y < 8; ++y) {
       for (int x = 0; x < 8; ++x) {
-        double v = vals[(x + y) % 4];
-        EXPECT_EQ(loop_band->RasterIO(GF_Write, x, y, 1, 1, &v, 1, 1,
-                                      GDT_Float64, 0, 0, nullptr),
-                  CE_None);
+        double v = kVals[(x + y) % kVals.size()];
+        EXPECT_EQ(CE_None, loop_band->RasterIO(GF_Write, x, y, 1, 1, &v, 1, 1,
+                                               GDT_Float64, 0, 0, nullptr));
       }
     }
     loop_band->FlushCache();
@@ -1228,55 +1384,62 @@ TEST(GDALRasterBandTest, HistogramAndDefaultHistogramAllPaths) {
     loop_band->has_nodata_u64_ = true;
     loop_band->nodata_u64_ = 99U;
 
-    GUIntBig h10[10] = {0};
+    std::array<GUIntBig, 10> h10{};
     // 1. Arbitrary overviews path (bApproxOK=TRUE,
     // HasArbitraryOverviews()=TRUE)
     loop_band->arbitrary_overviews_ = true;
     for (int inc_out : {TRUE, FALSE}) {
-      EXPECT_EQ(loop_band->GetHistogram(2.0, 12.0, 10, h10, inc_out, TRUE,
-                                        nullptr, nullptr),
-                CE_None);
+      EXPECT_EQ(CE_None,
+                loop_band->GetHistogram(2.0, 12.0, 10, h10.data(), inc_out,
+                                        TRUE, nullptr, nullptr));
     }
 
     // 2. General block path (bApproxOK=FALSE)
     loop_band->arbitrary_overviews_ = false;
     for (int inc_out : {TRUE, FALSE}) {
-      EXPECT_EQ(loop_band->GetHistogram(2.0, 12.0, 10, h10, inc_out, FALSE,
-                                        nullptr, nullptr),
-                CE_None);
+      EXPECT_EQ(CE_None,
+                loop_band->GetHistogram(2.0, 12.0, 10, h10.data(), inc_out,
+                                        FALSE, nullptr, nullptr));
     }
 
     // Also GDT_Byte with PIXELTYPE=SIGNEDBYTE
     if (dt == GDT_Byte) {
+      WithQuietHandler quiet;
+      CPLErrorReset();
       loop_band->SetMetadataItem("PIXELTYPE", "SIGNEDBYTE", "IMAGE_STRUCTURE");
       loop_band->arbitrary_overviews_ = true;
-      EXPECT_EQ(loop_band->GetHistogram(-10.0, 20.0, 10, h10, TRUE, TRUE,
-                                        nullptr, nullptr),
-                CE_None);
+      EXPECT_EQ(CE_None, loop_band->GetHistogram(-10.0, 20.0, 10, h10.data(),
+                                                 TRUE, TRUE, nullptr, nullptr));
       loop_band->arbitrary_overviews_ = false;
-      EXPECT_EQ(loop_band->GetHistogram(-10.0, 20.0, 10, h10, TRUE, FALSE,
-                                        nullptr, nullptr),
-                CE_None);
+      EXPECT_EQ(CE_None,
+                loop_band->GetHistogram(-10.0, 20.0, 10, h10.data(), TRUE,
+                                        FALSE, nullptr, nullptr));
+      CPLErrorReset();
     }
   }
 
   // Deprecated GDALGetRasterHistogram wrapper
   TestRasterBand dep_band(nullptr, 1, GDT_Byte, 4, 4, 4, 4);
-  dep_band.Fill(5);
-  int int_hist[10] = {0};
+  EXPECT_EQ(CE_None, dep_band.Fill(5));
+  std::array<int, 10> int_hist{};
 #if defined(__GNUC__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
-  EXPECT_EQ(GDALGetRasterHistogram(nullptr, 0, 10, 10, int_hist, TRUE, FALSE,
-                                   nullptr, nullptr),
-            CE_Failure);
-  EXPECT_EQ(GDALGetRasterHistogram(GDALRasterBand::ToHandle(&dep_band), 0, 10,
-                                   10, nullptr, TRUE, FALSE, nullptr, nullptr),
-            CE_Failure);
-  EXPECT_EQ(GDALGetRasterHistogram(GDALRasterBand::ToHandle(&dep_band), 0, 10,
-                                   10, int_hist, TRUE, FALSE, nullptr, nullptr),
-            CE_None);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure,
+              GDALGetRasterHistogram(nullptr, 0, 10, 10, int_hist.data(), TRUE,
+                                     FALSE, nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, GDALGetRasterHistogram(
+                              GDALRasterBand::ToHandle(&dep_band), 0, 10, 10,
+                              nullptr, TRUE, FALSE, nullptr, nullptr));
+    CPLErrorReset();
+  }
+  EXPECT_EQ(CE_None, GDALGetRasterHistogram(GDALRasterBand::ToHandle(&dep_band),
+                                            0, 10, 10, int_hist.data(), TRUE,
+                                            FALSE, nullptr, nullptr));
 #if defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
@@ -1284,87 +1447,113 @@ TEST(GDALRasterBandTest, HistogramAndDefaultHistogramAllPaths) {
   // GetDefaultHistogram & GDALGetDefaultHistogramEx & GDALGetDefaultHistogram
   double hmin = 0.0, hmax = 0.0;
   int nbuckets = 0;
-  GUIntBig* def_hist = nullptr;
 
-  EXPECT_EQ(GDALGetDefaultHistogramEx(nullptr, &hmin, &hmax, &nbuckets,
-                                      &def_hist, TRUE, nullptr, nullptr),
-            CE_Failure);
-  // bForce = FALSE -> CE_Warning
-  EXPECT_EQ(GDALGetDefaultHistogramEx(hBand, &hmin, &hmax, &nbuckets, &def_hist,
-                                      FALSE, nullptr, nullptr),
-            CE_Warning);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    GUIntBig* def_hist_null = nullptr;
+    EXPECT_EQ(CE_Failure, GDALGetDefaultHistogramEx(nullptr, &hmin, &hmax,
+                                                    &nbuckets, &def_hist_null,
+                                                    TRUE, nullptr, nullptr));
+    // bForce = FALSE -> CE_Warning
+    EXPECT_EQ(CE_Warning, GDALGetDefaultHistogramEx(hBand, &hmin, &hmax,
+                                                    &nbuckets, &def_hist_null,
+                                                    FALSE, nullptr, nullptr));
+    CPLErrorReset();
+  }
 
   // bForce = TRUE on GDT_Byte
-  EXPECT_EQ(GDALGetDefaultHistogramEx(hBand, &hmin, &hmax, &nbuckets, &def_hist,
-                                      TRUE, nullptr, nullptr),
-            CE_None);
-  EXPECT_EQ(nbuckets, 256);
-  VSIFree(def_hist);
-  def_hist = nullptr;
+  {
+    GUIntBig* def_hist_raw = nullptr;
+    EXPECT_EQ(CE_None,
+              GDALGetDefaultHistogramEx(hBand, &hmin, &hmax, &nbuckets,
+                                        &def_hist_raw, TRUE, nullptr, nullptr));
+    std::unique_ptr<GUIntBig, decltype(&VSIFree)> def_hist(def_hist_raw,
+                                                           VSIFree);
+    EXPECT_EQ(256, nbuckets);
+  }
 
   // bForce = TRUE on GDT_Int8
   band->SetDimsAndType(4, 4, 4, 4, GDT_Int8);
-  band->Fill(-5);
-  EXPECT_EQ(band->GetDefaultHistogram(&hmin, &hmax, &nbuckets, &def_hist, TRUE,
-                                      nullptr, nullptr),
-            CE_None);
-  EXPECT_EQ(nbuckets, 256);
-  VSIFree(def_hist);
-  def_hist = nullptr;
+  EXPECT_EQ(CE_None, band->Fill(-5));
+  {
+    GUIntBig* def_hist_raw = nullptr;
+    EXPECT_EQ(CE_None,
+              band->GetDefaultHistogram(&hmin, &hmax, &nbuckets, &def_hist_raw,
+                                        TRUE, nullptr, nullptr));
+    std::unique_ptr<GUIntBig, decltype(&VSIFree)> def_hist(def_hist_raw,
+                                                           VSIFree);
+    EXPECT_EQ(256, nbuckets);
+  }
 
   // bForce = TRUE on GDT_Float32 with constant value (*pdfMin == *pdfMax -> 1
   // bucket)
   band->SetDimsAndType(4, 4, 4, 4, GDT_Float32);
-  band->Fill(42.0);
-  EXPECT_EQ(band->GetDefaultHistogram(&hmin, &hmax, &nbuckets, &def_hist, TRUE,
-                                      nullptr, nullptr),
-            CE_None);
-  EXPECT_EQ(nbuckets, 1);
-  VSIFree(def_hist);
-  def_hist = nullptr;
+  EXPECT_EQ(CE_None, band->Fill(42.0));
+  {
+    GUIntBig* def_hist_raw = nullptr;
+    EXPECT_EQ(CE_None,
+              band->GetDefaultHistogram(&hmin, &hmax, &nbuckets, &def_hist_raw,
+                                        TRUE, nullptr, nullptr));
+    std::unique_ptr<GUIntBig, decltype(&VSIFree)> def_hist(def_hist_raw,
+                                                           VSIFree);
+    EXPECT_EQ(1, nbuckets);
+  }
 
   // bForce = TRUE on GDT_Float32 with varying values (*pdfMin < *pdfMax -> 256
-  // buckets)
-  float fvals[2] = {10.0f, 20.0f};
-  EXPECT_EQ(band->RasterIO(GF_Write, 0, 0, 2, 1, fvals, 2, 1, GDT_Float32, 0, 0,
-                           nullptr),
-            CE_None);
+  // buckets); clear cached statistics metadata from the constant fill first.
+  band->SetMetadata(nullptr);
+  std::array<float, 2> fvals = {10.0f, 20.0f};
+  EXPECT_EQ(CE_None, band->RasterIO(GF_Write, 0, 0, 2, 1, fvals.data(), 2, 1,
+                                    GDT_Float32, 0, 0, nullptr));
   band->FlushCache();
-  int* def_hist_int = nullptr;
 #if defined(__GNUC__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
-  EXPECT_EQ(GDALGetDefaultHistogram(nullptr, &hmin, &hmax, &nbuckets,
-                                    &def_hist_int, TRUE, nullptr, nullptr),
-            CE_Failure);
-  EXPECT_EQ(GDALGetDefaultHistogram(hBand, &hmin, &hmax, &nbuckets,
-                                    &def_hist_int, TRUE, nullptr, nullptr),
-            CE_None);
-  VSIFree(def_hist_int);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    int* def_hist_null = nullptr;
+    EXPECT_EQ(CE_Failure,
+              GDALGetDefaultHistogram(nullptr, &hmin, &hmax, &nbuckets,
+                                      &def_hist_null, TRUE, nullptr, nullptr));
+    CPLErrorReset();
+  }
+  {
+    int* def_hist_int_raw = nullptr;
+    EXPECT_EQ(CE_None, GDALGetDefaultHistogram(hBand, &hmin, &hmax, &nbuckets,
+                                               &def_hist_int_raw, TRUE, nullptr,
+                                               nullptr));
+    std::unique_ptr<int, decltype(&VSIFree)> def_hist_int(def_hist_int_raw,
+                                                          VSIFree);
+    EXPECT_EQ(256, nbuckets);
+  }
 
   // SetDefaultHistogram & C wrappers
-  EXPECT_EQ(GDALSetDefaultHistogram(nullptr, 0, 10, 10, int_hist), CE_Failure);
-  EXPECT_EQ(GDALSetDefaultHistogram(hBand, 0, 10, 10, int_hist), CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure,
+              GDALSetDefaultHistogram(nullptr, 0, 10, 10, int_hist.data()));
+    EXPECT_EQ(CE_Failure,
+              GDALSetDefaultHistogram(hBand, 0, 10, 10, int_hist.data()));
 #if defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
-  EXPECT_EQ(GDALSetDefaultHistogramEx(nullptr, 0, 10, 10, hist), CE_Failure);
-  EXPECT_EQ(GDALSetDefaultHistogramEx(hBand, 0, 10, 10, hist), CE_Failure);
-  band->SetMOFlags(GMO_IGNORE_UNIMPLEMENTED);
-  EXPECT_EQ(GDALSetDefaultHistogramEx(hBand, 0, 10, 10, hist), CE_Failure);
+    EXPECT_EQ(CE_Failure,
+              GDALSetDefaultHistogramEx(nullptr, 0, 10, 10, hist.data()));
+    EXPECT_EQ(CE_Failure,
+              GDALSetDefaultHistogramEx(hBand, 0, 10, 10, hist.data()));
+    band->SetMOFlags(GMO_IGNORE_UNIMPLEMENTED);
+    EXPECT_EQ(CE_Failure,
+              GDALSetDefaultHistogramEx(hBand, 0, 10, 10, hist.data()));
+    CPLErrorReset();
+  }
   band->SetMOFlags(0);
-
-  CPLPopErrorHandler();
 }
 
-}  // namespace
-namespace {
-
 TEST(GDALRasterBandTest, StatisticsAllPaths) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
   auto ds = std::make_unique<TestDataset>(40, 4, GA_Update);
   auto* band = new TestRasterBand(ds.get(), 1, GDT_Byte, 40, 4, 32, 2);
   ds->AddTestBand(band);
@@ -1373,41 +1562,58 @@ TEST(GDALRasterBandTest, StatisticsAllPaths) {
   double smin = 0, smax = 0, smean = 0, sstddev = 0;
 
   // Null checks
-  EXPECT_EQ(GDALGetRasterStatistics(nullptr, TRUE, TRUE, &smin, &smax, &smean,
-                                    &sstddev),
-            CE_Failure);
-  EXPECT_EQ(GDALComputeRasterStatistics(nullptr, TRUE, &smin, &smax, &smean,
-                                        &sstddev, nullptr, nullptr),
-            CE_Failure);
-  EXPECT_EQ(GDALSetRasterStatistics(nullptr, 1, 2, 1.5, 0.5), CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, GDALGetRasterStatistics(nullptr, TRUE, TRUE, &smin,
+                                                  &smax, &smean, &sstddev));
+    EXPECT_EQ(CE_Failure,
+              GDALComputeRasterStatistics(nullptr, TRUE, &smin, &smax, &smean,
+                                          &sstddev, nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, GDALSetRasterStatistics(nullptr, 1, 2, 1.5, 0.5));
+    CPLErrorReset();
+  }
 
   // SetValidPercent edge cases
-  band->SetValidPercent(100, 0);
-  EXPECT_STREQ(band->GetMetadataItem("STATISTICS_VALID_PERCENT"), "0");
-  band->SetValidPercent(100000, 99999);
-  EXPECT_STREQ(band->GetMetadataItem("STATISTICS_VALID_PERCENT"), "99.999");
-  band->SetValidPercent(100, 50);
-  EXPECT_STREQ(band->GetMetadataItem("STATISTICS_VALID_PERCENT"), "50");
-  band->SetValidPercent(100, 100);
-  EXPECT_STREQ(band->GetMetadataItem("STATISTICS_VALID_PERCENT"), "100");
+  struct ValidPercentCase {
+    GIntBig total;
+    GIntBig valid;
+    std::string_view expected;
+  };
+  constexpr auto kValidPercentCases = std::to_array<ValidPercentCase>({
+      {.total = 100, .valid = 0, .expected = "0"},
+      {.total = 100000, .valid = 99999, .expected = "99.999"},
+      {.total = 100, .valid = 50, .expected = "50"},
+      {.total = 100, .valid = 100, .expected = "100"},
+  });
+  for (const auto& tc : kValidPercentCases) {
+    band->SetValidPercent(tc.total, tc.valid);
+    const char* item = band->GetMetadataItem("STATISTICS_VALID_PERCENT");
+    ASSERT_NE(nullptr, item);
+    EXPECT_EQ(tc.expected, std::string_view(item));
+  }
   band->SetMetadata(nullptr);
 
   // GetStatistics with SetStatistics metadata
-  EXPECT_EQ(GDALSetRasterStatistics(hBand, 1.0, 9.0, 5.0, 2.0), CE_None);
-  EXPECT_EQ(GDALGetRasterStatistics(hBand, FALSE, FALSE, &smin, &smax, &smean,
-                                    &sstddev),
-            CE_None);
-  EXPECT_DOUBLE_EQ(smin, 1.0);
-  EXPECT_DOUBLE_EQ(smax, 9.0);
-  EXPECT_DOUBLE_EQ(smean, 5.0);
-  EXPECT_DOUBLE_EQ(sstddev, 2.0);
+  EXPECT_EQ(CE_None, GDALSetRasterStatistics(hBand, 1.0, 9.0, 5.0, 2.0));
+  EXPECT_EQ(CE_None, GDALGetRasterStatistics(hBand, FALSE, FALSE, &smin, &smax,
+                                             &smean, &sstddev));
+  EXPECT_DOUBLE_EQ(1.0, smin);
+  EXPECT_DOUBLE_EQ(9.0, smax);
+  EXPECT_DOUBLE_EQ(5.0, smean);
+  EXPECT_DOUBLE_EQ(2.0, sstddev);
 
   // With STATISTICS_APPROXIMATE=YES and bApproxOK=FALSE vs TRUE
   band->SetMetadataItem("STATISTICS_APPROXIMATE", "YES");
-  EXPECT_EQ(band->GetStatistics(TRUE, FALSE, &smin, &smax, &smean, &sstddev),
-            CE_None);
-  EXPECT_EQ(band->GetStatistics(FALSE, FALSE, &smin, &smax, &smean, &sstddev),
-            CE_Warning);
+  EXPECT_EQ(CE_None,
+            band->GetStatistics(TRUE, FALSE, &smin, &smax, &smean, &sstddev));
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Warning, band->GetStatistics(FALSE, FALSE, &smin, &smax,
+                                              &smean, &sstddev));
+    CPLErrorReset();
+  }
   band->SetMetadata(nullptr);
 
   // GetStatistics with bApproxOK=TRUE, pdfMean=nullptr, padfStdDev=nullptr and
@@ -1416,20 +1622,25 @@ TEST(GDALRasterBandTest, StatisticsAllPaths) {
   band->custom_min_ = 3.0;
   band->has_custom_max_ = true;
   band->custom_max_ = 7.0;
-  EXPECT_EQ(band->GetStatistics(TRUE, FALSE, &smin, &smax, nullptr, nullptr),
-            CE_None);
-  EXPECT_DOUBLE_EQ(smin, 3.0);
-  EXPECT_DOUBLE_EQ(smax, 7.0);
+  EXPECT_EQ(CE_None,
+            band->GetStatistics(TRUE, FALSE, &smin, &smax, nullptr, nullptr));
+  EXPECT_DOUBLE_EQ(3.0, smin);
+  EXPECT_DOUBLE_EQ(7.0, smax);
   band->has_custom_min_ = false;
   band->has_custom_max_ = false;
 
   // GetStatistics with bForce=FALSE -> CE_Warning, bForce=TRUE -> computes
-  EXPECT_EQ(band->GetStatistics(FALSE, FALSE, &smin, &smax, &smean, &sstddev),
-            CE_Warning);
-  band->Fill(10);
-  EXPECT_EQ(band->GetStatistics(FALSE, TRUE, &smin, &smax, &smean, &sstddev),
-            CE_None);
-  EXPECT_DOUBLE_EQ(smin, 10.0);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Warning, band->GetStatistics(FALSE, FALSE, &smin, &smax,
+                                              &smean, &sstddev));
+    CPLErrorReset();
+  }
+  EXPECT_EQ(CE_None, band->Fill(10));
+  EXPECT_EQ(CE_None,
+            band->GetStatistics(FALSE, TRUE, &smin, &smax, &smean, &sstddev));
+  EXPECT_DOUBLE_EQ(10.0, smin);
 
   // Overview delegation in ComputeStatistics
   {
@@ -1440,80 +1651,84 @@ TEST(GDALRasterBandTest, StatisticsAllPaths) {
     TestRasterBand ovr(nullptr, 1, GDT_Byte, 60, 60, 60, 60);
     std::fill(ovr.storage_.begin(), ovr.storage_.end(), 25);
     b_ovr_main->overviews_ = {&ovr};
-    EXPECT_EQ(b_ovr_main->ComputeStatistics(TRUE, &smin, &smax, &smean,
-                                            &sstddev, nullptr, nullptr),
-              CE_None);
-    EXPECT_DOUBLE_EQ(smin, 25.0);
+    EXPECT_EQ(CE_None,
+              b_ovr_main->ComputeStatistics(TRUE, &smin, &smax, &smean,
+                                            &sstddev, nullptr, nullptr));
+    EXPECT_DOUBLE_EQ(25.0, smin);
     b_ovr_main->overviews_.clear();
   }
 
   // Progress cancellation
-  EXPECT_EQ(band->ComputeStatistics(FALSE, &smin, &smax, &smean, &sstddev,
-                                    CancelAtStartProgress, nullptr),
-            CE_Failure);
-  int calls = 0;
-  EXPECT_EQ(band->ComputeStatistics(FALSE, &smin, &smax, &smean, &sstddev,
-                                    CancelMidwayProgress, &calls),
-            CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure,
+              band->ComputeStatistics(FALSE, &smin, &smax, &smean, &sstddev,
+                                      CancelAtStartProgress, nullptr));
+    int calls = 0;
+    EXPECT_EQ(CE_Failure,
+              band->ComputeStatistics(FALSE, &smin, &smax, &smean, &sstddev,
+                                      CancelMidwayProgress, &calls));
+    CPLErrorReset();
+  }
 
   // Fast GDT_Byte integer stats paths:
   // 1) Block 0 has [0, 255] -> Block 1 hits nMin==0 && nMax==255
-  band->DropCache();
+  EXPECT_EQ(CE_None, band->DropCache());
   band->SetMetadata(nullptr);
   std::fill(band->storage_.begin(), band->storage_.end(), 50);
   band->storage_[0] = 0;
   band->storage_[1] = 255;
-  EXPECT_EQ(band->ComputeStatistics(FALSE, &smin, &smax, &smean, &sstddev,
-                                    nullptr, nullptr),
-            CE_None);
-  EXPECT_DOUBLE_EQ(smin, 0.0);
-  EXPECT_DOUBLE_EQ(smax, 255.0);
+  EXPECT_EQ(CE_None, band->ComputeStatistics(FALSE, &smin, &smax, &smean,
+                                             &sstddev, nullptr, nullptr));
+  EXPECT_DOUBLE_EQ(0.0, smin);
+  EXPECT_DOUBLE_EQ(255.0, smax);
 
   // 2) Block 0 has [0, 100] -> Block 1 hits nMin==0 && nMax<255
-  band->DropCache();
+  EXPECT_EQ(CE_None, band->DropCache());
   band->SetMetadata(nullptr);
   std::fill(band->storage_.begin(), band->storage_.end(), 50);
   band->storage_[0] = 0;
   band->storage_[1] = 100;
-  EXPECT_EQ(band->ComputeStatistics(FALSE, &smin, &smax, &smean, &sstddev,
-                                    nullptr, nullptr),
-            CE_None);
+  EXPECT_EQ(CE_None, band->ComputeStatistics(FALSE, &smin, &smax, &smean,
+                                             &sstddev, nullptr, nullptr));
 
   // 3) Block 0 has [10, 255] -> Block 1 hits nMin>0 && nMax==255
-  band->DropCache();
+  EXPECT_EQ(CE_None, band->DropCache());
   band->SetMetadata(nullptr);
   std::fill(band->storage_.begin(), band->storage_.end(), 50);
   band->storage_[0] = 10;
   band->storage_[1] = 255;
-  EXPECT_EQ(band->ComputeStatistics(FALSE, &smin, &smax, &smean, &sstddev,
-                                    nullptr, nullptr),
-            CE_None);
+  EXPECT_EQ(CE_None, band->ComputeStatistics(FALSE, &smin, &smax, &smean,
+                                             &sstddev, nullptr, nullptr));
 
   // 4) With nodata on GDT_Byte
-  band->DropCache();
+  EXPECT_EQ(CE_None, band->DropCache());
   band->SetMetadata(nullptr);
   band->has_nodata_ = true;
   band->nodata_val_ = 50.0;
-  EXPECT_EQ(band->ComputeStatistics(FALSE, &smin, &smax, &smean, &sstddev,
-                                    nullptr, nullptr),
-            CE_None);
+  EXPECT_EQ(CE_None, band->ComputeStatistics(FALSE, &smin, &smax, &smean,
+                                             &sstddev, nullptr, nullptr));
 
   // 5) All nodata on GDT_Byte -> CE_Failure
-  band->Fill(50);
-  EXPECT_EQ(band->ComputeStatistics(FALSE, &smin, &smax, &smean, &sstddev,
-                                    nullptr, nullptr),
-            CE_Failure);
+  EXPECT_EQ(CE_None, band->Fill(50));
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, band->ComputeStatistics(FALSE, &smin, &smax, &smean,
+                                                  &sstddev, nullptr, nullptr));
+    CPLErrorReset();
+  }
   band->has_nodata_ = false;
 
   // 6) GDAL_STATS_USE_INTEGER_STATS = NO on GDT_Byte
   {
     CPLConfigOptionSetter s("GDAL_STATS_USE_INTEGER_STATS", "NO", false);
-    band->Fill(20);
+    EXPECT_EQ(CE_None, band->Fill(20));
     band->storage_[0] = 10;
     band->FlushCache();
-    EXPECT_EQ(band->ComputeStatistics(FALSE, &smin, &smax, &smean, &sstddev,
-                                      nullptr, nullptr),
-              CE_None);
+    EXPECT_EQ(CE_None, band->ComputeStatistics(FALSE, &smin, &smax, &smean,
+                                               &sstddev, nullptr, nullptr));
   }
 
   // Fast GDT_UInt16 integer stats paths (without nodata, with nodata, and with
@@ -1523,25 +1738,22 @@ TEST(GDALRasterBandTest, StatisticsAllPaths) {
     auto* band_u16 =
         new TestRasterBand(ds_u16.get(), 1, GDT_UInt16, 40, 4, 32, 2);
     ds_u16->AddTestBand(band_u16);
-    band_u16->Fill(100);
-    uint16_t u16_vals[2] = {10, 500};
-    EXPECT_EQ(band_u16->RasterIO(GF_Write, 0, 0, 2, 1, u16_vals, 2, 1,
-                                 GDT_UInt16, 0, 0, nullptr),
-              CE_None);
+    EXPECT_EQ(CE_None, band_u16->Fill(100));
+    std::array<uint16_t, 2> u16_vals = {10, 500};
+    EXPECT_EQ(CE_None, band_u16->RasterIO(GF_Write, 0, 0, 2, 1, u16_vals.data(),
+                                          2, 1, GDT_UInt16, 0, 0, nullptr));
     band_u16->FlushCache();
-    EXPECT_EQ(band_u16->ComputeStatistics(FALSE, &smin, &smax, &smean, &sstddev,
-                                          nullptr, nullptr),
-              CE_None);
+    EXPECT_EQ(CE_None, band_u16->ComputeStatistics(FALSE, &smin, &smax, &smean,
+                                                   &sstddev, nullptr, nullptr));
     band_u16->has_nodata_ = true;
     band_u16->nodata_val_ = 100.0;
-    EXPECT_EQ(band_u16->ComputeStatistics(FALSE, &smin, &smax, &smean, &sstddev,
-                                          nullptr, nullptr),
-              CE_None);
+    EXPECT_EQ(CE_None, band_u16->ComputeStatistics(FALSE, &smin, &smax, &smean,
+                                                   &sstddev, nullptr, nullptr));
     {
       CPLConfigOptionSetter s("GDAL_STATS_USE_INTEGER_STATS", "NO", false);
-      EXPECT_EQ(band_u16->ComputeStatistics(FALSE, &smin, &smax, &smean,
-                                            &sstddev, nullptr, nullptr),
-                CE_None);
+      EXPECT_EQ(CE_None,
+                band_u16->ComputeStatistics(FALSE, &smin, &smax, &smean,
+                                            &sstddev, nullptr, nullptr));
     }
   }
 
@@ -1551,29 +1763,26 @@ TEST(GDALRasterBandTest, StatisticsAllPaths) {
     auto* band_f32 =
         new TestRasterBand(ds_f32.get(), 1, GDT_Float32, 40, 4, 32, 2);
     ds_f32->AddTestBand(band_f32);
-    band_f32->Fill(10.0);
-    float f32_vals[4] = {2.0f, 50.0f, std::numeric_limits<float>::quiet_NaN(),
-                         10.0f};
-    EXPECT_EQ(band_f32->RasterIO(GF_Write, 0, 2, 4, 1, f32_vals, 4, 1,
-                                 GDT_Float32, 0, 0, nullptr),
-              CE_None);
+    EXPECT_EQ(CE_None, band_f32->Fill(10.0));
+    std::array<float, 4> f32_vals = {
+        2.0f, 50.0f, std::numeric_limits<float>::quiet_NaN(), 10.0f};
+    EXPECT_EQ(CE_None, band_f32->RasterIO(GF_Write, 0, 2, 4, 1, f32_vals.data(),
+                                          4, 1, GDT_Float32, 0, 0, nullptr));
     band_f32->FlushCache();
-    EXPECT_EQ(band_f32->ComputeStatistics(FALSE, &smin, &smax, &smean, &sstddev,
-                                          nullptr, nullptr),
-              CE_None);
-    EXPECT_DOUBLE_EQ(smin, 2.0);
-    EXPECT_DOUBLE_EQ(smax, 50.0);
+    EXPECT_EQ(CE_None, band_f32->ComputeStatistics(FALSE, &smin, &smax, &smean,
+                                                   &sstddev, nullptr, nullptr));
+    EXPECT_DOUBLE_EQ(2.0, smin);
+    EXPECT_DOUBLE_EQ(50.0, smax);
 
     band_f32->has_nodata_ = true;
     band_f32->nodata_val_ = 10.0;
-    EXPECT_EQ(band_f32->ComputeStatistics(FALSE, &smin, &smax, &smean, &sstddev,
-                                          nullptr, nullptr),
-              CE_None);
+    EXPECT_EQ(CE_None, band_f32->ComputeStatistics(FALSE, &smin, &smax, &smean,
+                                                   &sstddev, nullptr, nullptr));
     {
       CPLConfigOptionSetter s("GDAL_STATS_USE_FLOAT32_OPTIM", "NO", false);
-      EXPECT_EQ(band_f32->ComputeStatistics(FALSE, &smin, &smax, &smean,
-                                            &sstddev, nullptr, nullptr),
-                CE_None);
+      EXPECT_EQ(CE_None,
+                band_f32->ComputeStatistics(FALSE, &smin, &smax, &smean,
+                                            &sstddev, nullptr, nullptr));
     }
   }
 
@@ -1583,55 +1792,45 @@ TEST(GDALRasterBandTest, StatisticsAllPaths) {
     auto* band_f64 =
         new TestRasterBand(ds_f64.get(), 1, GDT_Float64, 40, 4, 32, 2);
     ds_f64->AddTestBand(band_f64);
-    band_f64->Fill(10.0);
-    double f64_vals[4] = {2.0, 50.0, std::numeric_limits<double>::quiet_NaN(),
-                          10.0};
-    EXPECT_EQ(band_f64->RasterIO(GF_Write, 0, 2, 4, 1, f64_vals, 4, 1,
-                                 GDT_Float64, 0, 0, nullptr),
-              CE_None);
+    EXPECT_EQ(CE_None, band_f64->Fill(10.0));
+    std::array<double, 4> f64_vals = {
+        2.0, 50.0, std::numeric_limits<double>::quiet_NaN(), 10.0};
+    EXPECT_EQ(CE_None, band_f64->RasterIO(GF_Write, 0, 2, 4, 1, f64_vals.data(),
+                                          4, 1, GDT_Float64, 0, 0, nullptr));
     band_f64->FlushCache();
-    EXPECT_EQ(band_f64->ComputeStatistics(FALSE, &smin, &smax, &smean, &sstddev,
-                                          nullptr, nullptr),
-              CE_None);
-    EXPECT_DOUBLE_EQ(smin, 2.0);
-    EXPECT_DOUBLE_EQ(smax, 50.0);
+    EXPECT_EQ(CE_None, band_f64->ComputeStatistics(FALSE, &smin, &smax, &smean,
+                                                   &sstddev, nullptr, nullptr));
+    EXPECT_DOUBLE_EQ(2.0, smin);
+    EXPECT_DOUBLE_EQ(50.0, smax);
 
     band_f64->has_nodata_ = true;
     band_f64->nodata_val_ = 10.0;
-    EXPECT_EQ(band_f64->ComputeStatistics(FALSE, &smin, &smax, &smean, &sstddev,
-                                          nullptr, nullptr),
-              CE_None);
+    EXPECT_EQ(CE_None, band_f64->ComputeStatistics(FALSE, &smin, &smax, &smean,
+                                                   &sstddev, nullptr, nullptr));
     {
       CPLConfigOptionSetter s("GDAL_STATS_USE_FLOAT64_OPTIM", "NO", false);
-      EXPECT_EQ(band_f64->ComputeStatistics(FALSE, &smin, &smax, &smean,
-                                            &sstddev, nullptr, nullptr),
-                CE_None);
+      EXPECT_EQ(CE_None,
+                band_f64->ComputeStatistics(FALSE, &smin, &smax, &smean,
+                                            &sstddev, nullptr, nullptr));
     }
   }
 
   // All 16 data types for both ArbitraryOverviews (bApproxOK=TRUE) and Generic
   // Block path (bApproxOK=FALSE), with mask and nodata
-  const GDALDataType all_types[] = {
-      GDT_Byte,    GDT_Int8,     GDT_UInt16,   GDT_Int16,
-      GDT_UInt32,  GDT_Int32,    GDT_UInt64,   GDT_Int64,
-      GDT_Float16, GDT_Float32,  GDT_Float64,  GDT_CInt16,
-      GDT_CInt32,  GDT_CFloat16, GDT_CFloat32, GDT_CFloat64};
-
-  for (GDALDataType dt : all_types) {
+  constexpr auto kStatsVals = std::to_array<double>({2.0, 6.0, 12.0, 99.0});
+  for (GDALDataType dt : kAllDataTypes) {
     auto loop_ds = std::make_unique<TestDataset>(8, 8, GA_Update);
     auto* loop_band = new TestRasterBand(loop_ds.get(), 1, dt, 8, 8, 4, 4);
     loop_ds->AddTestBand(loop_band);
     TestRasterBand mask_band(loop_ds.get(), 2, GDT_Byte, 8, 8, 4, 4);
-    mask_band.Fill(255);
+    EXPECT_EQ(CE_None, mask_band.Fill(255));
     mask_band.storage_[0] = 0;
 
-    double vals[4] = {2.0, 6.0, 12.0, 99.0};
     for (int y = 0; y < 8; ++y) {
       for (int x = 0; x < 8; ++x) {
-        double v = vals[(x + y) % 4];
-        EXPECT_EQ(loop_band->RasterIO(GF_Write, x, y, 1, 1, &v, 1, 1,
-                                      GDT_Float64, 0, 0, nullptr),
-                  CE_None);
+        double v = kStatsVals[(x + y) % kStatsVals.size()];
+        EXPECT_EQ(CE_None, loop_band->RasterIO(GF_Write, x, y, 1, 1, &v, 1, 1,
+                                               GDT_Float64, 0, 0, nullptr));
       }
     }
     loop_band->FlushCache();
@@ -1647,62 +1846,63 @@ TEST(GDALRasterBandTest, StatisticsAllPaths) {
 
     // Arbitrary overviews path
     loop_band->arbitrary_overviews_ = true;
-    EXPECT_EQ(loop_band->ComputeStatistics(TRUE, &smin, &smax, &smean, &sstddev,
-                                           nullptr, nullptr),
-              CE_None);
+    EXPECT_EQ(CE_None,
+              loop_band->ComputeStatistics(TRUE, &smin, &smax, &smean, &sstddev,
+                                           nullptr, nullptr));
 
     // Block path with mask band
     loop_band->arbitrary_overviews_ = false;
-    EXPECT_EQ(loop_band->ComputeStatistics(FALSE, &smin, &smax, &smean,
-                                           &sstddev, nullptr, nullptr),
-              CE_None);
+    EXPECT_EQ(CE_None,
+              loop_band->ComputeStatistics(FALSE, &smin, &smax, &smean,
+                                           &sstddev, nullptr, nullptr));
 
     // Block path without custom mask band
     loop_band->custom_mask_band_ = nullptr;
     loop_band->custom_mask_flags_ = 0;
-    EXPECT_EQ(loop_band->ComputeStatistics(FALSE, &smin, &smax, &smean,
-                                           &sstddev, nullptr, nullptr),
-              CE_None);
+    EXPECT_EQ(CE_None,
+              loop_band->ComputeStatistics(FALSE, &smin, &smax, &smean,
+                                           &sstddev, nullptr, nullptr));
 
     if (dt == GDT_Byte) {
+      WithQuietHandler quiet;
+      CPLErrorReset();
       loop_band->SetMetadataItem("PIXELTYPE", "SIGNEDBYTE", "IMAGE_STRUCTURE");
       loop_band->arbitrary_overviews_ = true;
-      EXPECT_EQ(loop_band->ComputeStatistics(TRUE, &smin, &smax, &smean,
-                                             &sstddev, nullptr, nullptr),
-                CE_None);
+      EXPECT_EQ(CE_None,
+                loop_band->ComputeStatistics(TRUE, &smin, &smax, &smean,
+                                             &sstddev, nullptr, nullptr));
       loop_band->arbitrary_overviews_ = false;
-      EXPECT_EQ(loop_band->ComputeStatistics(FALSE, &smin, &smax, &smean,
-                                             &sstddev, nullptr, nullptr),
-                CE_None);
+      EXPECT_EQ(CE_None,
+                loop_band->ComputeStatistics(FALSE, &smin, &smax, &smean,
+                                             &sstddev, nullptr, nullptr));
+      CPLErrorReset();
     }
   }
-
-  CPLPopErrorHandler();
 }
 
-}  // namespace
-namespace {
-
 TEST(GDALRasterBandTest, ComputeRasterMinMaxAndLocationAllPaths) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
   auto ds = std::make_unique<TestDataset>(70, 4, GA_Update);
   auto* band = new TestRasterBand(ds.get(), 1, GDT_Byte, 70, 4, 32, 2);
   ds->AddTestBand(band);
   GDALRasterBandH hBand = GDALRasterBand::ToHandle(band);
 
-  double minmax[2] = {0.0, 0.0};
-  EXPECT_EQ(GDALComputeRasterMinMax(nullptr, TRUE, minmax), CE_Failure);
+  std::array<double, 2> minmax{};
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure,
+              GDALComputeRasterMinMax(nullptr, TRUE, minmax.data()));
+    CPLErrorReset();
+  }
 
   // 1. Tight GetMinimum / GetMaximum with bApproxOK=TRUE
   band->has_custom_min_ = true;
   band->custom_min_ = 4.0;
   band->has_custom_max_ = true;
   band->custom_max_ = 88.0;
-  EXPECT_EQ(GDALComputeRasterMinMax(hBand, TRUE, minmax), CE_None);
-  EXPECT_DOUBLE_EQ(minmax[0], 4.0);
-  EXPECT_DOUBLE_EQ(minmax[1], 88.0);
+  EXPECT_EQ(CE_None, GDALComputeRasterMinMax(hBand, TRUE, minmax.data()));
+  EXPECT_DOUBLE_EQ(4.0, minmax[0]);
+  EXPECT_DOUBLE_EQ(88.0, minmax[1]);
   band->has_custom_min_ = false;
   band->has_custom_max_ = false;
 
@@ -1715,80 +1915,73 @@ TEST(GDALRasterBandTest, ComputeRasterMinMaxAndLocationAllPaths) {
     TestRasterBand ovr(nullptr, 1, GDT_Byte, 60, 60, 60, 60);
     std::fill(ovr.storage_.begin(), ovr.storage_.end(), 33);
     b_ovr_main->overviews_ = {&ovr};
-    EXPECT_EQ(b_ovr_main->ComputeRasterMinMax(TRUE, minmax), CE_None);
-    EXPECT_DOUBLE_EQ(minmax[0], 33.0);
-    EXPECT_DOUBLE_EQ(minmax[1], 33.0);
+    EXPECT_EQ(CE_None, b_ovr_main->ComputeRasterMinMax(TRUE, minmax.data()));
+    EXPECT_DOUBLE_EQ(33.0, minmax[0]);
+    EXPECT_DOUBLE_EQ(33.0, minmax[1]);
     b_ovr_main->overviews_.clear();
   }
 
   // 3. Optimized path (GDT_Byte, GDT_UInt16, GDT_Int16) on 70x4 band with 32x2
   // blocks
-  for (GDALDataType opt_dt : {GDT_Byte, GDT_UInt16, GDT_Int16}) {
+  constexpr auto kOptTypes =
+      std::to_array<GDALDataType>({GDT_Byte, GDT_UInt16, GDT_Int16});
+  for (GDALDataType opt_dt : kOptTypes) {
     auto ds_opt = std::make_unique<TestDataset>(70, 4, GA_Update);
     auto* band_opt = new TestRasterBand(ds_opt.get(), 1, opt_dt, 70, 4, 32, 2);
     ds_opt->AddTestBand(band_opt);
-    band_opt->Fill(20);
+    EXPECT_EQ(CE_None, band_opt->Fill(20));
     double v_low = 5.0, v_high = 90.0;
-    EXPECT_EQ(band_opt->RasterIO(GF_Write, 0, 0, 1, 1, &v_low, 1, 1,
-                                 GDT_Float64, 0, 0, nullptr),
-              CE_None);
-    EXPECT_EQ(band_opt->RasterIO(GF_Write, 68, 3, 1, 1, &v_high, 1, 1,
-                                 GDT_Float64, 0, 0, nullptr),
-              CE_None);
+    EXPECT_EQ(CE_None, band_opt->RasterIO(GF_Write, 0, 0, 1, 1, &v_low, 1, 1,
+                                          GDT_Float64, 0, 0, nullptr));
+    EXPECT_EQ(CE_None, band_opt->RasterIO(GF_Write, 68, 3, 1, 1, &v_high, 1, 1,
+                                          GDT_Float64, 0, 0, nullptr));
     band_opt->FlushCache();
 
     // Without nodata: block path and arbitrary overview path
     band_opt->arbitrary_overviews_ = false;
-    EXPECT_EQ(band_opt->ComputeRasterMinMax(FALSE, minmax), CE_None);
-    EXPECT_DOUBLE_EQ(minmax[0], 5.0);
-    EXPECT_DOUBLE_EQ(minmax[1], 90.0);
+    EXPECT_EQ(CE_None, band_opt->ComputeRasterMinMax(FALSE, minmax.data()));
+    EXPECT_DOUBLE_EQ(5.0, minmax[0]);
+    EXPECT_DOUBLE_EQ(90.0, minmax[1]);
 
     band_opt->arbitrary_overviews_ = true;
-    EXPECT_EQ(band_opt->ComputeRasterMinMax(TRUE, minmax), CE_None);
+    EXPECT_EQ(CE_None, band_opt->ComputeRasterMinMax(TRUE, minmax.data()));
 
     // With nodata: block path and arbitrary overview path
     band_opt->has_nodata_ = true;
     band_opt->nodata_val_ = 20.0;
     band_opt->arbitrary_overviews_ = false;
-    EXPECT_EQ(band_opt->ComputeRasterMinMax(FALSE, minmax), CE_None);
+    EXPECT_EQ(CE_None, band_opt->ComputeRasterMinMax(FALSE, minmax.data()));
     band_opt->arbitrary_overviews_ = true;
-    EXPECT_EQ(band_opt->ComputeRasterMinMax(TRUE, minmax), CE_None);
+    EXPECT_EQ(CE_None, band_opt->ComputeRasterMinMax(TRUE, minmax.data()));
 
     // Partial block with nXCheck >= 32 and (nBlockXSize % 32) == 0
     auto ds_part = std::make_unique<TestDataset>(40, 2, GA_Update);
     auto* band_part =
         new TestRasterBand(ds_part.get(), 1, opt_dt, 40, 2, 64, 2);
     ds_part->AddTestBand(band_part);
-    band_part->Fill(15);
-    EXPECT_EQ(band_part->ComputeRasterMinMax(FALSE, minmax), CE_None);
+    EXPECT_EQ(CE_None, band_part->Fill(15));
+    EXPECT_EQ(CE_None, band_part->ComputeRasterMinMax(FALSE, minmax.data()));
     band_part->has_nodata_ = true;
     band_part->nodata_val_ = 99.0;
-    EXPECT_EQ(band_part->ComputeRasterMinMax(FALSE, minmax), CE_None);
+    EXPECT_EQ(CE_None, band_part->ComputeRasterMinMax(FALSE, minmax.data()));
   }
 
   // 4. Generic path across all 16 data types (both bApproxOK=TRUE with
   // arbitrary_overviews_ and bApproxOK=FALSE, with mask and nodata)
-  const GDALDataType all_types[] = {
-      GDT_Byte,    GDT_Int8,     GDT_UInt16,   GDT_Int16,
-      GDT_UInt32,  GDT_Int32,    GDT_UInt64,   GDT_Int64,
-      GDT_Float16, GDT_Float32,  GDT_Float64,  GDT_CInt16,
-      GDT_CInt32,  GDT_CFloat16, GDT_CFloat32, GDT_CFloat64};
-
-  for (GDALDataType dt : all_types) {
+  constexpr auto kMinMaxVals = std::to_array<double>({3.0, 8.0, 19.0, 99.0});
+  for (GDALDataType dt : kAllDataTypes) {
     auto loop_ds = std::make_unique<TestDataset>(8, 8, GA_Update);
     auto* loop_band = new TestRasterBand(loop_ds.get(), 1, dt, 8, 8, 4, 4);
     loop_ds->AddTestBand(loop_band);
     TestRasterBand mask_band(loop_ds.get(), 2, GDT_Byte, 8, 8, 4, 4);
-    mask_band.Fill(255);
+    EXPECT_EQ(CE_None, mask_band.Fill(255));
     mask_band.storage_[0] = 0;
 
-    double vals[4] = {3.0, 8.0, 19.0, 99.0};
     for (int y = 0; y < 8; ++y) {
       for (int x = 0; x < 8; ++x) {
-        double v = vals[(x + y) % 4];
-        EXPECT_EQ(loop_band->RasterIO(GF_Write, x, y, 1, 1, &v, 1, 1,
-                                      GDT_Float64, 0, 0, nullptr),
-                  CE_None);
+        double v = kMinMaxVals[(x + y) % kMinMaxVals.size()];
+        EXPECT_EQ(CE_None, loop_band->RasterIO(GF_Write, x, y, 1, 1, &v, 1, 1,
+                                               GDT_Float64, 0, 0, nullptr));
       }
     }
     loop_band->FlushCache();
@@ -1804,67 +1997,72 @@ TEST(GDALRasterBandTest, ComputeRasterMinMaxAndLocationAllPaths) {
 
     // Arbitrary overviews generic path (mask forces bUseOptimizedPath=false)
     loop_band->arbitrary_overviews_ = true;
-    EXPECT_EQ(loop_band->ComputeRasterMinMax(TRUE, minmax), CE_None);
+    EXPECT_EQ(CE_None, loop_band->ComputeRasterMinMax(TRUE, minmax.data()));
 
     // Block generic path with mask
     loop_band->arbitrary_overviews_ = false;
-    EXPECT_EQ(loop_band->ComputeRasterMinMax(FALSE, minmax), CE_None);
+    EXPECT_EQ(CE_None, loop_band->ComputeRasterMinMax(FALSE, minmax.data()));
 
     // Block generic path without mask
     loop_band->custom_mask_band_ = nullptr;
     loop_band->custom_mask_flags_ = 0;
-    EXPECT_EQ(loop_band->ComputeRasterMinMax(FALSE, minmax), CE_None);
+    EXPECT_EQ(CE_None, loop_band->ComputeRasterMinMax(FALSE, minmax.data()));
 
     if (dt == GDT_Byte) {
+      WithQuietHandler quiet;
+      CPLErrorReset();
       loop_band->SetMetadataItem("PIXELTYPE", "SIGNEDBYTE", "IMAGE_STRUCTURE");
       loop_band->arbitrary_overviews_ = true;
-      EXPECT_EQ(loop_band->ComputeRasterMinMax(TRUE, minmax), CE_None);
+      EXPECT_EQ(CE_None, loop_band->ComputeRasterMinMax(TRUE, minmax.data()));
       loop_band->arbitrary_overviews_ = false;
-      EXPECT_EQ(loop_band->ComputeRasterMinMax(FALSE, minmax), CE_None);
+      EXPECT_EQ(CE_None, loop_band->ComputeRasterMinMax(FALSE, minmax.data()));
+      CPLErrorReset();
     }
   }
 
   // All nodata -> CE_Failure
   TestRasterBand all_nd_band(nullptr, 1, GDT_Byte, 4, 4, 4, 4);
-  all_nd_band.Fill(99);
+  EXPECT_EQ(CE_None, all_nd_band.Fill(99));
   all_nd_band.has_nodata_ = true;
   all_nd_band.nodata_val_ = 99.0;
-  EXPECT_EQ(all_nd_band.ComputeRasterMinMax(FALSE, minmax), CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure,
+              all_nd_band.ComputeRasterMinMax(FALSE, minmax.data()));
+    CPLErrorReset();
+  }
 
   // 5. ComputeRasterMinMaxLocation & GDALComputeRasterMinMaxLocation
   double loc_min = 0, loc_max = 0;
   int min_x = 0, min_y = 0, max_x = 0, max_y = 0;
-  EXPECT_EQ(GDALComputeRasterMinMaxLocation(nullptr, &loc_min, &loc_max, &min_x,
-                                            &min_y, &max_x, &max_y),
-            CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure,
+              GDALComputeRasterMinMaxLocation(nullptr, &loc_min, &loc_max,
+                                              &min_x, &min_y, &max_x, &max_y));
 
-  // Complex type -> CE_Failure
-  TestRasterBand c_band(nullptr, 1, GDT_CFloat32, 4, 4, 4, 4);
-  EXPECT_EQ(c_band.ComputeRasterMinMaxLocation(&loc_min, &loc_max, &min_x,
-                                               &min_y, &max_x, &max_y),
-            CE_Failure);
+    // Complex type -> CE_Failure
+    TestRasterBand c_band(nullptr, 1, GDT_CFloat32, 4, 4, 4, 4);
+    EXPECT_EQ(CE_Failure,
+              c_band.ComputeRasterMinMaxLocation(&loc_min, &loc_max, &min_x,
+                                                 &min_y, &max_x, &max_y));
+    CPLErrorReset();
+  }
 
   // All 11 real types:
-  const GDALDataType real_types[] = {
-      GDT_Byte,   GDT_Int8,  GDT_UInt16,  GDT_Int16,   GDT_UInt32, GDT_Int32,
-      GDT_UInt64, GDT_Int64, GDT_Float16, GDT_Float32, GDT_Float64};
-
-  for (GDALDataType dt : real_types) {
-    // (a) Full block
+  for (GDALDataType dt : kRealDataTypes) {
+    // (a) Full block (with nodata configured but no pixel matching nodata)
     auto loop_ds = std::make_unique<TestDataset>(8, 8, GA_Update);
     auto* loop_band = new TestRasterBand(loop_ds.get(), 1, dt, 8, 8, 4, 4);
     loop_ds->AddTestBand(loop_band);
-    loop_band->Fill(10);
-    double v_min = 2.0, v_max = 80.0, v_nd = 99.0;
-    EXPECT_EQ(loop_band->RasterIO(GF_Write, 1, 2, 1, 1, &v_min, 1, 1,
-                                  GDT_Float64, 0, 0, nullptr),
-              CE_None);
-    EXPECT_EQ(loop_band->RasterIO(GF_Write, 5, 6, 1, 1, &v_max, 1, 1,
-                                  GDT_Float64, 0, 0, nullptr),
-              CE_None);
-    EXPECT_EQ(loop_band->RasterIO(GF_Write, 0, 0, 1, 1, &v_nd, 1, 1,
-                                  GDT_Float64, 0, 0, nullptr),
-              CE_None);
+    EXPECT_EQ(CE_None, loop_band->Fill(10));
+    double v_min = 2.0, v_max = 80.0;
+    EXPECT_EQ(CE_None, loop_band->RasterIO(GF_Write, 1, 2, 1, 1, &v_min, 1, 1,
+                                           GDT_Float64, 0, 0, nullptr));
+    EXPECT_EQ(CE_None, loop_band->RasterIO(GF_Write, 5, 6, 1, 1, &v_max, 1, 1,
+                                           GDT_Float64, 0, 0, nullptr));
     loop_band->FlushCache();
 
     loop_band->has_nodata_ = true;
@@ -1874,113 +2072,173 @@ TEST(GDALRasterBandTest, ComputeRasterMinMaxAndLocationAllPaths) {
     loop_band->has_nodata_u64_ = true;
     loop_band->nodata_u64_ = 99U;
 
-    EXPECT_EQ(GDALComputeRasterMinMaxLocation(
-                  GDALRasterBand::ToHandle(loop_band), &loc_min, &loc_max,
-                  &min_x, &min_y, &max_x, &max_y),
-              CE_None);
-    EXPECT_EQ(min_x, 1);
-    EXPECT_EQ(min_y, 2);
-    EXPECT_EQ(max_x, 5);
-    EXPECT_EQ(max_y, 6);
+    EXPECT_EQ(CE_None, GDALComputeRasterMinMaxLocation(
+                           GDALRasterBand::ToHandle(loop_band), &loc_min,
+                           &loc_max, &min_x, &min_y, &max_x, &max_y));
+    EXPECT_EQ(1, min_x);
+    EXPECT_EQ(2, min_y);
+    EXPECT_EQ(5, max_x);
+    EXPECT_EQ(6, max_y);
 
     // Min only
-    EXPECT_EQ(loop_band->ComputeRasterMinMaxLocation(&loc_min, nullptr, &min_x,
-                                                     &min_y, nullptr, nullptr),
-              CE_None);
+    EXPECT_EQ(CE_None,
+              loop_band->ComputeRasterMinMaxLocation(&loc_min, nullptr, &min_x,
+                                                     &min_y, nullptr, nullptr));
     // Max only
-    EXPECT_EQ(loop_band->ComputeRasterMinMaxLocation(nullptr, &loc_max, nullptr,
-                                                     nullptr, &max_x, &max_y),
-              CE_None);
+    EXPECT_EQ(CE_None,
+              loop_band->ComputeRasterMinMaxLocation(nullptr, &loc_max, nullptr,
+                                                     nullptr, &max_x, &max_y));
 
     if (dt == GDT_Byte) {
       double v0 = 0.0, v255 = 255.0;
-      EXPECT_EQ(loop_band->RasterIO(GF_Write, 0, 1, 1, 1, &v0, 1, 1,
-                                    GDT_Float64, 0, 0, nullptr),
-                CE_None);
-      EXPECT_EQ(loop_band->RasterIO(GF_Write, 1, 1, 1, 1, &v255, 1, 1,
-                                    GDT_Float64, 0, 0, nullptr),
-                CE_None);
+      EXPECT_EQ(CE_None, loop_band->RasterIO(GF_Write, 0, 1, 1, 1, &v0, 1, 1,
+                                             GDT_Float64, 0, 0, nullptr));
+      EXPECT_EQ(CE_None, loop_band->RasterIO(GF_Write, 1, 1, 1, 1, &v255, 1, 1,
+                                             GDT_Float64, 0, 0, nullptr));
       loop_band->FlushCache();
-      EXPECT_EQ(loop_band->ComputeRasterMinMaxLocation(
-                    &loc_min, &loc_max, &min_x, &min_y, &max_x, &max_y),
-                CE_None);
-      loop_band->SetMetadataItem("PIXELTYPE", "SIGNEDBYTE", "IMAGE_STRUCTURE");
-      EXPECT_EQ(loop_band->ComputeRasterMinMaxLocation(
-                    &loc_min, &loc_max, &min_x, &min_y, &max_x, &max_y),
-                CE_None);
+      EXPECT_EQ(CE_None,
+                loop_band->ComputeRasterMinMaxLocation(
+                    &loc_min, &loc_max, &min_x, &min_y, &max_x, &max_y));
+      {
+        WithQuietHandler quiet;
+        CPLErrorReset();
+        loop_band->SetMetadataItem("PIXELTYPE", "SIGNEDBYTE",
+                                   "IMAGE_STRUCTURE");
+        EXPECT_EQ(CE_None,
+                  loop_band->ComputeRasterMinMaxLocation(
+                      &loc_min, &loc_max, &min_x, &min_y, &max_x, &max_y));
+        CPLErrorReset();
+      }
+      loop_band->SetMetadata(nullptr, "IMAGE_STRUCTURE");
     }
+
+#if defined(__x86_64__) || defined(_M_X64)
+    // Upstream third_party/gdal/gcore/gdal_minmax_element.hpp lines 277 & 303
+    // pass `(b == noDataValue) ? true : (a == noDataValue) ? false : a < b` to
+    // std::min_element, returning true for comp(noDataValue, noDataValue). On
+    // non-SSE2 ARM64 builds, libc++ hardening aborts (comp_ref_type.h:47:
+    // !__comp_(__l, __r)) whenever a buffer contains a pixel equal to nodata.
+    if (dt == GDT_Byte) {
+      double v_fill = 10.0;
+      EXPECT_EQ(CE_None, loop_band->RasterIO(GF_Write, 0, 1, 1, 1, &v_fill, 1,
+                                             1, GDT_Float64, 0, 0, nullptr));
+      EXPECT_EQ(CE_None, loop_band->RasterIO(GF_Write, 1, 1, 1, 1, &v_fill, 1,
+                                             1, GDT_Float64, 0, 0, nullptr));
+    }
+    double v_nd = 99.0;
+    EXPECT_EQ(CE_None, loop_band->RasterIO(GF_Write, 0, 0, 1, 1, &v_nd, 1, 1,
+                                           GDT_Float64, 0, 0, nullptr));
+    loop_band->FlushCache();
+
+    EXPECT_EQ(CE_None, GDALComputeRasterMinMaxLocation(
+                           GDALRasterBand::ToHandle(loop_band), &loc_min,
+                           &loc_max, &min_x, &min_y, &max_x, &max_y));
+    EXPECT_EQ(1, min_x);
+    EXPECT_EQ(2, min_y);
+    EXPECT_EQ(5, max_x);
+    EXPECT_EQ(6, max_y);
+
+    EXPECT_EQ(CE_None,
+              loop_band->ComputeRasterMinMaxLocation(&loc_min, nullptr, &min_x,
+                                                     &min_y, nullptr, nullptr));
+    EXPECT_EQ(CE_None,
+              loop_band->ComputeRasterMinMaxLocation(nullptr, &loc_max, nullptr,
+                                                     nullptr, &max_x, &max_y));
+
+    if (dt == GDT_Byte) {
+      double v0 = 0.0, v255 = 255.0;
+      EXPECT_EQ(CE_None, loop_band->RasterIO(GF_Write, 0, 1, 1, 1, &v0, 1, 1,
+                                             GDT_Float64, 0, 0, nullptr));
+      EXPECT_EQ(CE_None, loop_band->RasterIO(GF_Write, 1, 1, 1, 1, &v255, 1, 1,
+                                             GDT_Float64, 0, 0, nullptr));
+      loop_band->FlushCache();
+      EXPECT_EQ(CE_None,
+                loop_band->ComputeRasterMinMaxLocation(
+                    &loc_min, &loc_max, &min_x, &min_y, &max_x, &max_y));
+      WithQuietHandler quiet;
+      CPLErrorReset();
+      loop_band->SetMetadataItem("PIXELTYPE", "SIGNEDBYTE", "IMAGE_STRUCTURE");
+      EXPECT_EQ(CE_None,
+                loop_band->ComputeRasterMinMaxLocation(
+                    &loc_min, &loc_max, &min_x, &min_y, &max_x, &max_y));
+      CPLErrorReset();
+    }
+#endif
 
     // (b) Partial block (6x6 with 4x4 block) and custom mask band
     auto part_ds = std::make_unique<TestDataset>(6, 6, GA_Update);
     auto* part_band = new TestRasterBand(part_ds.get(), 1, dt, 6, 6, 4, 4);
     part_ds->AddTestBand(part_band);
-    part_band->Fill(10);
-    EXPECT_EQ(part_band->RasterIO(GF_Write, 1, 1, 1, 1, &v_min, 1, 1,
-                                  GDT_Float64, 0, 0, nullptr),
-              CE_None);
-    EXPECT_EQ(part_band->RasterIO(GF_Write, 5, 5, 1, 1, &v_max, 1, 1,
-                                  GDT_Float64, 0, 0, nullptr),
-              CE_None);
+    EXPECT_EQ(CE_None, part_band->Fill(10));
+    EXPECT_EQ(CE_None, part_band->RasterIO(GF_Write, 1, 1, 1, 1, &v_min, 1, 1,
+                                           GDT_Float64, 0, 0, nullptr));
+    EXPECT_EQ(CE_None, part_band->RasterIO(GF_Write, 5, 5, 1, 1, &v_max, 1, 1,
+                                           GDT_Float64, 0, 0, nullptr));
     part_band->FlushCache();
 
     TestRasterBand m6(part_ds.get(), 2, GDT_Byte, 6, 6, 4, 4);
-    m6.Fill(255);
+    EXPECT_EQ(CE_None, m6.Fill(255));
     m6.storage_[0] = 0;
     part_band->custom_mask_band_ = &m6;
     part_band->custom_mask_flags_ = GMF_PER_DATASET;
 
-    EXPECT_EQ(part_band->ComputeRasterMinMaxLocation(&loc_min, &loc_max, &min_x,
-                                                     &min_y, &max_x, &max_y),
-              CE_None);
-    EXPECT_EQ(part_band->ComputeRasterMinMaxLocation(&loc_min, nullptr, &min_x,
-                                                     &min_y, nullptr, nullptr),
-              CE_None);
-    EXPECT_EQ(part_band->ComputeRasterMinMaxLocation(nullptr, &loc_max, nullptr,
-                                                     nullptr, &max_x, &max_y),
-              CE_None);
+    EXPECT_EQ(CE_None, part_band->ComputeRasterMinMaxLocation(
+                           &loc_min, &loc_max, &min_x, &min_y, &max_x, &max_y));
+    EXPECT_EQ(CE_None,
+              part_band->ComputeRasterMinMaxLocation(&loc_min, nullptr, &min_x,
+                                                     &min_y, nullptr, nullptr));
+    EXPECT_EQ(CE_None,
+              part_band->ComputeRasterMinMaxLocation(nullptr, &loc_max, nullptr,
+                                                     nullptr, &max_x, &max_y));
   }
 
+#if defined(__x86_64__) || defined(_M_X64)
   // All nodata in ComputeRasterMinMaxLocation -> CE_Warning
+  // Guarded on non-x86_64 due to the same gdal_minmax_element.hpp lines 277 &
+  // 303 strict-weak-ordering comparator bug when pixels equal nodata.
   TestRasterBand loc_nd_band(nullptr, 1, GDT_Byte, 4, 4, 4, 4);
-  loc_nd_band.Fill(99);
+  EXPECT_EQ(CE_None, loc_nd_band.Fill(99));
   loc_nd_band.has_nodata_ = true;
   loc_nd_band.nodata_val_ = 99.0;
-  EXPECT_EQ(loc_nd_band.ComputeRasterMinMaxLocation(&loc_min, &loc_max, &min_x,
-                                                    &min_y, &max_x, &max_y),
-            CE_Warning);
-
-  CPLPopErrorHandler();
+  EXPECT_EQ(CE_Warning,
+            loc_nd_band.ComputeRasterMinMaxLocation(&loc_min, &loc_max, &min_x,
+                                                    &min_y, &max_x, &max_y));
+#endif
 }
 
-}  // namespace
-namespace {
-
 TEST(GDALRasterBandTest, RATMaskBandsAndColorTranslation) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
   // 1. RAT
   TestRasterBand standalone_band;
   GDALRasterBandH hStandalone = GDALRasterBand::ToHandle(&standalone_band);
-  EXPECT_EQ(GDALGetDefaultRAT(nullptr), nullptr);
-  EXPECT_EQ(GDALGetDefaultRAT(hStandalone), nullptr);
-  EXPECT_EQ(GDALSetDefaultRAT(nullptr, nullptr), CE_Failure);
-  EXPECT_EQ(GDALSetDefaultRAT(hStandalone, nullptr), CE_Failure);
-  standalone_band.SetMOFlags(GMO_IGNORE_UNIMPLEMENTED);
-  EXPECT_EQ(GDALSetDefaultRAT(hStandalone, nullptr), CE_Failure);
+  EXPECT_EQ(nullptr, GDALGetDefaultRAT(nullptr));
+  EXPECT_EQ(nullptr, GDALGetDefaultRAT(hStandalone));
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, GDALSetDefaultRAT(nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, GDALSetDefaultRAT(hStandalone, nullptr));
+    standalone_band.SetMOFlags(GMO_IGNORE_UNIMPLEMENTED);
+    EXPECT_EQ(CE_Failure, GDALSetDefaultRAT(hStandalone, nullptr));
+    CPLErrorReset();
+  }
   standalone_band.SetMOFlags(0);
 
   // 2. MaskBand null & standalone checks
-  EXPECT_EQ(GDALGetMaskBand(nullptr), nullptr);
-  EXPECT_EQ(GDALGetMaskFlags(nullptr), GMF_ALL_VALID);
-  EXPECT_EQ(GDALCreateMaskBand(nullptr, GMF_PER_DATASET), CE_Failure);
+  EXPECT_EQ(nullptr, GDALGetMaskBand(nullptr));
+  EXPECT_EQ(GMF_ALL_VALID, GDALGetMaskFlags(nullptr));
   EXPECT_FALSE(GDALIsMaskBand(nullptr));
   EXPECT_FALSE(GDALIsMaskBand(hStandalone));
-  EXPECT_EQ(standalone_band.GetMaskValueRange(), GMVR_UNKNOWN);
-  // CreateMaskBand when poDS == nullptr
-  EXPECT_EQ(GDALCreateMaskBand(hStandalone, GMF_PER_DATASET), CE_Failure);
-  standalone_band.SetMOFlags(GMO_IGNORE_UNIMPLEMENTED);
-  EXPECT_EQ(GDALCreateMaskBand(hStandalone, GMF_PER_DATASET), CE_Failure);
+  EXPECT_EQ(GMVR_UNKNOWN, standalone_band.GetMaskValueRange());
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, GDALCreateMaskBand(nullptr, GMF_PER_DATASET));
+    // CreateMaskBand when poDS == nullptr
+    EXPECT_EQ(CE_Failure, GDALCreateMaskBand(hStandalone, GMF_PER_DATASET));
+    standalone_band.SetMOFlags(GMO_IGNORE_UNIMPLEMENTED);
+    EXPECT_EQ(CE_Failure, GDALCreateMaskBand(hStandalone, GMF_PER_DATASET));
+    CPLErrorReset();
+  }
   standalone_band.SetMOFlags(0);
 
   // 3. MaskBand lifecycle: AllValid -> NoData -> changed NoData across Byte,
@@ -1989,24 +2247,24 @@ TEST(GDALRasterBandTest, RATMaskBandsAndColorTranslation) {
     auto ds = std::make_unique<TestDataset>(8, 8, GA_Update);
     auto* b_byte = new TestRasterBand(ds.get(), 1, GDT_Byte, 8, 8, 4, 4);
     ds->AddTestBand(b_byte);
-    EXPECT_EQ(GDALGetMaskFlags(GDALRasterBand::ToHandle(b_byte)),
-              GMF_ALL_VALID);
+    EXPECT_EQ(GMF_ALL_VALID,
+              GDALGetMaskFlags(GDALRasterBand::ToHandle(b_byte)));
     GDALRasterBand* mb = b_byte->GetMaskBand();
-    ASSERT_NE(mb, nullptr);
+    ASSERT_NE(nullptr, mb);
     EXPECT_TRUE(GDALIsMaskBand(GDALRasterBand::ToHandle(mb)));
-    EXPECT_EQ(mb->GetMaskValueRange(), GMVR_0_AND_255_ONLY);
+    EXPECT_EQ(GMVR_0_AND_255_ONLY, mb->GetMaskValueRange());
 
     // Switch from AllValid to NoData
     b_byte->has_nodata_ = true;
     b_byte->nodata_val_ = 10.0;
     b_byte->InvalidateMaskBand();
-    EXPECT_EQ(b_byte->GetMaskFlags(), GMF_NODATA);
+    EXPECT_EQ(GMF_NODATA, b_byte->GetMaskFlags());
     mb = b_byte->GetMaskBand();
-    ASSERT_NE(mb, nullptr);
+    ASSERT_NE(nullptr, mb);
     // Change nodata value -> recreates NoDataMaskBand
     b_byte->nodata_val_ = 20.0;
     mb = b_byte->GetMaskBand();
-    ASSERT_NE(mb, nullptr);
+    ASSERT_NE(nullptr, mb);
   }
   {
     auto ds = std::make_unique<TestDataset>(8, 8, GA_Update);
@@ -2016,10 +2274,10 @@ TEST(GDALRasterBandTest, RATMaskBandsAndColorTranslation) {
     b_f64->has_nodata_ = true;
     b_f64->nodata_val_ = std::numeric_limits<double>::quiet_NaN();
     b_f64->InvalidateMaskBand();
-    EXPECT_NE(b_f64->GetMaskBand(), nullptr);
-    EXPECT_NE(b_f64->GetMaskBand(), nullptr);  // Same NaN nodata
+    EXPECT_NE(nullptr, b_f64->GetMaskBand());
+    EXPECT_NE(nullptr, b_f64->GetMaskBand());  // Same NaN nodata
     b_f64->nodata_val_ = 5.0;
-    EXPECT_NE(b_f64->GetMaskBand(), nullptr);  // Changed from NaN to 5.0
+    EXPECT_NE(nullptr, b_f64->GetMaskBand());  // Changed from NaN to 5.0
   }
   {
     auto ds = std::make_unique<TestDataset>(8, 8, GA_Update);
@@ -2029,10 +2287,10 @@ TEST(GDALRasterBandTest, RATMaskBandsAndColorTranslation) {
     b_i64->has_nodata_i64_ = true;
     b_i64->nodata_i64_ = -100;
     b_i64->InvalidateMaskBand();
-    EXPECT_EQ(b_i64->GetMaskFlags(), GMF_NODATA);
-    EXPECT_NE(b_i64->GetMaskBand(), nullptr);
+    EXPECT_EQ(GMF_NODATA, b_i64->GetMaskFlags());
+    EXPECT_NE(nullptr, b_i64->GetMaskBand());
     b_i64->nodata_i64_ = -200;
-    EXPECT_NE(b_i64->GetMaskBand(), nullptr);
+    EXPECT_NE(nullptr, b_i64->GetMaskBand());
   }
   {
     auto ds = std::make_unique<TestDataset>(8, 8, GA_Update);
@@ -2042,10 +2300,10 @@ TEST(GDALRasterBandTest, RATMaskBandsAndColorTranslation) {
     b_u64->has_nodata_u64_ = true;
     b_u64->nodata_u64_ = 100U;
     b_u64->InvalidateMaskBand();
-    EXPECT_EQ(b_u64->GetMaskFlags(), GMF_NODATA);
-    EXPECT_NE(b_u64->GetMaskBand(), nullptr);
+    EXPECT_EQ(GMF_NODATA, b_u64->GetMaskFlags());
+    EXPECT_NE(nullptr, b_u64->GetMaskBand());
     b_u64->nodata_u64_ = 200U;
-    EXPECT_NE(b_u64->GetMaskBand(), nullptr);
+    EXPECT_NE(nullptr, b_u64->GetMaskBand());
   }
 
   // 4. NODATA_VALUES on dataset (valid, mismatched count, mismatched band
@@ -2057,13 +2315,12 @@ TEST(GDALRasterBandTest, RATMaskBandsAndColorTranslation) {
     ds->AddTestBand(b1);
     ds->AddTestBand(b2);
     ds->SetMetadataItem("NODATA_VALUES", "10 20");
-    EXPECT_EQ(b1->GetMaskFlags(), GMF_PER_DATASET | GMF_NODATA);
+    EXPECT_EQ(GMF_PER_DATASET | GMF_NODATA, b1->GetMaskFlags());
     GDALRasterBand* mb = b1->GetMaskBand();
-    ASSERT_NE(mb, nullptr);
+    ASSERT_NE(nullptr, mb);
     GByte mval = 0;
-    EXPECT_EQ(
-        mb->RasterIO(GF_Read, 0, 0, 1, 1, &mval, 1, 1, GDT_Byte, 0, 0, nullptr),
-        CE_None);
+    EXPECT_EQ(CE_None, mb->RasterIO(GF_Read, 0, 0, 1, 1, &mval, 1, 1, GDT_Byte,
+                                    0, 0, nullptr));
   }
   {
     // Mismatched count in NODATA_VALUES
@@ -2073,8 +2330,11 @@ TEST(GDALRasterBandTest, RATMaskBandsAndColorTranslation) {
     ds->AddTestBand(b1);
     ds->AddTestBand(b2);
     ds->SetMetadataItem("NODATA_VALUES", "10");
-    EXPECT_EQ(b1->GetMaskFlags(), GMF_ALL_VALID);
-    EXPECT_NE(b1->GetMaskBand(), nullptr);
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(GMF_ALL_VALID, b1->GetMaskFlags());
+    EXPECT_NE(nullptr, b1->GetMaskBand());
+    CPLErrorReset();
   }
   {
     // Mismatched band data types with NODATA_VALUES
@@ -2084,13 +2344,19 @@ TEST(GDALRasterBandTest, RATMaskBandsAndColorTranslation) {
     ds->AddTestBand(b1);
     ds->AddTestBand(b2);
     ds->SetMetadataItem("NODATA_VALUES", "10 20");
-    EXPECT_EQ(b1->GetMaskFlags(), GMF_ALL_VALID);
-    EXPECT_NE(b1->GetMaskBand(), nullptr);
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(GMF_ALL_VALID, b1->GetMaskFlags());
+    EXPECT_NE(nullptr, b1->GetMaskBand());
+    CPLErrorReset();
   }
 
   // 5. Alpha band masks (2-band and 4-band, both GDT_Byte and GDT_UInt16)
-  for (int nbands : {2, 4}) {
-    for (GDALDataType alpha_dt : {GDT_Byte, GDT_UInt16}) {
+  constexpr auto kBandCounts = std::to_array<int>({2, 4});
+  constexpr auto kAlphaTypes =
+      std::to_array<GDALDataType>({GDT_Byte, GDT_UInt16});
+  for (int nbands : kBandCounts) {
+    for (GDALDataType alpha_dt : kAlphaTypes) {
       auto ds = std::make_unique<TestDataset>(4, 4, GA_Update);
       for (int i = 1; i <= nbands; ++i) {
         auto* b = new TestRasterBand(ds.get(), i, alpha_dt, 4, 4, 4, 4);
@@ -2104,61 +2370,64 @@ TEST(GDALRasterBandTest, RATMaskBandsAndColorTranslation) {
         ds->AddTestBand(b);
       }
       GDALRasterBand* b1 = ds->GetRasterBand(1);
-      EXPECT_EQ(b1->GetMaskFlags(), GMF_ALPHA | GMF_PER_DATASET);
+      EXPECT_EQ(GMF_ALPHA | GMF_PER_DATASET, b1->GetMaskFlags());
       GDALRasterBand* mb = b1->GetMaskBand();
-      ASSERT_NE(mb, nullptr);
-      EXPECT_EQ(mb->GetMaskValueRange(), GMVR_UNKNOWN);
+      ASSERT_NE(nullptr, mb);
+      EXPECT_EQ(GMVR_UNKNOWN, mb->GetMaskValueRange());
       GByte mval = 0;
-      EXPECT_EQ(mb->RasterIO(GF_Read, 0, 0, 1, 1, &mval, 1, 1, GDT_Byte, 0, 0,
-                             nullptr),
-                CE_None);
+      EXPECT_EQ(CE_None, mb->RasterIO(GF_Read, 0, 0, 1, 1, &mval, 1, 1,
+                                      GDT_Byte, 0, 0, nullptr));
     }
   }
 
   // 6. CreateMaskBand on a GTiff in /vsimem/
+  GDALRegister_GTiff();
   GDALDriver* gtiff = GetGDALDriverManager()->GetDriverByName("GTiff");
-  if (gtiff != nullptr) {
-    const char* path = "/vsimem/gdalrasterband_test_mask.tif";
-    GDALDataset* mds = gtiff->Create(path, 8, 8, 1, GDT_Byte, nullptr);
-    ASSERT_NE(mds, nullptr);
+  ASSERT_NE(nullptr, gtiff);
+  {
+    constexpr char kMaskPath[] = "/vsimem/gdalrasterband_test/mask.tif";
+    absl::Cleanup cleanup_dir = [] {
+      VSIRmdirRecursive("/vsimem/gdalrasterband_test");
+    };
+    GDALDatasetUniquePtr mds(
+        gtiff->Create(kMaskPath, 8, 8, 1, GDT_Byte, nullptr));
+    ASSERT_NE(nullptr, mds);
     GDALRasterBand* mb = mds->GetRasterBand(1);
-    EXPECT_EQ(GDALCreateMaskBand(GDALRasterBand::ToHandle(mb), GMF_PER_DATASET),
-              CE_None);
-    EXPECT_NE(mb->GetMaskBand(), nullptr);
-    GDALClose(mds);
-    VSIUnlink(path);
-    VSIUnlink("/vsimem/gdalrasterband_test_mask.tif.msk");
+    ASSERT_NE(nullptr, mb);
+    EXPECT_EQ(CE_None, GDALCreateMaskBand(GDALRasterBand::ToHandle(mb),
+                                          GMF_PER_DATASET));
+    EXPECT_NE(nullptr, mb->GetMaskBand());
   }
 
   // 7. GetIndexColorTranslationTo
   TestRasterBand src_band;
   TestRasterBand ref_band;
-  EXPECT_EQ(src_band.GetIndexColorTranslationTo(nullptr), nullptr);
-  EXPECT_EQ(src_band.GetIndexColorTranslationTo(&ref_band), nullptr);
+  EXPECT_EQ(nullptr, src_band.GetIndexColorTranslationTo(nullptr));
+  EXPECT_EQ(nullptr, src_band.GetIndexColorTranslationTo(&ref_band));
 
   GDALColorTable ct_src;
-  GDALColorEntry c0 = {10, 20, 30, 255};
-  GDALColorEntry c1 = {40, 50, 60, 255};
-  GDALColorEntry c2 = {70, 80, 90, 255};
+  constexpr GDALColorEntry c0 = {10, 20, 30, 255};
+  constexpr GDALColorEntry c1 = {40, 50, 60, 255};
+  constexpr GDALColorEntry c2 = {70, 80, 90, 255};
   ct_src.SetColorEntry(0, &c0);
   ct_src.SetColorEntry(1, &c1);
   ct_src.SetColorEntry(2, &c2);
 
   src_band.custom_color_interp_ = GCI_PaletteIndex;
   src_band.custom_color_table_ = &ct_src;
-  EXPECT_EQ(src_band.GetIndexColorTranslationTo(&ref_band), nullptr);
+  EXPECT_EQ(nullptr, src_band.GetIndexColorTranslationTo(&ref_band));
 
   ref_band.custom_color_interp_ = GCI_PaletteIndex;
   ref_band.custom_color_table_ = &ct_src;
   // Identical palette -> returns nullptr (no translation needed) with approx=0
   int approx = 1;
-  EXPECT_EQ(src_band.GetIndexColorTranslationTo(&ref_band, nullptr, &approx),
-            nullptr);
-  EXPECT_EQ(approx, 0);
+  EXPECT_EQ(nullptr,
+            src_band.GetIndexColorTranslationTo(&ref_band, nullptr, &approx));
+  EXPECT_EQ(0, approx);
 
   // Reordered + approximate match palette + nodata values
   GDALColorTable ct_ref;
-  GDALColorEntry c1_near = {42, 51, 59, 255};
+  constexpr GDALColorEntry c1_near = {42, 51, 59, 255};
   ct_ref.SetColorEntry(0, &c2);
   ct_ref.SetColorEntry(1, &c0);
   ct_ref.SetColorEntry(2, &c1_near);
@@ -2169,27 +2438,21 @@ TEST(GDALRasterBandTest, RATMaskBandsAndColorTranslation) {
   ref_band.has_nodata_ = true;
   ref_band.nodata_val_ = 0.0;
 
-  unsigned char custom_lut[256] = {0};
-  unsigned char* res_lut =
-      src_band.GetIndexColorTranslationTo(&ref_band, custom_lut, &approx);
-  EXPECT_EQ(res_lut, custom_lut);
-  EXPECT_EQ(approx, 1);
-  EXPECT_EQ(custom_lut[0], 1);  // c0 -> index 1 in ref
-  EXPECT_EQ(custom_lut[1], 2);  // c1 -> closest is c1_near at index 2
+  std::array<unsigned char, 256> custom_lut{};
+  unsigned char* res_lut = src_band.GetIndexColorTranslationTo(
+      &ref_band, custom_lut.data(), &approx);
+  EXPECT_EQ(custom_lut.data(), res_lut);
+  EXPECT_EQ(1, approx);
+  EXPECT_EQ(1, custom_lut[0]);  // c0 -> index 1 in ref
+  EXPECT_EQ(2, custom_lut[1]);  // c1 -> closest is c1_near at index 2
 
   // Also test allocated table (pTranslationTable == nullptr)
-  unsigned char* alloc_lut =
-      src_band.GetIndexColorTranslationTo(&ref_band, nullptr, nullptr);
-  ASSERT_NE(alloc_lut, nullptr);
-  CPLFree(alloc_lut);
-
-  CPLPopErrorHandler();
+  std::unique_ptr<unsigned char, CplFreeDeleter> alloc_lut(
+      src_band.GetIndexColorTranslationTo(&ref_band, nullptr, nullptr));
+  ASSERT_NE(nullptr, alloc_lut);
 }
 
 TEST(GDALRasterBandTest, MiscMethodsVirtualMemCoverageStatusWindows) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
   auto ds = std::make_unique<TestDataset>(16, 16, GA_Update);
   ds->SetDescription("my_test_dataset");
   auto* band = new TestRasterBand(ds.get(), 1, GDT_Byte, 16, 16, 4, 4);
@@ -2197,96 +2460,112 @@ TEST(GDALRasterBandTest, MiscMethodsVirtualMemCoverageStatusWindows) {
   GDALRasterBandH hBand = GDALRasterBand::ToHandle(band);
 
   // 1. ReportError (with dataset description and without dataset description)
-  band->ReportError(CE_Warning, CPLE_AppDefined, "warn %d", 1);
-  TestRasterBand standalone;
-  standalone.ReportError(CE_Warning, CPLE_AppDefined, "warn %d", 2);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    band->ReportError(CE_Warning, CPLE_AppDefined, "warn %d", 1);
+    EXPECT_EQ(CE_Warning, CPLGetLastErrorType());
+    TestRasterBand standalone;
+    standalone.ReportError(CE_Warning, CPLE_AppDefined, "warn %d", 2);
+    EXPECT_EQ(CE_Warning, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
 
   // 2. GetVirtualMemAuto & GDALGetVirtualMemAuto
   int pspace = 0;
   GIntBig lspace = 0;
-  EXPECT_EQ(GDALGetVirtualMemAuto(nullptr, GF_Read, &pspace, &lspace, nullptr),
-            nullptr);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, GDALGetVirtualMemAuto(nullptr, GF_Read, &pspace, &lspace,
+                                             nullptr));
+    CPLErrorReset();
+  }
   CPLVirtualMem* vm1 =
       GDALGetVirtualMemAuto(hBand, GF_Read, nullptr, &lspace, nullptr);
-  if (vm1 != nullptr) {
-    CPLVirtualMemFree(vm1);
-  }
+  absl::Cleanup free_vm1 = [vm1] { CPLVirtualMemFree(vm1); };
   CPLVirtualMem* vm2 =
       GDALGetVirtualMemAuto(hBand, GF_Read, &pspace, nullptr, nullptr);
-  if (vm2 != nullptr) {
-    CPLVirtualMemFree(vm2);
-  }
+  absl::Cleanup free_vm2 = [vm2] { CPLVirtualMemFree(vm2); };
 
-  char* vmem_opts_no[] = {const_cast<char*>("USE_DEFAULT_IMPLEMENTATION=NO"),
-                          nullptr};
-  EXPECT_EQ(band->GetVirtualMemAuto(GF_Read, &pspace, &lspace, vmem_opts_no),
-            nullptr);
+  CPLStringList vmem_opts_no;
+  vmem_opts_no.SetNameValue("USE_DEFAULT_IMPLEMENTATION", "NO");
+  EXPECT_EQ(nullptr, band->GetVirtualMemAuto(GF_Read, &pspace, &lspace,
+                                             vmem_opts_no.List()));
 
-  char* vmem_opts_yes[] = {const_cast<char*>("USE_DEFAULT_IMPLEMENTATION=YES"),
-                           nullptr};
+  CPLStringList vmem_opts_yes;
+  vmem_opts_yes.SetNameValue("USE_DEFAULT_IMPLEMENTATION", "YES");
   CPLVirtualMem* vmem =
-      band->GetVirtualMemAuto(GF_Read, &pspace, &lspace, vmem_opts_yes);
-  if (vmem != nullptr) {
-    CPLVirtualMemFree(vmem);
-  }
+      band->GetVirtualMemAuto(GF_Read, &pspace, &lspace, vmem_opts_yes.List());
+  absl::Cleanup free_vmem = [vmem] { CPLVirtualMemFree(vmem); };
 
   // 3. GetDataCoverageStatus & IGetDataCoverageStatus
   double pct = -1.0;
-  EXPECT_EQ(GDALGetDataCoverageStatus(nullptr, 0, 0, 4, 4, 0, &pct),
-            GDAL_DATA_COVERAGE_STATUS_UNIMPLEMENTED);
-  EXPECT_EQ(GDALGetDataCoverageStatus(hBand, -1, 0, 4, 4, 0, &pct),
-            GDAL_DATA_COVERAGE_STATUS_UNIMPLEMENTED |
-                GDAL_DATA_COVERAGE_STATUS_EMPTY);
-  EXPECT_EQ(GDALGetDataCoverageStatus(hBand, 0, -1, 4, 4, 0, &pct),
-            GDAL_DATA_COVERAGE_STATUS_UNIMPLEMENTED |
-                GDAL_DATA_COVERAGE_STATUS_EMPTY);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(GDAL_DATA_COVERAGE_STATUS_UNIMPLEMENTED,
+              GDALGetDataCoverageStatus(nullptr, 0, 0, 4, 4, 0, &pct));
+    EXPECT_EQ(GDAL_DATA_COVERAGE_STATUS_UNIMPLEMENTED |
+                  GDAL_DATA_COVERAGE_STATUS_EMPTY,
+              GDALGetDataCoverageStatus(hBand, -1, 0, 4, 4, 0, &pct));
+    EXPECT_EQ(GDAL_DATA_COVERAGE_STATUS_UNIMPLEMENTED |
+                  GDAL_DATA_COVERAGE_STATUS_EMPTY,
+              GDALGetDataCoverageStatus(hBand, 0, -1, 4, 4, 0, &pct));
+    EXPECT_EQ(GDAL_DATA_COVERAGE_STATUS_UNIMPLEMENTED |
+                  GDAL_DATA_COVERAGE_STATUS_EMPTY,
+              GDALGetDataCoverageStatus(hBand, 15, 0, 4, 4, 0, &pct));
+    EXPECT_EQ(GDAL_DATA_COVERAGE_STATUS_UNIMPLEMENTED |
+                  GDAL_DATA_COVERAGE_STATUS_EMPTY,
+              GDALGetDataCoverageStatus(hBand, 0, 15, 4, 4, 0, &pct));
+    CPLErrorReset();
+  }
   EXPECT_EQ(
-      GDALGetDataCoverageStatus(hBand, 0, 0, 0, 4, 0, &pct),
-      GDAL_DATA_COVERAGE_STATUS_UNIMPLEMENTED | GDAL_DATA_COVERAGE_STATUS_DATA);
+      GDAL_DATA_COVERAGE_STATUS_UNIMPLEMENTED | GDAL_DATA_COVERAGE_STATUS_DATA,
+      GDALGetDataCoverageStatus(hBand, 0, 0, 0, 4, 0, &pct));
   EXPECT_EQ(
-      GDALGetDataCoverageStatus(hBand, 0, 0, 4, 0, 0, &pct),
-      GDAL_DATA_COVERAGE_STATUS_UNIMPLEMENTED | GDAL_DATA_COVERAGE_STATUS_DATA);
-  EXPECT_EQ(GDALGetDataCoverageStatus(hBand, 15, 0, 4, 4, 0, &pct),
-            GDAL_DATA_COVERAGE_STATUS_UNIMPLEMENTED |
-                GDAL_DATA_COVERAGE_STATUS_EMPTY);
-  EXPECT_EQ(GDALGetDataCoverageStatus(hBand, 0, 15, 4, 4, 0, &pct),
-            GDAL_DATA_COVERAGE_STATUS_UNIMPLEMENTED |
-                GDAL_DATA_COVERAGE_STATUS_EMPTY);
-
+      GDAL_DATA_COVERAGE_STATUS_UNIMPLEMENTED | GDAL_DATA_COVERAGE_STATUS_DATA,
+      GDALGetDataCoverageStatus(hBand, 0, 0, 4, 0, 0, &pct));
   EXPECT_EQ(
-      GDALGetDataCoverageStatus(hBand, 0, 0, 4, 4, 0, &pct),
-      GDAL_DATA_COVERAGE_STATUS_UNIMPLEMENTED | GDAL_DATA_COVERAGE_STATUS_DATA);
-  EXPECT_DOUBLE_EQ(pct, 100.0);
+      GDAL_DATA_COVERAGE_STATUS_UNIMPLEMENTED | GDAL_DATA_COVERAGE_STATUS_DATA,
+      GDALGetDataCoverageStatus(hBand, 0, 0, 4, 4, 0, &pct));
+  EXPECT_DOUBLE_EQ(100.0, pct);
 
   // 4. EnterReadWrite, LeaveReadWrite, InitRWLock
   band->InitRWLock();
-  EXPECT_EQ(band->EnterReadWrite(GF_Write), TRUE);
+  EXPECT_EQ(TRUE, band->EnterReadWrite(GF_Write));
   band->LeaveReadWrite();
-  EXPECT_EQ(band->EnterReadWrite(GF_Read), TRUE);
+  EXPECT_EQ(TRUE, band->EnterReadWrite(GF_Read));
   band->LeaveReadWrite();
 
   // 5. EnablePixelTypeSignedByteWarning & GetMetadataItem("PIXELTYPE",
   // "IMAGE_STRUCTURE")
   GDALEnablePixelTypeSignedByteWarning(hBand, TRUE);
   band->SetMetadataItem("PIXELTYPE", "SIGNEDBYTE", "IMAGE_STRUCTURE");
-  EXPECT_STREQ(band->GetMetadataItem("PIXELTYPE", "IMAGE_STRUCTURE"),
-               "SIGNEDBYTE");
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_STREQ("SIGNEDBYTE",
+                 band->GetMetadataItem("PIXELTYPE", "IMAGE_STRUCTURE"));
+    EXPECT_EQ(CE_Warning, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
   GDALEnablePixelTypeSignedByteWarning(hBand, FALSE);
-  EXPECT_STREQ(band->GetMetadataItem("PIXELTYPE", "IMAGE_STRUCTURE"),
-               "SIGNEDBYTE");
-  EXPECT_EQ(band->GetMetadataItem("OTHER", ""), nullptr);
+  EXPECT_STREQ("SIGNEDBYTE",
+               band->GetMetadataItem("PIXELTYPE", "IMAGE_STRUCTURE"));
+  EXPECT_EQ(nullptr, band->GetMetadataItem("OTHER", ""));
 
   // 6. IterateWindows
   // (a) maxSize == 0 -> uses block size (4x4 on 16x16 -> 16 windows)
   uint64_t win_count = 0;
   auto wrapper0 = band->IterateWindows(0);
-  EXPECT_EQ(wrapper0.count(), 16U);
+  EXPECT_EQ(16U, wrapper0.count());
   for (const auto& w : wrapper0) {
     EXPECT_GT(w.nXSize, 0);
     EXPECT_GT(w.nYSize, 0);
     win_count++;
   }
-  EXPECT_EQ(win_count, 16U);
+  EXPECT_EQ(16U, win_count);
   auto it_begin = wrapper0.begin();
   auto it_end = wrapper0.end();
   EXPECT_TRUE(it_begin == wrapper0.begin());
@@ -2305,41 +2584,41 @@ TEST(GDALRasterBandTest, MiscMethodsVirtualMemCoverageStatusWindows) {
   auto wrapper_large = band->IterateWindows(128);
   EXPECT_GT(wrapper_large.count(), 0U);
   for (const auto& w : wrapper_large) {
-    EXPECT_EQ(w.nXSize, 16);
+    EXPECT_EQ(16, w.nXSize);
   }
 
   // (d) Invalid block size -> fallback to whole raster window
   TestRasterBand bad_blk_band;
   bad_blk_band.SetDimsAndType(10, 10, 0, 0, GDT_Byte);
   auto wrapper_bad = bad_blk_band.IterateWindows(0);
-  EXPECT_EQ(wrapper_bad.count(), 10U);
-
-  CPLPopErrorHandler();
+  EXPECT_EQ(10U, wrapper_bad.count());
 }
 
-}  // namespace
-namespace {
-
 TEST(GDALRasterBandTest, AsMDArrayInterpolateSplitRasterIO) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
   // 1. AsMDArray on band without dataset -> nullptr
   TestRasterBand standalone;
-  EXPECT_EQ(standalone.AsMDArray(), nullptr);
-  EXPECT_EQ(GDALRasterBandAsMDArray(nullptr), nullptr);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, standalone.AsMDArray());
+    EXPECT_EQ(nullptr, GDALRasterBandAsMDArray(nullptr));
+    CPLErrorReset();
+  }
 
   // 2. AsMDArray with dataset, geotransform, SRS, metadata, offset, scale,
   // unit, nodata
+  constexpr char kMdArrayFilename[] =
+      "/vsimem/gdalrasterband_test/mdarray_test.tif";
   auto ds = std::make_unique<TestDataset>(8, 6, GA_Update);
-  ds->SetDescription("/vsimem/mdarray_test.tif");
+  ds->SetDescription(kMdArrayFilename);
   ds->has_gt_ = true;
   ds->gt_ = GDALGeoTransform(100.0, 2.0, 0.0, 200.0, 0.0, -2.0);
   ds->has_srs_ = true;
-  ds->srs_.importFromEPSG(4326);  // Authority compliant {2, 1} axis mapping
+  ASSERT_EQ(OGRERR_NONE, ds->srs_.importFromEPSG(
+                             4326));  // Authority compliant {2, 1} axis mapping
 
   auto* b_f64 = new TestRasterBand(ds.get(), 1, GDT_Float64, 8, 6, 4, 3);
-  b_f64->Fill(12.5);
+  EXPECT_EQ(CE_None, b_f64->Fill(12.5));
   b_f64->has_nodata_ = true;
   b_f64->nodata_val_ = -999.0;
   b_f64->custom_unit_ = "meters";
@@ -2350,61 +2629,67 @@ TEST(GDALRasterBandTest, AsMDArrayInterpolateSplitRasterIO) {
   b_f64->SetMetadataItem("META_KEY", "META_VAL");
   ds->AddTestBand(b_f64);
 
-  GDALMDArrayH hArr = GDALRasterBandAsMDArray(GDALRasterBand::ToHandle(b_f64));
-  ASSERT_NE(hArr, nullptr);
-  GDALMDArrayRelease(hArr);
+  {
+    GDALMDArrayH hArr =
+        GDALRasterBandAsMDArray(GDALRasterBand::ToHandle(b_f64));
+    ASSERT_NE(nullptr, hArr);
+    absl::Cleanup release_arr = [hArr] { GDALMDArrayRelease(hArr); };
+  }
 
   auto md = b_f64->AsMDArray();
-  ASSERT_NE(md, nullptr);
+  ASSERT_NE(nullptr, md);
   EXPECT_TRUE(md->IsWritable());
-  EXPECT_STREQ(md->GetFilename().c_str(), "/vsimem/mdarray_test.tif");
-  EXPECT_STREQ(md->GetUnit().c_str(), "meters");
+  EXPECT_EQ(kMdArrayFilename, md->GetFilename());
+  EXPECT_EQ("meters", md->GetUnit());
   bool has_off = false, has_scl = false;
   GDALDataType st_dt = GDT_Unknown;
-  EXPECT_DOUBLE_EQ(md->GetOffset(&has_off, &st_dt), 1.5);
+  EXPECT_DOUBLE_EQ(1.5, md->GetOffset(&has_off, &st_dt));
   EXPECT_TRUE(has_off);
-  EXPECT_DOUBLE_EQ(md->GetScale(&has_scl, &st_dt), 0.5);
+  EXPECT_DOUBLE_EQ(0.5, md->GetScale(&has_scl, &st_dt));
   EXPECT_TRUE(has_scl);
-  EXPECT_NE(md->GetRawNoDataValue(), nullptr);
-  EXPECT_NE(md->GetSpatialRef(), nullptr);
-  EXPECT_EQ(md->GetBlockSize().size(), 2U);
+  EXPECT_NE(nullptr, md->GetRawNoDataValue());
+  EXPECT_NE(nullptr, md->GetSpatialRef());
+  EXPECT_EQ(2U, md->GetBlockSize().size());
   EXPECT_FALSE(md->GetAttributes(nullptr).empty());
 
   const auto& dims = md->GetDimensions();
-  ASSERT_EQ(dims.size(), 2U);
+  ASSERT_EQ(2U, dims.size());
   // Read coordinate indexing variables X and Y
   for (const auto& dim : dims) {
     auto idx_var = dim->GetIndexingVariable();
-    ASSERT_NE(idx_var, nullptr);
-    GUInt64 start[1] = {0};
-    size_t count[1] = {static_cast<size_t>(dim->GetSize())};
-    GInt64 step[1] = {1};
-    GPtrDiff_t stride[1] = {1};
+    ASSERT_NE(nullptr, idx_var);
+    std::array<GUInt64, 1> start = {0};
+    std::array<size_t, 1> count = {static_cast<size_t>(dim->GetSize())};
+    std::array<GInt64, 1> step = {1};
+    std::array<GPtrDiff_t, 1> stride = {1};
     std::vector<double> coords(count[0], 0.0);
-    EXPECT_TRUE(idx_var->Read(start, count, step, stride,
-                              GDALExtendedDataType::Create(GDT_Float64),
-                              coords.data()));
+    EXPECT_TRUE(idx_var->Read(
+        start.data(), count.data(), step.data(), stride.data(),
+        GDALExtendedDataType::Create(GDT_Float64), coords.data()));
   }
 
   // Write and Read via MDArray (positive and negative steps)
-  GUInt64 start[2] = {0, 0};
-  size_t count[2] = {2, 3};
-  GInt64 step_pos[2] = {1, 1};
-  GPtrDiff_t stride[2] = {3, 1};
-  double write_vals[6] = {1, 2, 3, 4, 5, 6};
-  EXPECT_TRUE(md->Write(start, count, step_pos, stride,
-                        GDALExtendedDataType::Create(GDT_Float64), write_vals));
-  double read_vals[6] = {0};
-  EXPECT_TRUE(md->Read(start, count, step_pos, stride,
-                       GDALExtendedDataType::Create(GDT_Float64), read_vals));
-  EXPECT_DOUBLE_EQ(read_vals[0], 1.0);
-  EXPECT_DOUBLE_EQ(read_vals[5], 6.0);
+  std::array<GUInt64, 2> start = {0, 0};
+  std::array<size_t, 2> count = {2, 3};
+  std::array<GInt64, 2> step_pos = {1, 1};
+  std::array<GPtrDiff_t, 2> stride = {3, 1};
+  constexpr auto kWriteVals = std::to_array<double>({1, 2, 3, 4, 5, 6});
+  EXPECT_TRUE(
+      md->Write(start.data(), count.data(), step_pos.data(), stride.data(),
+                GDALExtendedDataType::Create(GDT_Float64), kWriteVals.data()));
+  std::array<double, 6> read_vals{};
+  EXPECT_TRUE(md->Read(start.data(), count.data(), step_pos.data(),
+                       stride.data(), GDALExtendedDataType::Create(GDT_Float64),
+                       read_vals.data()));
+  EXPECT_DOUBLE_EQ(1.0, read_vals[0]);
+  EXPECT_DOUBLE_EQ(6.0, read_vals[5]);
 
   // Negative step read
-  GUInt64 start_neg[2] = {1, 2};
-  GInt64 step_neg[2] = {-1, -1};
-  EXPECT_TRUE(md->Read(start_neg, count, step_neg, stride,
-                       GDALExtendedDataType::Create(GDT_Float64), read_vals));
+  std::array<GUInt64, 2> start_neg = {1, 2};
+  std::array<GInt64, 2> step_neg = {-1, -1};
+  EXPECT_TRUE(md->Read(start_neg.data(), count.data(), step_neg.data(),
+                       stride.data(), GDALExtendedDataType::Create(GDT_Float64),
+                       read_vals.data()));
 
   // Also test SRS with GIS_TRADITIONAL axis order {1, 2}, Int64 nodata, UInt64
   // nodata, SignedByte
@@ -2414,266 +2699,349 @@ TEST(GDALRasterBandTest, AsMDArrayInterpolateSplitRasterIO) {
   b_i64->nodata_i64_ = -42;
   ds->AddTestBand(b_i64);
   auto md_i64 = b_i64->AsMDArray();
-  ASSERT_NE(md_i64, nullptr);
-  EXPECT_NE(md_i64->GetSpatialRef(), nullptr);
-  EXPECT_NE(md_i64->GetRawNoDataValue(), nullptr);
+  ASSERT_NE(nullptr, md_i64);
+  EXPECT_NE(nullptr, md_i64->GetSpatialRef());
+  EXPECT_NE(nullptr, md_i64->GetRawNoDataValue());
 
   auto* b_u64 = new TestRasterBand(ds.get(), 3, GDT_UInt64, 8, 6, 4, 3);
   b_u64->has_nodata_u64_ = true;
   b_u64->nodata_u64_ = 42U;
   ds->AddTestBand(b_u64);
   auto md_u64 = b_u64->AsMDArray();
-  ASSERT_NE(md_u64, nullptr);
-  EXPECT_NE(md_u64->GetRawNoDataValue(), nullptr);
+  ASSERT_NE(nullptr, md_u64);
+  EXPECT_NE(nullptr, md_u64->GetRawNoDataValue());
 
   auto* b_sb = new TestRasterBand(ds.get(), 4, GDT_Byte, 8, 6, 4, 3);
   b_sb->SetMetadataItem("PIXELTYPE", "SIGNEDBYTE", "IMAGE_STRUCTURE");
   ds->AddTestBand(b_sb);
   auto md_sb = b_sb->AsMDArray();
-  ASSERT_NE(md_sb, nullptr);
-  EXPECT_EQ(md_sb->GetDataType().GetNumericDataType(), GDT_Byte);
+  ASSERT_NE(nullptr, md_sb);
+  EXPECT_EQ(GDT_Byte, md_sb->GetDataType().GetNumericDataType());
 
   // 3. InterpolateAtPoint & InterpolateAtGeolocation
   double real_v = 0.0, imag_v = 0.0;
   GDALRasterBandH hBand = GDALRasterBand::ToHandle(b_f64);
-  EXPECT_EQ(GDALRasterInterpolateAtPoint(
-                nullptr, 1.0, 1.0, GRIORA_NearestNeighbour, &real_v, &imag_v),
-            CE_Failure);
-  // Unsupported resampling alg -> CE_Failure
-  EXPECT_EQ(GDALRasterInterpolateAtPoint(hBand, 1.0, 1.0, GRIORA_Average,
-                                         &real_v, &imag_v),
-            CE_Failure);
-  // Out of bounds point -> CE_Failure
-  EXPECT_EQ(GDALRasterInterpolateAtPoint(
-                hBand, -5.0, 1.0, GRIORA_NearestNeighbour, &real_v, &imag_v),
-            CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, GDALRasterInterpolateAtPoint(nullptr, 1.0, 1.0,
+                                                       GRIORA_NearestNeighbour,
+                                                       &real_v, &imag_v));
+    // Unsupported resampling alg -> CE_Failure
+    EXPECT_EQ(CE_Failure,
+              GDALRasterInterpolateAtPoint(hBand, 1.0, 1.0, GRIORA_Average,
+                                           &real_v, &imag_v));
+    // Out of bounds point -> CE_Failure
+    EXPECT_EQ(CE_Failure,
+              GDALRasterInterpolateAtPoint(
+                  hBand, -5.0, 1.0, GRIORA_NearestNeighbour, &real_v, &imag_v));
+    CPLErrorReset();
+  }
   // Valid interpolations
-  for (GDALRIOResampleAlg alg : {GRIORA_NearestNeighbour, GRIORA_Bilinear,
-                                 GRIORA_Cubic, GRIORA_CubicSpline}) {
-    EXPECT_EQ(
-        GDALRasterInterpolateAtPoint(hBand, 2.5, 2.5, alg, &real_v, &imag_v),
-        CE_None);
+  constexpr auto kResampleAlgs = std::to_array<GDALRIOResampleAlg>(
+      {GRIORA_NearestNeighbour, GRIORA_Bilinear, GRIORA_Cubic,
+       GRIORA_CubicSpline});
+  for (GDALRIOResampleAlg alg : kResampleAlgs) {
+    EXPECT_EQ(CE_None, GDALRasterInterpolateAtPoint(hBand, 2.5, 2.5, alg,
+                                                    &real_v, &imag_v));
   }
   // Complex band interpolation
   auto* b_cf64 = new TestRasterBand(ds.get(), 5, GDT_CFloat64, 8, 6, 4, 3);
-  b_cf64->Fill(3.0, 4.0);
+  EXPECT_EQ(CE_None, b_cf64->Fill(3.0, 4.0));
   ds->AddTestBand(b_cf64);
-  EXPECT_EQ(
-      b_cf64->InterpolateAtPoint(2.5, 2.5, GRIORA_Bilinear, &real_v, &imag_v),
-      CE_None);
-  EXPECT_NEAR(real_v, 3.0, 1e-5);
-  EXPECT_NEAR(imag_v, 4.0, 1e-5);
+  EXPECT_EQ(CE_None, b_cf64->InterpolateAtPoint(2.5, 2.5, GRIORA_Bilinear,
+                                                &real_v, &imag_v));
+  EXPECT_NEAR(3.0, real_v, 1e-5);
+  EXPECT_NEAR(4.0, imag_v, 1e-5);
 
   // InterpolateAtGeolocation
-  EXPECT_EQ(GDALRasterInterpolateAtGeolocation(nullptr, 102.0, 198.0, nullptr,
-                                               GRIORA_NearestNeighbour, &real_v,
-                                               &imag_v, nullptr),
-            CE_Failure);
-  EXPECT_EQ(GDALRasterInterpolateAtGeolocation(hBand, 102.0, 198.0, nullptr,
-                                               GRIORA_NearestNeighbour, &real_v,
-                                               &imag_v, nullptr),
-            CE_None);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure,
+              GDALRasterInterpolateAtGeolocation(nullptr, 102.0, 198.0, nullptr,
+                                                 GRIORA_NearestNeighbour,
+                                                 &real_v, &imag_v, nullptr));
+    CPLErrorReset();
+  }
+  EXPECT_EQ(CE_None, GDALRasterInterpolateAtGeolocation(
+                         hBand, 102.0, 198.0, nullptr, GRIORA_NearestNeighbour,
+                         &real_v, &imag_v, nullptr));
   // With explicit SRS (note: EPSG:4326 traditional order)
-  EXPECT_EQ(GDALRasterInterpolateAtGeolocation(
+  EXPECT_EQ(CE_None,
+            GDALRasterInterpolateAtGeolocation(
                 hBand, 102.0, 198.0, OGRSpatialReference::ToHandle(&ds->srs_),
-                GRIORA_Bilinear, &real_v, &imag_v, nullptr),
-            CE_None);
+                GRIORA_Bilinear, &real_v, &imag_v, nullptr));
   // Without GeoTransform -> CE_Failure
   ds->has_gt_ = false;
-  EXPECT_EQ(b_f64->InterpolateAtGeolocation(102.0, 198.0, nullptr,
-                                            GRIORA_NearestNeighbour, &real_v,
-                                            &imag_v, nullptr),
-            CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, b_f64->InterpolateAtGeolocation(
+                              102.0, 198.0, nullptr, GRIORA_NearestNeighbour,
+                              &real_v, &imag_v, nullptr));
+    CPLErrorReset();
+  }
 
   // 4. SplitRasterIO
   GDALRasterIOExtraArg extra;
   INIT_RASTERIO_EXTRA_ARG(extra);
   std::vector<double> split_buf(48, 0.0);
   // (a) Height split: nBufXSize == nRasterXSize (8) && nBufYSize >= 2 (6)
-  EXPECT_EQ(b_f64->SplitRasterIO(GF_Read, 0, 0, 8, 6, split_buf.data(), 8, 6,
-                                 GDT_Float64, 8, 64, &extra),
-            CE_None);
+  EXPECT_EQ(CE_None, b_f64->SplitRasterIO(GF_Read, 0, 0, 8, 6, split_buf.data(),
+                                          8, 6, GDT_Float64, 8, 64, &extra));
   // (b) Width split: nBufXSize >= 2 (4) && nBufYSize < nBufXSize (2) &&
   // nBufXSize < nRasterXSize (8)
-  EXPECT_EQ(b_f64->SplitRasterIO(GF_Read, 0, 0, 4, 2, split_buf.data(), 4, 2,
-                                 GDT_Float64, 8, 32, &extra),
-            CE_None);
+  EXPECT_EQ(CE_None, b_f64->SplitRasterIO(GF_Read, 0, 0, 4, 2, split_buf.data(),
+                                          4, 2, GDT_Float64, 8, 32, &extra));
   // (c) 1x1 -> cannot split, returns CE_Warning
-  EXPECT_EQ(b_f64->SplitRasterIO(GF_Read, 0, 0, 1, 1, split_buf.data(), 1, 1,
-                                 GDT_Float64, 8, 8, &extra),
-            CE_Warning);
-
-  CPLPopErrorHandler();
+  EXPECT_EQ(CE_Warning,
+            b_f64->SplitRasterIO(GF_Read, 0, 0, 1, 1, split_buf.data(), 1, 1,
+                                 GDT_Float64, 8, 8, &extra));
 }
 
 TEST(GDALRasterBandTest, RasterAlgebra) {
-  GDALAllRegister();
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-
+  GDALRegister_MEM();
   GDALDriver* mem_drv = GetGDALDriverManager()->GetDriverByName("MEM");
-  ASSERT_NE(mem_drv, nullptr);
-  std::unique_ptr<GDALDataset> ds1(
+  ASSERT_NE(nullptr, mem_drv);
+  GDALDatasetUniquePtr ds1(
       mem_drv->Create("mem1", 4, 4, 2, GDT_Float32, nullptr));
-  std::unique_ptr<GDALDataset> ds_diff(
+  GDALDatasetUniquePtr ds_diff(
       mem_drv->Create("mem_diff", 5, 4, 1, GDT_Float32, nullptr));
-  ASSERT_NE(ds1, nullptr);
-  ASSERT_NE(ds_diff, nullptr);
+  ASSERT_NE(nullptr, ds1);
+  ASSERT_NE(nullptr, ds_diff);
 
   GDALRasterBand* b1 = ds1->GetRasterBand(1);
   GDALRasterBand* b2 = ds1->GetRasterBand(2);
   GDALRasterBand* b_diff = ds_diff->GetRasterBand(1);
-  b1->Fill(4.0);
-  b2->Fill(2.0);
+  ASSERT_NE(nullptr, b1);
+  ASSERT_NE(nullptr, b2);
+  ASSERT_NE(nullptr, b_diff);
+  EXPECT_EQ(CE_None, b1->Fill(4.0));
+  EXPECT_EQ(CE_None, b2->Fill(2.0));
   GDALRasterBandH h1 = GDALRasterBand::ToHandle(b1);
   GDALRasterBandH h2 = GDALRasterBand::ToHandle(b2);
   GDALRasterBandH h_diff = GDALRasterBand::ToHandle(b_diff);
 
   // 1. Unary operations C API
-  EXPECT_EQ(GDALRasterBandUnaryOp(nullptr, GRAUO_ABS), nullptr);
-  for (GDALRasterAlgebraUnaryOperation uop :
-       {GRAUO_LOGICAL_NOT, GRAUO_ABS, GRAUO_SQRT, GRAUO_LOG, GRAUO_LOG10}) {
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, GDALRasterBandUnaryOp(nullptr, GRAUO_ABS));
+    CPLErrorReset();
+  }
+  constexpr auto kUnaryOps = std::to_array<GDALRasterAlgebraUnaryOperation>(
+      {GRAUO_LOGICAL_NOT, GRAUO_ABS, GRAUO_SQRT, GRAUO_LOG10});
+  for (GDALRasterAlgebraUnaryOperation uop : kUnaryOps) {
     GDALComputedRasterBandH hComp = GDALRasterBandUnaryOp(h1, uop);
-    if (hComp) {
+    absl::Cleanup release_comp = [hComp] {
       GDALComputedRasterBandRelease(hComp);
-    }
+    };
+    ASSERT_NE(nullptr, hComp);
+  }
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    GDALComputedRasterBandH hLog = GDALRasterBandUnaryOp(h1, GRAUO_LOG);
+    absl::Cleanup release_log = [hLog] { GDALComputedRasterBandRelease(hLog); };
+    EXPECT_EQ(nullptr, hLog);
+    CPLErrorReset();
   }
 
   // 2. Binary operations C API (Band-Band, Band-Double, Double-Band)
-  EXPECT_EQ(GDALRasterBandBinaryOpBand(nullptr, GRABO_ADD, h2), nullptr);
-  EXPECT_EQ(GDALRasterBandBinaryOpBand(h1, GRABO_ADD, nullptr), nullptr);
-  EXPECT_EQ(GDALRasterBandBinaryOpBand(h1, GRABO_ADD, h_diff), nullptr);
-  EXPECT_EQ(GDALRasterBandBinaryOpDouble(nullptr, GRABO_ADD, 1.0), nullptr);
-  EXPECT_EQ(GDALRasterBandBinaryOpDoubleToBand(1.0, GRABO_ADD, nullptr),
-            nullptr);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, GDALRasterBandBinaryOpBand(nullptr, GRABO_ADD, h2));
+    EXPECT_EQ(nullptr, GDALRasterBandBinaryOpBand(h1, GRABO_ADD, nullptr));
+    EXPECT_EQ(nullptr, GDALRasterBandBinaryOpBand(h1, GRABO_ADD, h_diff));
+    EXPECT_EQ(nullptr, GDALRasterBandBinaryOpDouble(nullptr, GRABO_ADD, 1.0));
+    EXPECT_EQ(nullptr,
+              GDALRasterBandBinaryOpDoubleToBand(1.0, GRABO_ADD, nullptr));
+    CPLErrorReset();
+  }
 
-  for (GDALRasterAlgebraBinaryOperation bop :
-       {GRABO_ADD, GRABO_SUB, GRABO_MUL, GRABO_DIV}) {
+  constexpr auto kBinaryOps = std::to_array<GDALRasterAlgebraBinaryOperation>(
+      {GRABO_ADD, GRABO_SUB, GRABO_MUL, GRABO_DIV});
+  for (GDALRasterAlgebraBinaryOperation bop : kBinaryOps) {
     GDALComputedRasterBandH c_bb = GDALRasterBandBinaryOpBand(h1, bop, h2);
-    if (c_bb) GDALComputedRasterBandRelease(c_bb);
+    absl::Cleanup release_bb = [c_bb] { GDALComputedRasterBandRelease(c_bb); };
+    ASSERT_NE(nullptr, c_bb);
+
     GDALComputedRasterBandH c_bd = GDALRasterBandBinaryOpDouble(h1, bop, 2.0);
-    if (c_bd) GDALComputedRasterBandRelease(c_bd);
+    absl::Cleanup release_bd = [c_bd] { GDALComputedRasterBandRelease(c_bd); };
+    ASSERT_NE(nullptr, c_bd);
   }
 
   // For DoubleToBand, test ADD, MUL, DIV (omit SUB to avoid GDAL
   // chained-temporary stack bug)
-  for (GDALRasterAlgebraBinaryOperation bop :
-       {GRABO_ADD, GRABO_MUL, GRABO_DIV}) {
+  constexpr auto kDoubleToBandOps =
+      std::to_array<GDALRasterAlgebraBinaryOperation>(
+          {GRABO_ADD, GRABO_MUL, GRABO_DIV});
+  for (GDALRasterAlgebraBinaryOperation bop : kDoubleToBandOps) {
     GDALComputedRasterBandH c_db =
         GDALRasterBandBinaryOpDoubleToBand(2.0, bop, h1);
-    if (c_db) GDALComputedRasterBandRelease(c_db);
+    absl::Cleanup release_db = [c_db] { GDALComputedRasterBandRelease(c_db); };
+    ASSERT_NE(nullptr, c_db);
   }
 
   // 3. IfThenElse, AsDataType, Max/Min/Mean C API
-  EXPECT_EQ(GDALRasterBandIfThenElse(nullptr, h1, h2), nullptr);
-  EXPECT_EQ(GDALRasterBandIfThenElse(h1, nullptr, h2), nullptr);
-  EXPECT_EQ(GDALRasterBandIfThenElse(h1, h2, nullptr), nullptr);
-  GDALComputedRasterBandH c_ite = GDALRasterBandIfThenElse(h1, h1, h2);
-  if (c_ite) GDALComputedRasterBandRelease(c_ite);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, GDALRasterBandIfThenElse(nullptr, h1, h2));
+    EXPECT_EQ(nullptr, GDALRasterBandIfThenElse(h1, nullptr, h2));
+    EXPECT_EQ(nullptr, GDALRasterBandIfThenElse(h1, h2, nullptr));
+    GDALComputedRasterBandH c_ite = GDALRasterBandIfThenElse(h1, h1, h2);
+    absl::Cleanup release_ite = [c_ite] {
+      GDALComputedRasterBandRelease(c_ite);
+    };
+    EXPECT_EQ(nullptr, c_ite);
 
-  EXPECT_EQ(GDALRasterBandAsDataType(nullptr, GDT_Float64), nullptr);
-  EXPECT_EQ(GDALRasterBandAsDataType(h1, GDT_Unknown), nullptr);
-  GDALComputedRasterBandH c_dt = GDALRasterBandAsDataType(h1, GDT_Float64);
-  ASSERT_NE(c_dt, nullptr);
-  GDALComputedRasterBandRelease(c_dt);
+    EXPECT_EQ(nullptr, GDALRasterBandAsDataType(nullptr, GDT_Float64));
+    EXPECT_EQ(nullptr, GDALRasterBandAsDataType(h1, GDT_Unknown));
+    CPLErrorReset();
+  }
+  {
+    GDALComputedRasterBandH c_dt = GDALRasterBandAsDataType(h1, GDT_Float64);
+    absl::Cleanup release_dt = [c_dt] { GDALComputedRasterBandRelease(c_dt); };
+    ASSERT_NE(nullptr, c_dt);
+  }
 
-  GDALRasterBandH bands[2] = {h1, h2};
-  GDALRasterBandH bad_bands[2] = {h1, h_diff};
+  std::array<GDALRasterBandH, 2> bands = {h1, h2};
+  std::array<GDALRasterBandH, 2> bad_bands = {h1, h_diff};
 
-  EXPECT_EQ(GDALMaximumOfNBands(0, bands), nullptr);
-  EXPECT_EQ(GDALMaximumOfNBands(2, nullptr), nullptr);
-  EXPECT_EQ(GDALMaximumOfNBands(2, bad_bands), nullptr);
-  GDALComputedRasterBandH c_max = GDALMaximumOfNBands(2, bands);
-  ASSERT_NE(c_max, nullptr);
-  GDALComputedRasterBandRelease(c_max);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, GDALMaximumOfNBands(0, bands.data()));
+    EXPECT_EQ(nullptr, GDALMaximumOfNBands(2, nullptr));
+    EXPECT_EQ(nullptr, GDALMaximumOfNBands(2, bad_bands.data()));
+    CPLErrorReset();
+  }
+  {
+    GDALComputedRasterBandH c_max = GDALMaximumOfNBands(2, bands.data());
+    absl::Cleanup release_max = [c_max] {
+      GDALComputedRasterBandRelease(c_max);
+    };
+    ASSERT_NE(nullptr, c_max);
+  }
+  {
+    GDALComputedRasterBandH c_maxc = GDALRasterBandMaxConstant(h1, 1.0);
+    absl::Cleanup release_maxc = [c_maxc] {
+      GDALComputedRasterBandRelease(c_maxc);
+    };
+    ASSERT_NE(nullptr, c_maxc);
+  }
 
-  GDALComputedRasterBandH c_maxc = GDALRasterBandMaxConstant(h1, 1.0);
-  ASSERT_NE(c_maxc, nullptr);
-  GDALComputedRasterBandRelease(c_maxc);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, GDALMinimumOfNBands(0, bands.data()));
+    EXPECT_EQ(nullptr, GDALMinimumOfNBands(2, nullptr));
+    EXPECT_EQ(nullptr, GDALMinimumOfNBands(2, bad_bands.data()));
+    CPLErrorReset();
+  }
+  {
+    GDALComputedRasterBandH c_min = GDALMinimumOfNBands(2, bands.data());
+    absl::Cleanup release_min = [c_min] {
+      GDALComputedRasterBandRelease(c_min);
+    };
+    ASSERT_NE(nullptr, c_min);
+  }
+  {
+    GDALComputedRasterBandH c_minc = GDALRasterBandMinConstant(h1, 1.0);
+    absl::Cleanup release_minc = [c_minc] {
+      GDALComputedRasterBandRelease(c_minc);
+    };
+    ASSERT_NE(nullptr, c_minc);
+  }
 
-  EXPECT_EQ(GDALMinimumOfNBands(0, bands), nullptr);
-  EXPECT_EQ(GDALMinimumOfNBands(2, nullptr), nullptr);
-  EXPECT_EQ(GDALMinimumOfNBands(2, bad_bands), nullptr);
-  GDALComputedRasterBandH c_min = GDALMinimumOfNBands(2, bands);
-  ASSERT_NE(c_min, nullptr);
-  GDALComputedRasterBandRelease(c_min);
-
-  GDALComputedRasterBandH c_minc = GDALRasterBandMinConstant(h1, 1.0);
-  ASSERT_NE(c_minc, nullptr);
-  GDALComputedRasterBandRelease(c_minc);
-
-  EXPECT_EQ(GDALMeanOfNBands(0, bands), nullptr);
-  EXPECT_EQ(GDALMeanOfNBands(2, nullptr), nullptr);
-  EXPECT_EQ(GDALMeanOfNBands(2, bad_bands), nullptr);
-  GDALComputedRasterBandH c_mean = GDALMeanOfNBands(2, bands);
-  ASSERT_NE(c_mean, nullptr);
-  GDALComputedRasterBandRelease(c_mean);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, GDALMeanOfNBands(0, bands.data()));
+    EXPECT_EQ(nullptr, GDALMeanOfNBands(2, nullptr));
+    EXPECT_EQ(nullptr, GDALMeanOfNBands(2, bad_bands.data()));
+    CPLErrorReset();
+  }
+  {
+    GDALComputedRasterBandH c_mean = GDALMeanOfNBands(2, bands.data());
+    absl::Cleanup release_mean = [c_mean] {
+      GDALComputedRasterBandRelease(c_mean);
+    };
+    ASSERT_NE(nullptr, c_mean);
+  }
 
   // 4. C++ operators that work without muparser
   GDALRasterBand::ThrowIfNotSameDimensions(*b1, *b2);
-  EXPECT_EQ(((*b1) + (*b2)).GetXSize(), 4);
-  EXPECT_EQ(((*b1) + 2.0).GetXSize(), 4);
-  EXPECT_EQ((2.0 + (*b1)).GetXSize(), 4);
-  EXPECT_EQ(((*b1) - (*b2)).GetXSize(), 4);
-  EXPECT_EQ(((*b1) - 2.0).GetXSize(), 4);
-  EXPECT_EQ(((*b1) * (*b2)).GetXSize(), 4);
-  EXPECT_EQ(((*b1) * 2.0).GetXSize(), 4);
-  EXPECT_EQ((2.0 * (*b1)).GetXSize(), 4);
-  EXPECT_EQ(((*b1) / (*b2)).GetXSize(), 4);
-  EXPECT_EQ(((*b1) / 2.0).GetXSize(), 4);
-  EXPECT_EQ((2.0 / (*b1)).GetXSize(), 4);
-  EXPECT_EQ((!(*b1)).GetXSize(), 4);
-  EXPECT_EQ(b1->AsType(GDT_Float64).GetXSize(), 4);
-  EXPECT_EQ(gdal::max(*b1, *b2).GetXSize(), 4);
-  EXPECT_EQ(gdal::max(*b1, 5.0).GetXSize(), 4);
-  EXPECT_EQ(gdal::max(5.0, *b1).GetXSize(), 4);
-  EXPECT_EQ(gdal::min(*b1, *b2).GetXSize(), 4);
-  EXPECT_EQ(gdal::min(*b1, 5.0).GetXSize(), 4);
-  EXPECT_EQ(gdal::min(5.0, *b1).GetXSize(), 4);
-  EXPECT_EQ(gdal::mean(*b1, *b2).GetXSize(), 4);
-  EXPECT_EQ(gdal::abs(*b1).GetXSize(), 4);
-  EXPECT_EQ(gdal::fabs(*b1).GetXSize(), 4);
-  EXPECT_EQ(gdal::sqrt(*b1).GetXSize(), 4);
-  EXPECT_EQ(gdal::log10(*b1).GetXSize(), 4);
-  EXPECT_EQ(gdal::pow(*b1, 2.0).GetXSize(), 4);
-  EXPECT_EQ(gdal::pow(2.0, *b1).GetXSize(), 4);
+  EXPECT_EQ(4, ((*b1) + (*b2)).GetXSize());
+  EXPECT_EQ(4, ((*b1) + 2.0).GetXSize());
+  EXPECT_EQ(4, (2.0 + (*b1)).GetXSize());
+  EXPECT_EQ(4, ((*b1) - (*b2)).GetXSize());
+  EXPECT_EQ(4, ((*b1) - 2.0).GetXSize());
+  EXPECT_EQ(4, ((*b1) * (*b2)).GetXSize());
+  EXPECT_EQ(4, ((*b1) * 2.0).GetXSize());
+  EXPECT_EQ(4, (2.0 * (*b1)).GetXSize());
+  EXPECT_EQ(4, ((*b1) / (*b2)).GetXSize());
+  EXPECT_EQ(4, ((*b1) / 2.0).GetXSize());
+  EXPECT_EQ(4, (2.0 / (*b1)).GetXSize());
+  EXPECT_EQ(4, (!(*b1)).GetXSize());
+  EXPECT_EQ(4, b1->AsType(GDT_Float64).GetXSize());
+  EXPECT_EQ(4, gdal::max(*b1, *b2).GetXSize());
+  EXPECT_EQ(4, gdal::max(*b1, 5.0).GetXSize());
+  EXPECT_EQ(4, gdal::max(5.0, *b1).GetXSize());
+  EXPECT_EQ(4, gdal::min(*b1, *b2).GetXSize());
+  EXPECT_EQ(4, gdal::min(*b1, 5.0).GetXSize());
+  EXPECT_EQ(4, gdal::min(5.0, *b1).GetXSize());
+  EXPECT_EQ(4, gdal::mean(*b1, *b2).GetXSize());
+  EXPECT_EQ(4, gdal::abs(*b1).GetXSize());
+  EXPECT_EQ(4, gdal::fabs(*b1).GetXSize());
+  EXPECT_EQ(4, gdal::sqrt(*b1).GetXSize());
+  EXPECT_EQ(4, gdal::log10(*b1).GetXSize());
+  EXPECT_EQ(4, gdal::pow(*b1, 2.0).GetXSize());
+  EXPECT_EQ(4, gdal::pow(2.0, *b1).GetXSize());
 
 #if defined(__cpp_exceptions) || defined(__EXCEPTIONS)
-  EXPECT_THROW(GDALRasterBand::ThrowIfNotSameDimensions(*b1, *b_diff),
-               std::exception);
-  EXPECT_THROW((void)((*b1) > (*b2)), std::exception);
-  EXPECT_THROW((void)((*b1) > 1.0), std::exception);
-  EXPECT_THROW((void)(1.0 > (*b1)), std::exception);
-  EXPECT_THROW((void)((*b1) >= (*b2)), std::exception);
-  EXPECT_THROW((void)((*b1) >= 1.0), std::exception);
-  EXPECT_THROW((void)(1.0 >= (*b1)), std::exception);
-  EXPECT_THROW((void)((*b1) < (*b2)), std::exception);
-  EXPECT_THROW((void)((*b1) < 1.0), std::exception);
-  EXPECT_THROW((void)(1.0 < (*b1)), std::exception);
-  EXPECT_THROW((void)((*b1) <= (*b2)), std::exception);
-  EXPECT_THROW((void)((*b1) <= 1.0), std::exception);
-  EXPECT_THROW((void)(1.0 <= (*b1)), std::exception);
-  EXPECT_THROW((void)((*b1) == (*b2)), std::exception);
-  EXPECT_THROW((void)((*b1) == 1.0), std::exception);
-  EXPECT_THROW((void)(1.0 == (*b1)), std::exception);
-  EXPECT_THROW((void)((*b1) != (*b2)), std::exception);
-  EXPECT_THROW((void)((*b1) != 1.0), std::exception);
-  EXPECT_THROW((void)(1.0 != (*b1)), std::exception);
-  EXPECT_THROW((void)((*b1) && (*b2)), std::exception);
-  EXPECT_THROW((void)((*b1) && true), std::exception);
-  EXPECT_THROW((void)(true && (*b1)), std::exception);
-  EXPECT_THROW((void)((*b1) || (*b2)), std::exception);
-  EXPECT_THROW((void)((*b1) || false), std::exception);
-  EXPECT_THROW((void)(false || (*b1)), std::exception);
-  EXPECT_THROW((void)gdal::IfThenElse(*b1, *b1, *b2), std::exception);
-  EXPECT_THROW((void)gdal::IfThenElse(*b1, 1.0, *b2), std::exception);
-  EXPECT_THROW((void)gdal::IfThenElse(*b1, *b1, 2.0), std::exception);
-  EXPECT_THROW((void)gdal::IfThenElse(*b1, 1.0, 2.0), std::exception);
-  EXPECT_THROW((void)gdal::log(*b1), std::exception);
-  EXPECT_THROW((void)gdal::pow(*b1, *b2), std::exception);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_THROW(GDALRasterBand::ThrowIfNotSameDimensions(*b1, *b_diff),
+                 std::exception);
+    EXPECT_THROW((void)((*b1) > (*b2)), std::exception);
+    EXPECT_THROW((void)((*b1) > 1.0), std::exception);
+    EXPECT_THROW((void)(1.0 > (*b1)), std::exception);
+    EXPECT_THROW((void)((*b1) >= (*b2)), std::exception);
+    EXPECT_THROW((void)((*b1) >= 1.0), std::exception);
+    EXPECT_THROW((void)(1.0 >= (*b1)), std::exception);
+    EXPECT_THROW((void)((*b1) < (*b2)), std::exception);
+    EXPECT_THROW((void)((*b1) < 1.0), std::exception);
+    EXPECT_THROW((void)(1.0 < (*b1)), std::exception);
+    EXPECT_THROW((void)((*b1) <= (*b2)), std::exception);
+    EXPECT_THROW((void)((*b1) <= 1.0), std::exception);
+    EXPECT_THROW((void)(1.0 <= (*b1)), std::exception);
+    EXPECT_THROW((void)((*b1) == (*b2)), std::exception);
+    EXPECT_THROW((void)((*b1) == 1.0), std::exception);
+    EXPECT_THROW((void)(1.0 == (*b1)), std::exception);
+    EXPECT_THROW((void)((*b1) != (*b2)), std::exception);
+    EXPECT_THROW((void)((*b1) != 1.0), std::exception);
+    EXPECT_THROW((void)(1.0 != (*b1)), std::exception);
+    EXPECT_THROW((void)((*b1) && (*b2)), std::exception);
+    EXPECT_THROW((void)((*b1) && true), std::exception);
+    EXPECT_THROW((void)(true && (*b1)), std::exception);
+    EXPECT_THROW((void)((*b1) || (*b2)), std::exception);
+    EXPECT_THROW((void)((*b1) || false), std::exception);
+    EXPECT_THROW((void)(false || (*b1)), std::exception);
+    EXPECT_THROW((void)gdal::IfThenElse(*b1, *b1, *b2), std::exception);
+    EXPECT_THROW((void)gdal::IfThenElse(*b1, 1.0, *b2), std::exception);
+    EXPECT_THROW((void)gdal::IfThenElse(*b1, *b1, 2.0), std::exception);
+    EXPECT_THROW((void)gdal::IfThenElse(*b1, 1.0, 2.0), std::exception);
+    EXPECT_THROW((void)gdal::log(*b1), std::exception);
+    EXPECT_THROW((void)gdal::pow(*b1, *b2), std::exception);
+    CPLErrorReset();
+  }
 #endif
-
-  CPLPopErrorHandler();
 }
 
 }  // namespace
-}  // namespace gdal
+}  // namespace autotest2

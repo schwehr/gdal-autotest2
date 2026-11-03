@@ -1,4 +1,4 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,22 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests gcore/gdalmajorobject.cpp.
+// Tests GDALMajorObject C++ and C APIs (gcore/gdalmajorobject.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/gcore/gdalmajorobject.cpp
 
+#include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_cstringlist.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/gcore/gdal.h"
 #include "third_party/gdal/gcore/gdal_priv.h"
 #include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_string.h"
 
+namespace autotest2 {
 namespace {
+
+using ::testing::Contains;
+using ::testing::Not;
 
 class TestMajorObject : public GDALMajorObject {
  public:
   using GDALMajorObject::BuildMetadataDomainList;
 };
 
-TEST(GdalmajorobjectTest, CppAndCApi) {
+TEST(GdalMajorObjectTest, CppAndCApi) {
   TestMajorObject obj;
   GDALMajorObjectH handle = GDALMajorObject::ToHandle(&obj);
   EXPECT_EQ(&obj, GDALMajorObject::FromHandle(handle));
@@ -67,32 +78,55 @@ TEST(GdalmajorobjectTest, CppAndCApi) {
   EXPECT_STREQ("2", CSLFetchNameValue(fetched_md, "B"));
 
   // Domain list.
-  char** domains = GDALGetMetadataDomainList(handle);
+  StringListPtr domains(GDALGetMetadataDomainList(handle), CSLDestroy);
   ASSERT_NE(nullptr, domains);
-  EXPECT_GE(CSLFindString(domains, ""), 0);
-  EXPECT_GE(CSLFindString(domains, "SUBDOMAIN"), 0);
-  EXPECT_GE(CSLFindString(domains, "DOM2"), 0);
+  EXPECT_THAT(CslToVector(domains.get()), Contains(""));
+  EXPECT_THAT(CslToVector(domains.get()), Contains("SUBDOMAIN"));
+  EXPECT_THAT(CslToVector(domains.get()), Contains("DOM2"));
 
   // BuildMetadataDomainList with bCheckNonEmpty = TRUE and FALSE.
-  domains = obj.BuildMetadataDomainList(domains, TRUE, "SUBDOMAIN", "DOM2",
-                                        "EMPTY_DOM", nullptr);
-  EXPECT_LT(CSLFindString(domains, "EMPTY_DOM"), 0);
-  domains = obj.BuildMetadataDomainList(domains, FALSE, "EMPTY_DOM", nullptr);
-  EXPECT_GE(CSLFindString(domains, "EMPTY_DOM"), 0);
-  CSLDestroy(domains);
+  domains.reset(obj.BuildMetadataDomainList(
+      domains.release(), TRUE, "SUBDOMAIN", "DOM2", "EMPTY_DOM", nullptr));
+  EXPECT_THAT(CslToVector(domains.get()), Not(Contains("EMPTY_DOM")));
+  domains.reset(obj.BuildMetadataDomainList(domains.release(), FALSE,
+                                            "EMPTY_DOM", nullptr));
+  EXPECT_THAT(CslToVector(domains.get()), Contains("EMPTY_DOM"));
 
   // Null handle checks for C API.
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(nullptr, GDALGetDescription(nullptr));
-  GDALSetDescription(nullptr, "ignored");
-  EXPECT_EQ(nullptr, GDALGetMetadataDomainList(nullptr));
-  EXPECT_EQ(nullptr, GDALGetMetadata(nullptr, nullptr));
-  EXPECT_EQ(CE_Failure, GDALSetMetadata(nullptr, nullptr, nullptr));
-  EXPECT_EQ(nullptr, GDALGetMetadataItem(nullptr, "K", nullptr));
-  EXPECT_EQ(CE_Failure, GDALSetMetadataItem(nullptr, "K", "V", nullptr));
-  CPLPopErrorHandler();
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, GDALGetDescription(nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
 
-  // Exercise destructor path when GMO_VALID is cleared.
+    GDALSetDescription(nullptr, "ignored");
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+
+    EXPECT_EQ(nullptr, GDALGetMetadataDomainList(nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+
+    EXPECT_EQ(nullptr, GDALGetMetadata(nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+
+    EXPECT_EQ(CE_Failure, GDALSetMetadata(nullptr, nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+
+    EXPECT_EQ(nullptr, GDALGetMetadataItem(nullptr, "K", nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+
+    EXPECT_EQ(CE_Failure, GDALSetMetadataItem(nullptr, "K", "V", nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
+
+  // Exercise destructor when GMO_VALID is cleared (CPLDebug branch inside
+  // ~GDALMajorObject is compiled out in google3 via WITHOUT_CPLDEBUG).
   {
     TestMajorObject invalid_obj;
     invalid_obj.SetMOFlags(0);
@@ -100,3 +134,4 @@ TEST(GdalmajorobjectTest, CppAndCApi) {
 }
 
 }  // namespace
+}  // namespace autotest2
