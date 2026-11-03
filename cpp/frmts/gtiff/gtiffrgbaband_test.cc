@@ -11,15 +11,23 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Tests RGBA pseudo-band color interpretation, CMYK-to-RGBA decoding,
+// coverage status, and sparse/error handling (gtiffrgbaband.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/frmts/gtiff/gtiffrgbaband.cpp
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "testing/base/public/gunit.h"
 #include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_frmts.h"
 #include "third_party/gdal/gcore/gdal_priv.h"
-#include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
 #include "third_party/gdal/port/cpl_string.h"
 #include "third_party/gdal/port/cpl_vsi.h"
@@ -30,9 +38,10 @@ namespace {
 class GTiffRGBABandTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    GDALAllRegister();
+    GDALRegister_GTiff();
+    CPLErrorReset();
     driver_ = GetGDALDriverManager()->GetDriverByName("GTiff");
-    ASSERT_NE(driver_, nullptr);
+    ASSERT_NE(nullptr, driver_);
   }
 
   void TearDown() override { CPLErrorReset(); }
@@ -49,60 +58,60 @@ TEST_F(GTiffRGBABandTest, StrippedContigPartialStripAndWriteReject) {
   constexpr int kWidth = 16;
   constexpr int kHeight = 20;  // 2 strips of 16 -> final strip has 4 rows
 
-  char** options = nullptr;
-  options = CSLSetNameValue(options, "PHOTOMETRIC", "CMYK");
-  options = CSLSetNameValue(options, "INTERLEAVE", "PIXEL");
-  options = CSLSetNameValue(options, "BLOCKYSIZE", "16");
-  GDALDataset* ds =
-      driver_->Create(kFilename, kWidth, kHeight, 4, GDT_Byte, options);
-  CSLDestroy(options);
-  ASSERT_NE(ds, nullptr);
+  {
+    CPLStringList options;
+    options.AddNameValue("PHOTOMETRIC", "CMYK");
+    options.AddNameValue("INTERLEAVE", "PIXEL");
+    options.AddNameValue("BLOCKYSIZE", "16");
+    GDALDatasetUniquePtr ds(driver_->Create(kFilename, kWidth, kHeight, 4,
+                                            GDT_Byte, options.List()));
+    ASSERT_NE(nullptr, ds);
 
-  std::vector<uint8_t> data(kWidth * kHeight, 50);
-  for (int b = 1; b <= 4; ++b) {
-    ASSERT_EQ(ds->GetRasterBand(b)->RasterIO(GF_Write, 0, 0, kWidth, kHeight,
-                                             data.data(), kWidth, kHeight,
-                                             GDT_Byte, 0, 0, nullptr),
-              CE_None);
+    std::vector<uint8_t> data(kWidth * kHeight, 50);
+    for (int b = 1; b <= 4; ++b) {
+      ASSERT_EQ(CE_None, ds->GetRasterBand(b)->RasterIO(
+                             GF_Write, 0, 0, kWidth, kHeight, data.data(),
+                             kWidth, kHeight, GDT_Byte, 0, 0, nullptr));
+    }
   }
-  GDALClose(ds);
 
-  GDALDataset* read_ds =
-      static_cast<GDALDataset*>(GDALOpen(kFilename, GA_Update));
-  ASSERT_NE(read_ds, nullptr);
-  absl::Cleanup close_read_ds = [&]() { GDALClose(read_ds); };
+  GDALDatasetUniquePtr read_ds(
+      GDALDataset::Open(kFilename, GDAL_OF_RASTER | GDAL_OF_UPDATE));
+  ASSERT_NE(nullptr, read_ds);
 
-  ASSERT_EQ(read_ds->GetRasterCount(), 4);
-  EXPECT_EQ(read_ds->GetRasterBand(1)->GetColorInterpretation(), GCI_RedBand);
-  EXPECT_EQ(read_ds->GetRasterBand(2)->GetColorInterpretation(), GCI_GreenBand);
-  EXPECT_EQ(read_ds->GetRasterBand(3)->GetColorInterpretation(), GCI_BlueBand);
-  EXPECT_EQ(read_ds->GetRasterBand(4)->GetColorInterpretation(), GCI_AlphaBand);
+  ASSERT_EQ(4, read_ds->GetRasterCount());
+  EXPECT_EQ(GCI_RedBand, read_ds->GetRasterBand(1)->GetColorInterpretation());
+  EXPECT_EQ(GCI_GreenBand, read_ds->GetRasterBand(2)->GetColorInterpretation());
+  EXPECT_EQ(GCI_BlueBand, read_ds->GetRasterBand(3)->GetColorInterpretation());
+  EXPECT_EQ(GCI_AlphaBand, read_ds->GetRasterBand(4)->GetColorInterpretation());
 
   GDALRasterBand* b1 = read_ds->GetRasterBand(1);
   int status = b1->GetDataCoverageStatus(0, 0, 1, 1, 0, nullptr);
-  EXPECT_TRUE(status & GDAL_DATA_COVERAGE_STATUS_DATA);
+  EXPECT_NE(0, status & GDAL_DATA_COVERAGE_STATUS_DATA);
 
-  int block_x = 0, block_y = 0;
+  int block_x = 0;
+  int block_y = 0;
   b1->GetBlockSize(&block_x, &block_y);
   std::vector<uint8_t> block_buf(block_x * block_y, 0);
 
   // IWriteBlock rejects writes on RGBA bands.
   {
-    CPLErrorStateBackuper quiet_errors(CPLQuietErrorHandler);
-    EXPECT_EQ(b1->WriteBlock(0, 0, block_buf.data()), CE_Failure);
+    WithQuietHandler quiet;
+    EXPECT_EQ(CE_Failure, b1->WriteBlock(0, 0, block_buf.data()));
+    CPLErrorReset();
   }
 
   // Read full strip 0 and partial strip 1. libtiff converts CMYK to RGB as
   // r = (255 - K) * (255 - C) / 255, so C=M=Y=K=50 -> 205 * 205 / 255 = 164,
   // and the synthesized alpha is always 255.
-  ASSERT_EQ(b1->ReadBlock(0, 0, block_buf.data()), CE_None);
-  EXPECT_EQ(block_buf[0], 164);
-  ASSERT_EQ(b1->ReadBlock(0, 1, block_buf.data()), CE_None);
-  EXPECT_EQ(block_buf[0], 164);
+  ASSERT_EQ(CE_None, b1->ReadBlock(0, 0, block_buf.data()));
+  EXPECT_EQ(164, block_buf[0]);
+  ASSERT_EQ(CE_None, b1->ReadBlock(0, 1, block_buf.data()));
+  EXPECT_EQ(164, block_buf[0]);
   std::vector<uint8_t> alpha_buf(block_x * block_y, 0);
-  ASSERT_EQ(read_ds->GetRasterBand(4)->ReadBlock(0, 0, alpha_buf.data()),
-            CE_None);
-  EXPECT_EQ(alpha_buf[0], 255);
+  ASSERT_EQ(CE_None,
+            read_ds->GetRasterBand(4)->ReadBlock(0, 0, alpha_buf.data()));
+  EXPECT_EQ(255, alpha_buf[0]);
 }
 
 // Tests PLANARCONFIG_SEPARATE (INTERLEAVE=BAND) and missing sparse blocks.
@@ -118,70 +127,70 @@ TEST_F(GTiffRGBABandTest, SeparatePlanarAndSparseBlocks) {
 
   // 1. Valid INTERLEAVE=BAND CMYK file.
   {
-    char** options = nullptr;
-    options = CSLSetNameValue(options, "PHOTOMETRIC", "CMYK");
-    options = CSLSetNameValue(options, "INTERLEAVE", "BAND");
-    options = CSLSetNameValue(options, "BLOCKYSIZE", "16");
-    GDALDataset* ds = driver_->Create(kFilename, 16, 16, 4, GDT_Byte, options);
-    CSLDestroy(options);
-    ASSERT_NE(ds, nullptr);
-    std::vector<uint8_t> data(16 * 16, 20);
-    for (int b = 1; b <= 4; ++b) {
-      ASSERT_EQ(
-          ds->GetRasterBand(b)->RasterIO(GF_Write, 0, 0, 16, 16, data.data(),
-                                         16, 16, GDT_Byte, 0, 0, nullptr),
-          CE_None);
+    {
+      CPLStringList options;
+      options.AddNameValue("PHOTOMETRIC", "CMYK");
+      options.AddNameValue("INTERLEAVE", "BAND");
+      options.AddNameValue("BLOCKYSIZE", "16");
+      GDALDatasetUniquePtr ds(
+          driver_->Create(kFilename, 16, 16, 4, GDT_Byte, options.List()));
+      ASSERT_NE(nullptr, ds);
+      std::vector<uint8_t> data(16 * 16, 20);
+      for (int b = 1; b <= 4; ++b) {
+        ASSERT_EQ(CE_None, ds->GetRasterBand(b)->RasterIO(
+                               GF_Write, 0, 0, 16, 16, data.data(), 16, 16,
+                               GDT_Byte, 0, 0, nullptr));
+      }
     }
-    GDALClose(ds);
 
-    GDALDataset* read_ds =
-        static_cast<GDALDataset*>(GDALOpen(kFilename, GA_ReadOnly));
-    ASSERT_NE(read_ds, nullptr);
-    absl::Cleanup close_read = [&]() { GDALClose(read_ds); };
+    GDALDatasetUniquePtr read_ds(
+        GDALDataset::Open(kFilename, GDAL_OF_RASTER | GDAL_OF_READONLY));
+    ASSERT_NE(nullptr, read_ds);
     std::vector<uint8_t> buf(16 * 16, 0);
-    EXPECT_EQ(read_ds->GetRasterBand(1)->ReadBlock(0, 0, buf.data()), CE_None);
+    EXPECT_EQ(CE_None, read_ds->GetRasterBand(1)->ReadBlock(0, 0, buf.data()));
   }
 
   // 2. Sparse contiguous CMYK file (unwritten block -> IsBlockAvailable false).
   {
-    char** options = nullptr;
-    options = CSLSetNameValue(options, "PHOTOMETRIC", "CMYK");
-    options = CSLSetNameValue(options, "SPARSE_OK", "YES");
-    GDALDataset* ds =
-        driver_->Create(kSparseContig, 16, 16, 4, GDT_Byte, options);
-    CSLDestroy(options);
-    ASSERT_NE(ds, nullptr);
-    GDALClose(ds);
+    {
+      CPLStringList options;
+      options.AddNameValue("PHOTOMETRIC", "CMYK");
+      options.AddNameValue("SPARSE_OK", "YES");
+      GDALDatasetUniquePtr ds(
+          driver_->Create(kSparseContig, 16, 16, 4, GDT_Byte, options.List()));
+      ASSERT_NE(nullptr, ds);
+    }
 
-    GDALDataset* read_ds =
-        static_cast<GDALDataset*>(GDALOpen(kSparseContig, GA_ReadOnly));
-    ASSERT_NE(read_ds, nullptr);
-    absl::Cleanup close_read = [&]() { GDALClose(read_ds); };
+    GDALDatasetUniquePtr read_ds(
+        GDALDataset::Open(kSparseContig, GDAL_OF_RASTER | GDAL_OF_READONLY));
+    ASSERT_NE(nullptr, read_ds);
     std::vector<uint8_t> buf(16 * 16, 0);
-    CPLErrorStateBackuper quiet_errors(CPLQuietErrorHandler);
-    EXPECT_EQ(read_ds->GetRasterBand(1)->ReadBlock(0, 0, buf.data()),
-              CE_Failure);
+    WithQuietHandler quiet;
+    EXPECT_EQ(CE_Failure,
+              read_ds->GetRasterBand(1)->ReadBlock(0, 0, buf.data()));
+    CPLErrorReset();
   }
 
   // 3. Sparse separate CMYK file.
   {
-    char** options = nullptr;
-    options = CSLSetNameValue(options, "PHOTOMETRIC", "CMYK");
-    options = CSLSetNameValue(options, "INTERLEAVE", "BAND");
-    options = CSLSetNameValue(options, "SPARSE_OK", "YES");
-    GDALDataset* ds = driver_->Create(kSparseSep, 16, 16, 4, GDT_Byte, options);
-    CSLDestroy(options);
-    ASSERT_NE(ds, nullptr);
-    GDALClose(ds);
+    {
+      CPLStringList options;
+      options.AddNameValue("PHOTOMETRIC", "CMYK");
+      options.AddNameValue("INTERLEAVE", "BAND");
+      options.AddNameValue("SPARSE_OK", "YES");
+      GDALDatasetUniquePtr ds(
+          driver_->Create(kSparseSep, 16, 16, 4, GDT_Byte, options.List()));
+      ASSERT_NE(nullptr, ds);
+    }
 
-    GDALDataset* read_ds =
-        static_cast<GDALDataset*>(GDALOpen(kSparseSep, GA_ReadOnly));
-    ASSERT_NE(read_ds, nullptr);
-    absl::Cleanup close_read = [&]() { GDALClose(read_ds); };
+    GDALDatasetUniquePtr read_ds(
+        GDALDataset::Open(kSparseSep, GDAL_OF_RASTER | GDAL_OF_READONLY));
+    ASSERT_NE(nullptr, read_ds);
     std::vector<uint8_t> buf(16 * 16, 0);
-    CPLErrorStateBackuper quiet_errors(CPLQuietErrorHandler);
-    EXPECT_EQ(read_ds->GetRasterBand(1)->ReadBlock(0, 0, buf.data()),
-              CE_Failure);
+    WithQuietHandler quiet;
+    EXPECT_EQ(CE_Failure,
+              read_ds->GetRasterBand(1)->ReadBlock(0, 0, buf.data()));
+    CPLErrorReset();
   }
 }
 
@@ -196,88 +205,87 @@ TEST_F(GTiffRGBABandTest, TiledReadAndCorruptedReadFailures) {
 
   // 1. Tiled LZW CMYK: valid read of tile (0,0), then corrupt tile (1,0).
   {
-    char** options = nullptr;
-    options = CSLSetNameValue(options, "PHOTOMETRIC", "CMYK");
-    options = CSLSetNameValue(options, "TILED", "YES");
-    options = CSLSetNameValue(options, "BLOCKXSIZE", "16");
-    options = CSLSetNameValue(options, "BLOCKYSIZE", "16");
-    options = CSLSetNameValue(options, "COMPRESS", "LZW");
-    GDALDataset* ds = driver_->Create(kTiledFile, 32, 16, 4, GDT_Byte, options);
-    CSLDestroy(options);
-    ASSERT_NE(ds, nullptr);
-    std::vector<uint8_t> data(32 * 16);
-    for (size_t i = 0; i < data.size(); ++i) {
-      data[i] = static_cast<uint8_t>((i * 73 + 11) % 256);
+    {
+      CPLStringList options;
+      options.AddNameValue("PHOTOMETRIC", "CMYK");
+      options.AddNameValue("TILED", "YES");
+      options.AddNameValue("BLOCKXSIZE", "16");
+      options.AddNameValue("BLOCKYSIZE", "16");
+      options.AddNameValue("COMPRESS", "LZW");
+      GDALDatasetUniquePtr ds(
+          driver_->Create(kTiledFile, 32, 16, 4, GDT_Byte, options.List()));
+      ASSERT_NE(nullptr, ds);
+      std::vector<uint8_t> data(32 * 16);
+      for (size_t i = 0; i < data.size(); ++i) {
+        data[i] = static_cast<uint8_t>((i * 73 + 11) % 256);
+      }
+      for (int b = 1; b <= 4; ++b) {
+        ASSERT_EQ(CE_None, ds->GetRasterBand(b)->RasterIO(
+                               GF_Write, 0, 0, 32, 16, data.data(), 32, 16,
+                               GDT_Byte, 0, 0, nullptr));
+      }
     }
-    for (int b = 1; b <= 4; ++b) {
-      ASSERT_EQ(
-          ds->GetRasterBand(b)->RasterIO(GF_Write, 0, 0, 32, 16, data.data(),
-                                         32, 16, GDT_Byte, 0, 0, nullptr),
-          CE_None);
-    }
-    GDALClose(ds);
 
-    GDALDataset* read_ds =
-        static_cast<GDALDataset*>(GDALOpen(kTiledFile, GA_ReadOnly));
-    ASSERT_NE(read_ds, nullptr);
-    absl::Cleanup close_read = [&]() { GDALClose(read_ds); };
+    GDALDatasetUniquePtr read_ds(
+        GDALDataset::Open(kTiledFile, GDAL_OF_RASTER | GDAL_OF_READONLY));
+    ASSERT_NE(nullptr, read_ds);
 
     std::vector<uint8_t> buf(16 * 16, 0);
-    ASSERT_EQ(read_ds->GetRasterBand(1)->ReadBlock(0, 0, buf.data()), CE_None);
+    ASSERT_EQ(CE_None, read_ds->GetRasterBand(1)->ReadBlock(0, 0, buf.data()));
 
     // Corrupt tail of file (tile 1,0 LZW stream).
     vsi_l_offset len = 0;
     GByte* mem = VSIGetMemFileBuffer(kTiledFile, &len, FALSE);
-    ASSERT_NE(mem, nullptr);
+    ASSERT_NE(nullptr, mem);
     ASSERT_GE(len, 100u);
     for (vsi_l_offset i = len - 100; i < len; ++i) {
       mem[i] = 0xFF;
     }
 
-    CPLErrorStateBackuper quiet_errors(CPLQuietErrorHandler);
-    EXPECT_EQ(read_ds->GetRasterBand(1)->ReadBlock(1, 0, buf.data()),
-              CE_Failure);
+    WithQuietHandler quiet;
+    EXPECT_EQ(CE_Failure,
+              read_ds->GetRasterBand(1)->ReadBlock(1, 0, buf.data()));
+    CPLErrorReset();
   }
 
   // 2. Stripped LZW CMYK corrupted strip -> TIFFReadRGBAStripExt fails.
   {
-    char** options = nullptr;
-    options = CSLSetNameValue(options, "PHOTOMETRIC", "CMYK");
-    options = CSLSetNameValue(options, "BLOCKYSIZE", "16");
-    options = CSLSetNameValue(options, "COMPRESS", "LZW");
-    GDALDataset* ds =
-        driver_->Create(kStrippedCorrupt, 16, 16, 4, GDT_Byte, options);
-    CSLDestroy(options);
-    ASSERT_NE(ds, nullptr);
-    std::vector<uint8_t> data(16 * 16);
-    for (size_t i = 0; i < data.size(); ++i) {
-      data[i] = static_cast<uint8_t>((i * 97 + 3) % 256);
+    {
+      CPLStringList options;
+      options.AddNameValue("PHOTOMETRIC", "CMYK");
+      options.AddNameValue("BLOCKYSIZE", "16");
+      options.AddNameValue("COMPRESS", "LZW");
+      GDALDatasetUniquePtr ds(driver_->Create(kStrippedCorrupt, 16, 16, 4,
+                                              GDT_Byte, options.List()));
+      ASSERT_NE(nullptr, ds);
+      std::vector<uint8_t> data(16 * 16);
+      for (size_t i = 0; i < data.size(); ++i) {
+        data[i] = static_cast<uint8_t>((i * 97 + 3) % 256);
+      }
+      for (int b = 1; b <= 4; ++b) {
+        ASSERT_EQ(CE_None, ds->GetRasterBand(b)->RasterIO(
+                               GF_Write, 0, 0, 16, 16, data.data(), 16, 16,
+                               GDT_Byte, 0, 0, nullptr));
+      }
     }
-    for (int b = 1; b <= 4; ++b) {
-      ASSERT_EQ(
-          ds->GetRasterBand(b)->RasterIO(GF_Write, 0, 0, 16, 16, data.data(),
-                                         16, 16, GDT_Byte, 0, 0, nullptr),
-          CE_None);
-    }
-    GDALClose(ds);
 
-    GDALDataset* read_ds =
-        static_cast<GDALDataset*>(GDALOpen(kStrippedCorrupt, GA_ReadOnly));
-    ASSERT_NE(read_ds, nullptr);
-    absl::Cleanup close_read = [&]() { GDALClose(read_ds); };
+    GDALDatasetUniquePtr read_ds(
+        GDALDataset::Open(kStrippedCorrupt, GDAL_OF_RASTER | GDAL_OF_READONLY));
+    ASSERT_NE(nullptr, read_ds);
 
     vsi_l_offset len = 0;
     GByte* mem = VSIGetMemFileBuffer(kStrippedCorrupt, &len, FALSE);
-    ASSERT_NE(mem, nullptr);
+    ASSERT_NE(nullptr, mem);
     ASSERT_GE(len, 100u);
     for (vsi_l_offset i = len - 100; i < len; ++i) {
       mem[i] = 0xFF;
     }
 
-    CPLErrorStateBackuper quiet_errors(CPLQuietErrorHandler);
+    WithQuietHandler quiet;
     std::vector<uint8_t> buf(16 * 16, 0);
-    EXPECT_EQ(read_ds->GetRasterBand(1)->ReadBlock(0, 0, buf.data()),
-              CE_Failure);
+    EXPECT_EQ(CE_Failure,
+              read_ds->GetRasterBand(1)->ReadBlock(0, 0, buf.data()));
+    CPLErrorReset();
   }
 }
 

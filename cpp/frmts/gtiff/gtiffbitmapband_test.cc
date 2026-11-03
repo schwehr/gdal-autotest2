@@ -11,13 +11,21 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Tests 1-bit GeoTIFF bitmap raster band color table and internal mask
+// behavior (gtiffbitmapband.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/frmts/gtiff/gtiffbitmapband.cpp
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "testing/base/public/gunit.h"
 #include "third_party/absl/cleanup/cleanup.h"
 #include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_frmts.h"
 #include "third_party/gdal/gcore/gdal_priv.h"
 #include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
@@ -30,9 +38,10 @@ namespace {
 class GTiffBitmapBandTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    GDALAllRegister();
+    GDALRegister_GTiff();
+    CPLErrorReset();
     driver_ = GetGDALDriverManager()->GetDriverByName("GTiff");
-    ASSERT_NE(driver_, nullptr);
+    ASSERT_NE(nullptr, driver_);
   }
 
   void TearDown() override { CPLErrorReset(); }
@@ -45,38 +54,38 @@ TEST_F(GTiffBitmapBandTest, MinIsBlackAndColorInterp) {
   constexpr char kFilename[] = "/vsimem/bitmap_minisblack.tif";
   absl::Cleanup cleanup = [&]() { VSIUnlink(kFilename); };
 
-  char** options = nullptr;
-  options = CSLSetNameValue(options, "NBITS", "1");
-  GDALDataset* ds = driver_->Create(kFilename, 16, 16, 1, GDT_Byte, options);
-  CSLDestroy(options);
-  ASSERT_NE(ds, nullptr);
+  {
+    CPLStringList options;
+    options.AddNameValue("NBITS", "1");
+    GDALDatasetUniquePtr ds(
+        driver_->Create(kFilename, 16, 16, 1, GDT_Byte, options.List()));
+    ASSERT_NE(nullptr, ds);
 
-  std::vector<uint8_t> data(16 * 16, 0);
-  data[0] = 1;
-  ASSERT_EQ(ds->GetRasterBand(1)->RasterIO(GF_Write, 0, 0, 16, 16, data.data(),
-                                           16, 16, GDT_Byte, 0, 0, nullptr),
-            CE_None);
-  GDALClose(ds);
+    std::vector<uint8_t> data(16 * 16, 0);
+    data[0] = 1;
+    ASSERT_EQ(CE_None, ds->GetRasterBand(1)->RasterIO(GF_Write, 0, 0, 16, 16,
+                                                      data.data(), 16, 16,
+                                                      GDT_Byte, 0, 0, nullptr));
+  }
 
-  GDALDataset* read_ds =
-      static_cast<GDALDataset*>(GDALOpen(kFilename, GA_Update));
-  ASSERT_NE(read_ds, nullptr);
-  absl::Cleanup close_read_ds = [&]() { GDALClose(read_ds); };
+  GDALDatasetUniquePtr read_ds(
+      GDALDataset::Open(kFilename, GDAL_OF_RASTER | GDAL_OF_UPDATE));
+  ASSERT_NE(nullptr, read_ds);
 
   GDALRasterBand* band = read_ds->GetRasterBand(1);
-  ASSERT_NE(band, nullptr);
-  EXPECT_EQ(band->GetRasterDataType(), GDT_Byte);
-  EXPECT_EQ(band->GetColorInterpretation(), GCI_PaletteIndex);
+  ASSERT_NE(nullptr, band);
+  EXPECT_EQ(GDT_Byte, band->GetRasterDataType());
+  EXPECT_EQ(GCI_PaletteIndex, band->GetColorInterpretation());
 
   GDALColorTable* ct = band->GetColorTable();
-  ASSERT_NE(ct, nullptr);
-  ASSERT_EQ(ct->GetColorEntryCount(), 2);
-  EXPECT_EQ(ct->GetColorEntry(0)->c1, 0);
-  EXPECT_EQ(ct->GetColorEntry(1)->c1, 255);
+  ASSERT_NE(nullptr, ct);
+  ASSERT_EQ(2, ct->GetColorEntryCount());
+  EXPECT_EQ(0, ct->GetColorEntry(0)->c1);
+  EXPECT_EQ(255, ct->GetColorEntry(1)->c1);
 
   // SetColorInterpretation with matching value and non-matching value.
-  EXPECT_EQ(band->SetColorInterpretation(GCI_PaletteIndex), CE_None);
-  EXPECT_EQ(band->SetColorInterpretation(GCI_GrayIndex), CE_None);
+  EXPECT_EQ(CE_None, band->SetColorInterpretation(GCI_PaletteIndex));
+  EXPECT_EQ(CE_None, band->SetColorInterpretation(GCI_GrayIndex));
 }
 
 // Tests 1-bit MINISWHITE bitmap band (clones dataset-level inverted palette).
@@ -84,26 +93,26 @@ TEST_F(GTiffBitmapBandTest, MinIsWhiteClonesDatasetColorTable) {
   constexpr char kFilename[] = "/vsimem/bitmap_miniswhite.tif";
   absl::Cleanup cleanup = [&]() { VSIUnlink(kFilename); };
 
-  char** options = nullptr;
-  options = CSLSetNameValue(options, "NBITS", "1");
-  options = CSLSetNameValue(options, "PHOTOMETRIC", "MINISWHITE");
-  GDALDataset* ds = driver_->Create(kFilename, 16, 16, 1, GDT_Byte, options);
-  CSLDestroy(options);
-  ASSERT_NE(ds, nullptr);
-  GDALClose(ds);
+  {
+    CPLStringList options;
+    options.AddNameValue("NBITS", "1");
+    options.AddNameValue("PHOTOMETRIC", "MINISWHITE");
+    GDALDatasetUniquePtr ds(
+        driver_->Create(kFilename, 16, 16, 1, GDT_Byte, options.List()));
+    ASSERT_NE(nullptr, ds);
+  }
 
-  GDALDataset* read_ds =
-      static_cast<GDALDataset*>(GDALOpen(kFilename, GA_ReadOnly));
-  ASSERT_NE(read_ds, nullptr);
-  absl::Cleanup close_read_ds = [&]() { GDALClose(read_ds); };
+  GDALDatasetUniquePtr read_ds(
+      GDALDataset::Open(kFilename, GDAL_OF_RASTER | GDAL_OF_READONLY));
+  ASSERT_NE(nullptr, read_ds);
 
   GDALRasterBand* band = read_ds->GetRasterBand(1);
-  ASSERT_NE(band, nullptr);
+  ASSERT_NE(nullptr, band);
   GDALColorTable* ct = band->GetColorTable();
-  ASSERT_NE(ct, nullptr);
-  ASSERT_EQ(ct->GetColorEntryCount(), 2);
-  EXPECT_EQ(ct->GetColorEntry(0)->c1, 255);
-  EXPECT_EQ(ct->GetColorEntry(1)->c1, 0);
+  ASSERT_NE(nullptr, ct);
+  ASSERT_EQ(2, ct->GetColorEntryCount());
+  EXPECT_EQ(255, ct->GetColorEntry(0)->c1);
+  EXPECT_EQ(0, ct->GetColorEntry(1)->c1);
 }
 
 // Tests internal mask bitmap band where m_bPromoteTo8Bits is true.
@@ -112,26 +121,29 @@ TEST_F(GTiffBitmapBandTest, InternalMaskPromoteTo8Bits) {
   absl::Cleanup cleanup = [&]() { VSIUnlink(kFilename); };
 
   CPLConfigOptionSetter internal_mask("GDAL_TIFF_INTERNAL_MASK", "YES", false);
-  GDALDataset* ds = driver_->Create(kFilename, 16, 16, 1, GDT_Byte, nullptr);
-  ASSERT_NE(ds, nullptr);
-  ASSERT_EQ(ds->CreateMaskBand(GMF_PER_DATASET), CE_None);
+  {
+    GDALDatasetUniquePtr ds(
+        driver_->Create(kFilename, 16, 16, 1, GDT_Byte, nullptr));
+    ASSERT_NE(nullptr, ds);
+    ASSERT_EQ(CE_None, ds->CreateMaskBand(GMF_PER_DATASET));
 
-  GDALRasterBand* mask_band = ds->GetRasterBand(1)->GetMaskBand();
-  ASSERT_NE(mask_band, nullptr);
-  EXPECT_EQ(mask_band->GetColorInterpretation(), GCI_Undefined);
-  EXPECT_EQ(mask_band->GetColorTable(), nullptr);
-  GDALClose(ds);
+    GDALRasterBand* mask_band = ds->GetRasterBand(1)->GetMaskBand();
+    ASSERT_NE(nullptr, mask_band);
+    EXPECT_EQ(GCI_Undefined, mask_band->GetColorInterpretation());
+    EXPECT_EQ(nullptr, mask_band->GetColorTable());
+  }
 
-  GDALDataset* read_ds =
-      static_cast<GDALDataset*>(GDALOpen(kFilename, GA_ReadOnly));
-  ASSERT_NE(read_ds, nullptr);
-  absl::Cleanup close_read_ds = [&]() { GDALClose(read_ds); };
+  GDALDatasetUniquePtr read_ds(
+      GDALDataset::Open(kFilename, GDAL_OF_RASTER | GDAL_OF_READONLY));
+  ASSERT_NE(nullptr, read_ds);
 
   GDALRasterBand* read_mask = read_ds->GetRasterBand(1)->GetMaskBand();
-  ASSERT_NE(read_mask, nullptr);
-  EXPECT_EQ(read_mask->GetColorInterpretation(), GCI_Undefined);
-  EXPECT_EQ(read_mask->GetColorTable(), nullptr);
+  ASSERT_NE(nullptr, read_mask);
+  EXPECT_EQ(GCI_Undefined, read_mask->GetColorInterpretation());
+  EXPECT_EQ(nullptr, read_mask->GetColorTable());
 }
 
+// TODO: b/335317901 - Cover remaining defensive nullptr/error branches in
+// gtiffbitmapband.cpp (~91.2% coverage today).
 }  // namespace
 }  // namespace autotest2
