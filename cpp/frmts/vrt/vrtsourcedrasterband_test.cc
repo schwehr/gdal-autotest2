@@ -11,15 +11,27 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Tests the VRTSourcedRasterBand class (vrtsourcedrasterband.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/frmts/vrt/vrtsourcedrasterband.cpp
+//   https://gdal.org/drivers/raster/vrt.html
 
 #include <algorithm>
-#include <climits>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
+#include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_cstringlist.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
+#include "third_party/gdal/autotest2/cpp/util/vsimem.h"
 #include "third_party/gdal/frmts/vrt/gdal_vrt.h"
 #include "third_party/gdal/frmts/vrt/vrtdataset.h"
 #include "third_party/gdal/gcore/gdal.h"
@@ -33,7 +45,12 @@
 #include "third_party/gdal/port/cpl_string.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 
+namespace autotest2 {
 namespace {
+
+using ::testing::HasSubstr;
+
+constexpr char kTestDir[] = "/vsimem/vrtsourcedrasterband_test";
 
 CPLErr MyImageReadFunc(void* /*hCBData*/, int /*nXOff*/, int /*nYOff*/,
                        int nXSize, int nYSize, void* pData) {
@@ -42,362 +59,340 @@ CPLErr MyImageReadFunc(void* /*hCBData*/, int /*nXOff*/, int /*nYOff*/,
   return CE_None;
 }
 
-class VRTSourcedRasterBandTest : public ::testing::Test {
+class VrtSourcedRasterBandTest : public ::testing::Test {
  protected:
-  static void SetUpTestSuite() { GDALAllRegister(); }
+  void SetUp() override {
+    GDALRegister_VRT();
+    GDALRegister_GTiff();
+    GDALRegister_MEM();
+  }
 
-  void TearDown() override {
-    for (const auto& filename : to_unlink_) {
-      VSIUnlink(filename.c_str());
+  void TearDown() override { VSIRmdirRecursive(kTestDir); }
+
+  void CreateByteGeoTiff(const char* filename, int xsize, int ysize,
+                         std::optional<GByte> fill_value = std::nullopt) {
+    GDALDriver* poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
+    ASSERT_NE(nullptr, poDrv);
+    GDALDatasetUniquePtr poDS(
+        poDrv->Create(filename, xsize, ysize, 1, GDT_Byte, nullptr));
+    ASSERT_NE(nullptr, poDS);
+    if (fill_value.has_value()) {
+      std::vector<GByte> line(xsize, *fill_value);
+      for (int y = 0; y < ysize; ++y) {
+        ASSERT_EQ(CE_None, poDS->GetRasterBand(1)->RasterIO(
+                               GF_Write, 0, y, xsize, 1, line.data(), xsize, 1,
+                               GDT_Byte, 0, 0));
+      }
     }
-    to_unlink_.clear();
+    poDS->FlushCache(false);
   }
-
-  void TrackFile(const std::string& filename) {
-    to_unlink_.push_back(filename);
-  }
-
- private:
-  std::vector<std::string> to_unlink_;
 };
 
-// 1. Constructors and Accessors
-TEST_F(VRTSourcedRasterBandTest, ConstructorsAndAccessors) {
+TEST_F(VrtSourcedRasterBandTest, ConstructorsAndAccessors) {
   VRTDataset ds(20, 30);
 
-  // Constructor 1: (ds, band)
+  // 1. Constructor (ds, band).
   VRTSourcedRasterBand band1(&ds, 1);
   EXPECT_TRUE(band1.IsSourcedRasterBand());
-  EXPECT_EQ(band1.GetXSize(), 20);
-  EXPECT_EQ(band1.GetYSize(), 30);
-  EXPECT_EQ(band1.GetBand(), 1);
-  EXPECT_EQ(band1.GetDataset(), &ds);
+  EXPECT_EQ(20, band1.GetXSize());
+  EXPECT_EQ(30, band1.GetYSize());
+  EXPECT_EQ(1, band1.GetBand());
+  EXPECT_EQ(&ds, band1.GetDataset());
 
-  // Constructor 2: (type, xsize, ysize)
+  // 2. Constructor (type, xsize, ysize).
   VRTSourcedRasterBand band2(GDT_Float32, 15, 25);
   EXPECT_TRUE(band2.IsSourcedRasterBand());
-  EXPECT_EQ(band2.GetRasterDataType(), GDT_Float32);
-  EXPECT_EQ(band2.GetXSize(), 15);
-  EXPECT_EQ(band2.GetYSize(), 25);
+  EXPECT_EQ(GDT_Float32, band2.GetRasterDataType());
+  EXPECT_EQ(15, band2.GetXSize());
+  EXPECT_EQ(25, band2.GetYSize());
 
-  // Constructor 3: (ds, band, type, xsize, ysize)
+  // 3. Constructor (ds, band, type, xsize, ysize).
   VRTSourcedRasterBand band3(&ds, 2, GDT_Int16, 20, 30);
   EXPECT_TRUE(band3.IsSourcedRasterBand());
-  EXPECT_EQ(band3.GetRasterDataType(), GDT_Int16);
-  EXPECT_EQ(band3.GetBand(), 2);
+  EXPECT_EQ(GDT_Int16, band3.GetRasterDataType());
+  EXPECT_EQ(2, band3.GetBand());
 
-  // Constructor 4: (ds, band, type, xsize, ysize, blockX, blockY)
+  // 4. Constructor (ds, band, type, xsize, ysize, blockX, blockY).
   VRTSourcedRasterBand band4(&ds, 3, GDT_Byte, 20, 30, 10, 15);
   EXPECT_TRUE(band4.IsSourcedRasterBand());
   int nBX = 0;
   int nBY = 0;
   band4.GetBlockSize(&nBX, &nBY);
-  EXPECT_EQ(nBX, 10);
-  EXPECT_EQ(nBY, 15);
+  EXPECT_EQ(10, nBX);
+  EXPECT_EQ(15, nBY);
 }
 
-// 2. AddSourceVariantsAndCAPI
-TEST_F(VRTSourcedRasterBandTest, AddSourceVariantsAndCAPI) {
+TEST_F(VrtSourcedRasterBandTest, AddSourceVariantsAndCAPI) {
+  constexpr char kSrc1[] = "/vsimem/vrtsourcedrasterband_test/src1.tif";
+  CreateByteGeoTiff(kSrc1, 20, 20);
+
+  GDALDatasetUniquePtr poSrcDSOpen(GDALDataset::FromHandle(GDALOpenEx(
+      kSrc1, GDAL_OF_READONLY | GDAL_OF_RASTER, nullptr, nullptr, nullptr)));
+  ASSERT_NE(nullptr, poSrcDSOpen);
+
   VRTDataset ds(20, 20);
   auto poBand =
       std::make_unique<VRTSourcedRasterBand>(&ds, 1, GDT_Byte, 20, 20);
 
-  TrackFile("/vsimem/src1.tif");
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
-  auto poSrcDS = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/src1.tif", 20, 20, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poSrcDS, nullptr);
-  poSrcDS.reset();
-
-  auto poSrcDSOpen = GDALDataset::Open("/vsimem/src1.tif", GA_ReadOnly);
-  ASSERT_NE(poSrcDSOpen, nullptr);
-
-  // AddSource raw pointer and unique_ptr
-  auto poSS1 = new VRTSimpleSource();
+  // 1. AddSource raw pointer and unique_ptr.
+  auto poSS1 = std::make_unique<VRTSimpleSource>();
   poSS1->SetSrcBand(poSrcDSOpen->GetRasterBand(1));
   poSrcDSOpen->Reference();
-  EXPECT_EQ(poBand->AddSource(poSS1), CE_None);
+  EXPECT_EQ(CE_None, poBand->AddSource(poSS1.release()));
 
   auto poSS2 = std::make_unique<VRTSimpleSource>();
   poSS2->SetSrcBand(poSrcDSOpen->GetRasterBand(1));
   poSrcDSOpen->Reference();
-  EXPECT_EQ(poBand->AddSource(std::move(poSS2)), CE_None);
+  EXPECT_EQ(CE_None, poBand->AddSource(std::move(poSS2)));
 
-  // VRTAddSource C API
-  auto poSS3 = new VRTSimpleSource();
+  // 2. VRTAddSource C API.
+  auto poSS3 = std::make_unique<VRTSimpleSource>();
   poSS3->SetSrcBand(poSrcDSOpen->GetRasterBand(1));
   poSrcDSOpen->Reference();
-  EXPECT_EQ(VRTAddSource(reinterpret_cast<VRTSourcedRasterBandH>(poBand.get()),
-                         reinterpret_cast<VRTSourceH>(poSS3)),
-            CE_None);
+  EXPECT_EQ(CE_None,
+            VRTAddSource(reinterpret_cast<VRTSourcedRasterBandH>(poBand.get()),
+                         reinterpret_cast<VRTSourceH>(poSS3.release())));
 
-  // AddSource with NBITS metadata
-  poBand->SetMetadataItem("NBITS", "12", "IMAGE_STRUCTURE");
+  // 3. AddSource with NBITS metadata.
+  EXPECT_EQ(CE_None, poBand->SetMetadataItem("NBITS", "12", "IMAGE_STRUCTURE"));
   auto poSS4 = std::make_unique<VRTSimpleSource>();
   poSS4->SetSrcBand(poSrcDSOpen->GetRasterBand(1));
   poSrcDSOpen->Reference();
-  EXPECT_EQ(poBand->AddSource(std::move(poSS4)), CE_None);
-  poBand->SetMetadataItem("NBITS", nullptr, "IMAGE_STRUCTURE");
+  EXPECT_EQ(CE_None, poBand->AddSource(std::move(poSS4)));
+  EXPECT_EQ(CE_None,
+            poBand->SetMetadataItem("NBITS", nullptr, "IMAGE_STRUCTURE"));
 
-  // AddSimpleSource with filename (nearest and average)
-  EXPECT_EQ(poBand->AddSimpleSource("/vsimem/src1.tif", 1, 0, 0, 20, 20, 0, 0,
-                                    20, 20, "nearest", 0.0),
-            CE_None);
-  EXPECT_EQ(poBand->AddSimpleSource("/vsimem/src1.tif", 1, 0, 0, 20, 20, 0, 0,
-                                    20, 20, "average", 0.0),
-            CE_None);
+  // 4. AddSimpleSource with filename (nearest and average).
+  EXPECT_EQ(CE_None, poBand->AddSimpleSource(kSrc1, 1, 0, 0, 20, 20, 0, 0, 20,
+                                             20, "nearest", 0.0));
+  EXPECT_EQ(CE_None, poBand->AddSimpleSource(kSrc1, 1, 0, 0, 20, 20, 0, 0, 20,
+                                             20, "average", 0.0));
 
-  // AddSimpleSource with GDALRasterBand*
-  EXPECT_EQ(poBand->AddSimpleSource(poSrcDSOpen->GetRasterBand(1), 0, 0, 20, 20,
-                                    0, 0, 20, 20, "nearest", 0.0),
-            CE_None);
-  EXPECT_EQ(poBand->AddSimpleSource(poSrcDSOpen->GetRasterBand(1), 0, 0, 20, 20,
-                                    0, 0, 20, 20, "average", 0.0),
-            CE_None);
+  // 5. AddSimpleSource with GDALRasterBand*.
+  EXPECT_EQ(CE_None,
+            poBand->AddSimpleSource(poSrcDSOpen->GetRasterBand(1), 0, 0, 20, 20,
+                                    0, 0, 20, 20, "nearest", 0.0));
+  EXPECT_EQ(CE_None,
+            poBand->AddSimpleSource(poSrcDSOpen->GetRasterBand(1), 0, 0, 20, 20,
+                                    0, 0, 20, 20, "average", 0.0));
 
-  // VRTAddSimpleSource C API
+  // 6. VRTAddSimpleSource C API.
   EXPECT_EQ(
+      CE_None,
       VRTAddSimpleSource(
           reinterpret_cast<VRTSourcedRasterBandH>(poBand.get()),
           reinterpret_cast<GDALRasterBandH>(poSrcDSOpen->GetRasterBand(1)), 0,
-          0, 20, 20, 0, 0, 20, 20, nullptr, VRT_NODATA_UNSET),
-      CE_None);
+          0, 20, 20, 0, 0, 20, 20, nullptr, VRT_NODATA_UNSET));
 
-  // AddMaskBandSource
-  EXPECT_EQ(poBand->AddMaskBandSource(poSrcDSOpen->GetRasterBand(1), 0, 0, 20,
-                                      20, 0, 0, 20, 20),
-            CE_None);
+  // 7. AddMaskBandSource.
+  EXPECT_EQ(CE_None, poBand->AddMaskBandSource(poSrcDSOpen->GetRasterBand(1), 0,
+                                               0, 20, 20, 0, 0, 20, 20));
 
-  // AddComplexSource with filename and band
-  EXPECT_EQ(poBand->AddComplexSource("/vsimem/src1.tif", 1, 0, 0, 20, 20, 0, 0,
-                                     20, 20, 1.0, 2.0, 0.0, 0),
-            CE_None);
-  EXPECT_EQ(poBand->AddComplexSource(poSrcDSOpen->GetRasterBand(1), 0, 0, 20,
-                                     20, 0, 0, 20, 20, 1.0, 2.0, 0.0, 0),
-            CE_None);
+  // 8. AddComplexSource with filename and band.
+  EXPECT_EQ(CE_None, poBand->AddComplexSource(kSrc1, 1, 0, 0, 20, 20, 0, 0, 20,
+                                              20, 1.0, 2.0, 0.0, 0));
+  EXPECT_EQ(CE_None,
+            poBand->AddComplexSource(poSrcDSOpen->GetRasterBand(1), 0, 0, 20,
+                                     20, 0, 0, 20, 20, 1.0, 2.0, 0.0, 0));
 
-  // VRTAddComplexSource C API
+  // 9. VRTAddComplexSource C API.
   EXPECT_EQ(
+      CE_None,
       VRTAddComplexSource(
           reinterpret_cast<VRTSourcedRasterBandH>(poBand.get()),
           reinterpret_cast<GDALRasterBandH>(poSrcDSOpen->GetRasterBand(1)), 0,
-          0, 20, 20, 0, 0, 20, 20, 1.0, 2.0, 0.0),
-      CE_None);
+          0, 20, 20, 0, 0, 20, 20, 1.0, 2.0, 0.0));
 
-  // AddFuncSource and VRTAddFuncSource C API
-  EXPECT_EQ(poBand->AddFuncSource(MyImageReadFunc, nullptr, 0.0), CE_None);
-  EXPECT_EQ(
-      VRTAddFuncSource(reinterpret_cast<VRTSourcedRasterBandH>(poBand.get()),
-                       MyImageReadFunc, nullptr, 0.0),
-      CE_None);
-
-  poBand.reset();
-  GDALClose(poSrcDSOpen);
+  // 10. AddFuncSource and VRTAddFuncSource C API.
+  EXPECT_EQ(CE_None, poBand->AddFuncSource(MyImageReadFunc, nullptr, 0.0));
+  EXPECT_EQ(CE_None, VRTAddFuncSource(
+                         reinterpret_cast<VRTSourcedRasterBandH>(poBand.get()),
+                         MyImageReadFunc, nullptr, 0.0));
 }
 
-// 3. XMLInit and SerializeToXML
-TEST_F(VRTSourcedRasterBandTest, XMLInitAndSerializeToXML) {
-  TrackFile("/vsimem/xml_src.tif");
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
-  auto poSrcDS = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/xml_src.tif", 20, 20, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poSrcDS, nullptr);
-  poSrcDS.reset();
+TEST_F(VrtSourcedRasterBandTest, XMLInitAndSerializeToXML) {
+  constexpr char kXmlSrc[] = "/vsimem/vrtsourcedrasterband_test/xml_src.tif";
+  CreateByteGeoTiff(kXmlSrc, 20, 20);
 
-  const std::string vrt_xml =
-      "<VRTDataset rasterXSize=\"20\" rasterYSize=\"20\">\n"
-      "  <VRTRasterBand dataType=\"Byte\" band=\"1\">\n"
-      "    <SimpleSource>\n"
-      "      <SourceFilename>/vsimem/xml_src.tif</SourceFilename>\n"
-      "      <SourceBand>1</SourceBand>\n"
-      "      <SrcRect xOff=\"0\" yOff=\"0\" xSize=\"20\" ySize=\"20\"/>\n"
-      "      <DstRect xOff=\"0\" yOff=\"0\" xSize=\"20\" ySize=\"20\"/>\n"
-      "    </SimpleSource>\n"
-      "    <ComplexSource>\n"
-      "      <SourceFilename>/vsimem/xml_src.tif</SourceFilename>\n"
-      "      <SourceBand>1</SourceBand>\n"
-      "      <SrcRect xOff=\"0\" yOff=\"0\" xSize=\"20\" ySize=\"20\"/>\n"
-      "      <DstRect xOff=\"0\" yOff=\"0\" xSize=\"20\" ySize=\"20\"/>\n"
-      "      <ScaleOffset>1.0</ScaleOffset>\n"
-      "      <ScaleRatio>2.0</ScaleRatio>\n"
-      "      <NODATA>0</NODATA>\n"
-      "    </ComplexSource>\n"
-      "    <AveragedSource>\n"
-      "      <SourceFilename>/vsimem/xml_src.tif</SourceFilename>\n"
-      "      <SourceBand>1</SourceBand>\n"
-      "      <SrcRect xOff=\"0\" yOff=\"0\" xSize=\"20\" ySize=\"20\"/>\n"
-      "      <DstRect xOff=\"0\" yOff=\"0\" xSize=\"20\" ySize=\"20\"/>\n"
-      "    </AveragedSource>\n"
-      "  </VRTRasterBand>\n"
-      "</VRTDataset>\n";
+  constexpr char kVrtXml[] = R"xml(
+<VRTDataset rasterXSize="20" rasterYSize="20">
+  <VRTRasterBand dataType="Byte" band="1">
+    <SimpleSource>
+      <SourceFilename>/vsimem/vrtsourcedrasterband_test/xml_src.tif</SourceFilename>
+      <SourceBand>1</SourceBand>
+      <SrcRect xOff="0" yOff="0" xSize="20" ySize="20"/>
+      <DstRect xOff="0" yOff="0" xSize="20" ySize="20"/>
+    </SimpleSource>
+    <ComplexSource>
+      <SourceFilename>/vsimem/vrtsourcedrasterband_test/xml_src.tif</SourceFilename>
+      <SourceBand>1</SourceBand>
+      <SrcRect xOff="0" yOff="0" xSize="20" ySize="20"/>
+      <DstRect xOff="0" yOff="0" xSize="20" ySize="20"/>
+      <ScaleOffset>1.0</ScaleOffset>
+      <ScaleRatio>2.0</ScaleRatio>
+      <NODATA>0</NODATA>
+    </ComplexSource>
+    <AveragedSource>
+      <SourceFilename>/vsimem/vrtsourcedrasterband_test/xml_src.tif</SourceFilename>
+      <SourceBand>1</SourceBand>
+      <SrcRect xOff="0" yOff="0" xSize="20" ySize="20"/>
+      <DstRect xOff="0" yOff="0" xSize="20" ySize="20"/>
+    </AveragedSource>
+  </VRTRasterBand>
+</VRTDataset>)xml";
 
-  auto poDS = std::unique_ptr<VRTDataset>(
-      VRTDataset::OpenXML(vrt_xml.c_str(), nullptr, GA_ReadOnly));
-  ASSERT_NE(poDS, nullptr);
+  auto poDS = VRTDataset::OpenXML(kVrtXml, nullptr, GA_ReadOnly);
+  ASSERT_NE(nullptr, poDS);
   auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(poDS->GetRasterBand(1));
-  ASSERT_NE(poBand, nullptr);
-  EXPECT_EQ(poBand->m_papoSources.size(), 3);
+  ASSERT_NE(nullptr, poBand);
+  EXPECT_EQ(3U, poBand->m_papoSources.size());
 
   bool bWarned = false;
   size_t nAccRAM = 0;
-  CPLXMLNode* psTree = poBand->SerializeToXML(nullptr, bWarned, nAccRAM);
-  ASSERT_NE(psTree, nullptr);
-  CPLDestroyXMLNode(psTree);
+  {
+    CPLXMLTreeCloser psTree(poBand->SerializeToXML(nullptr, bWarned, nAccRAM));
+    ASSERT_NE(nullptr, psTree.get());
+  }
 
-  // XMLInit with invalid source element
-  const std::string bad_vrt =
-      "<VRTRasterBand dataType=\"Byte\" band=\"1\">\n"
-      "  <UnknownSourceTag/>\n"
-      "</VRTRasterBand>\n";
-  CPLXMLNode* psBadTree = CPLParseXMLString(bad_vrt.c_str());
-  ASSERT_NE(psBadTree, nullptr);
+  // XMLInit with unrecognized source tag is ignored with CE_None.
+  constexpr char kBadVrt[] = R"xml(
+<VRTRasterBand dataType="Byte" band="1">
+  <UnknownSourceTag/>
+</VRTRasterBand>)xml";
+  CPLXMLTreeCloser psBadTree(CPLParseXMLString(kBadVrt));
+  ASSERT_NE(nullptr, psBadTree.get());
   VRTMapSharedResources mapRes;
   VRTSourcedRasterBand testBand(poDS.get(), 1);
-  EXPECT_EQ(testBand.XMLInit(psBadTree, nullptr, mapRes), CE_None);
-  CPLDestroyXMLNode(psBadTree);
+  EXPECT_EQ(CE_None, testBand.XMLInit(psBadTree.get(), nullptr, mapRes));
 }
 
-// 4. SkipBufferInitializationAndBufferInit
-TEST_F(VRTSourcedRasterBandTest, SkipBufferInitializationAndBufferInit) {
-  TrackFile("/vsimem/buf_src.tif");
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
-  auto poSrcDS = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/buf_src.tif", 20, 20, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poSrcDS, nullptr);
-  std::vector<GByte> line(20, 100);
-  for (int y = 0; y < 20; ++y) {
-    EXPECT_EQ(poSrcDS->GetRasterBand(1)->RasterIO(
-                  GF_Write, 0, y, 20, 1, line.data(), 20, 1, GDT_Byte, 0, 0),
-              CE_None);
-  }
-  poSrcDS.reset();
+TEST_F(VrtSourcedRasterBandTest, SkipBufferInitializationAndBufferInit) {
+  constexpr char kBufSrc[] = "/vsimem/vrtsourcedrasterband_test/buf_src.tif";
+  CreateByteGeoTiff(kBufSrc, 20, 20, 100);
 
   VRTDataset ds(20, 20);
-  ds.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
   auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-  ASSERT_NE(poBand, nullptr);
+  ASSERT_NE(nullptr, poBand);
 
-  // Add 1 simple source covering the full extent
-  poBand->AddSimpleSource("/vsimem/buf_src.tif", 1, 0, 0, 20, 20, 0, 0, 20, 20);
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kBufSrc, 1, 0, 0, 20, 20, 0, 0, 20, 20));
 
-  // Test buffer initialization variations
-  // 1. SkipBufferInitialization is true for 1 source covering full extent
+  // 1. SkipBufferInitialization is true for 1 source covering full extent.
   std::vector<GByte> outBuf(400, 0);
-  EXPECT_EQ(poBand->RasterIO(GF_Read, 0, 0, 20, 20, outBuf.data(), 20, 20,
-                             GDT_Byte, 1, 20, nullptr),
-            CE_None);
+  EXPECT_EQ(CE_None, poBand->RasterIO(GF_Read, 0, 0, 20, 20, outBuf.data(), 20,
+                                      20, GDT_Byte, 1, 20, nullptr));
+  EXPECT_EQ(100, outBuf[0]);
 
-  // 2. Zero nodata memset
+  // 2. Zero nodata memset.
   VRTDataset dsZero(20, 20);
-  dsZero.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, dsZero.AddBand(GDT_Byte, nullptr));
   auto poBandZero =
       cpl::down_cast<VRTSourcedRasterBand*>(dsZero.GetRasterBand(1));
-  poBandZero->SetNoDataValue(0.0);
-  EXPECT_EQ(poBandZero->RasterIO(GF_Read, 0, 0, 20, 20, outBuf.data(), 20, 20,
-                                 GDT_Byte, 1, 20, nullptr),
-            CE_None);
+  ASSERT_NE(nullptr, poBandZero);
+  EXPECT_EQ(CE_None, poBandZero->SetNoDataValue(0.0));
+  std::fill(outBuf.begin(), outBuf.end(), 255);
+  EXPECT_EQ(CE_None, poBandZero->RasterIO(GF_Read, 0, 0, 20, 20, outBuf.data(),
+                                          20, 20, GDT_Byte, 1, 20, nullptr));
+  EXPECT_EQ(0, outBuf[0]);
 
-  // 3. Int64 nodata
+  // 3. Int64 nodata.
   VRTDataset dsInt64(20, 20);
-  dsInt64.AddBand(GDT_Int64, nullptr);
+  ASSERT_EQ(CE_None, dsInt64.AddBand(GDT_Int64, nullptr));
   auto poBandInt64 =
       cpl::down_cast<VRTSourcedRasterBand*>(dsInt64.GetRasterBand(1));
-  poBandInt64->SetNoDataValueAsInt64(static_cast<int64_t>(-999));
+  ASSERT_NE(nullptr, poBandInt64);
+  EXPECT_EQ(CE_None,
+            poBandInt64->SetNoDataValueAsInt64(static_cast<int64_t>(-999)));
   std::vector<int64_t> outInt64(400, 0);
-  EXPECT_EQ(poBandInt64->RasterIO(GF_Read, 0, 0, 20, 20, outInt64.data(), 20,
+  EXPECT_EQ(CE_None,
+            poBandInt64->RasterIO(GF_Read, 0, 0, 20, 20, outInt64.data(), 20,
                                   20, GDT_Int64, sizeof(int64_t),
-                                  20 * sizeof(int64_t), nullptr),
-            CE_None);
-  EXPECT_EQ(outInt64[0], -999);
+                                  20 * sizeof(int64_t), nullptr));
+  EXPECT_EQ(-999, outInt64[0]);
 
-  // 4. UInt64 nodata
+  // 4. UInt64 nodata.
   VRTDataset dsUInt64(20, 20);
-  dsUInt64.AddBand(GDT_UInt64, nullptr);
+  ASSERT_EQ(CE_None, dsUInt64.AddBand(GDT_UInt64, nullptr));
   auto poBandUInt64 =
       cpl::down_cast<VRTSourcedRasterBand*>(dsUInt64.GetRasterBand(1));
-  poBandUInt64->SetNoDataValueAsUInt64(static_cast<uint64_t>(9999999999ULL));
+  ASSERT_NE(nullptr, poBandUInt64);
+  EXPECT_EQ(CE_None, poBandUInt64->SetNoDataValueAsUInt64(
+                         static_cast<uint64_t>(9999999999ULL)));
   std::vector<uint64_t> outUInt64(400, 0);
-  EXPECT_EQ(poBandUInt64->RasterIO(GF_Read, 0, 0, 20, 20, outUInt64.data(), 20,
+  EXPECT_EQ(CE_None,
+            poBandUInt64->RasterIO(GF_Read, 0, 0, 20, 20, outUInt64.data(), 20,
                                    20, GDT_UInt64, sizeof(uint64_t),
-                                   20 * sizeof(uint64_t), nullptr),
-            CE_None);
-  EXPECT_EQ(outUInt64[0], 9999999999ULL);
+                                   20 * sizeof(uint64_t), nullptr));
+  EXPECT_EQ(9999999999ULL, outUInt64[0]);
 
-  // 5. Float64 non-zero nodata
+  // 5. Float64 non-zero nodata.
   VRTDataset dsFloat(20, 20);
-  dsFloat.AddBand(GDT_Float64, nullptr);
+  ASSERT_EQ(CE_None, dsFloat.AddBand(GDT_Float64, nullptr));
   auto poBandFloat =
       cpl::down_cast<VRTSourcedRasterBand*>(dsFloat.GetRasterBand(1));
-  poBandFloat->SetNoDataValue(-9999.0);
+  ASSERT_NE(nullptr, poBandFloat);
+  EXPECT_EQ(CE_None, poBandFloat->SetNoDataValue(-9999.0));
   std::vector<double> outFloat(400, 0.0);
-  EXPECT_EQ(poBandFloat->RasterIO(GF_Read, 0, 0, 20, 20, outFloat.data(), 20,
+  EXPECT_EQ(CE_None,
+            poBandFloat->RasterIO(GF_Read, 0, 0, 20, 20, outFloat.data(), 20,
                                   20, GDT_Float64, sizeof(double),
-                                  20 * sizeof(double), nullptr),
-            CE_None);
-  EXPECT_DOUBLE_EQ(outFloat[0], -9999.0);
+                                  20 * sizeof(double), nullptr));
+  EXPECT_DOUBLE_EQ(-9999.0, outFloat[0]);
 
-  // 6. Non-standard line spacing
+  // 6. Non-standard line spacing.
   std::vector<GByte> outSpaced(20 * 40, 0);
-  EXPECT_EQ(poBand->RasterIO(GF_Read, 0, 0, 20, 20, outSpaced.data(), 20, 20,
-                             GDT_Byte, 1, 40, nullptr),
-            CE_None);
+  EXPECT_EQ(CE_None, poBand->RasterIO(GF_Read, 0, 0, 20, 20, outSpaced.data(),
+                                      20, 20, GDT_Byte, 1, 40, nullptr));
 
-  // 7. IReadBlock
+  // 7. IReadBlock.
   std::vector<GByte> blockBuf(20 * 20, 0);
-  EXPECT_EQ(poBand->IReadBlock(0, 0, blockBuf.data()), CE_None);
+  EXPECT_EQ(CE_None, poBand->IReadBlock(0, 0, blockBuf.data()));
 }
 
-// 5. IRasterIOMultiThreaded
-TEST_F(VRTSourcedRasterBandTest, IRasterIOMultiThreaded) {
-  TrackFile("/vsimem/mt_tile1.tif");
-  TrackFile("/vsimem/mt_tile2.tif");
-
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
-
-  auto poTile1 = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/mt_tile1.tif", 500, 1000, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poTile1, nullptr);
-  poTile1.reset();
-
-  auto poTile2 = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/mt_tile2.tif", 500, 1000, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poTile2, nullptr);
-  poTile2.reset();
+TEST_F(VrtSourcedRasterBandTest, IRasterIOMultiThreaded) {
+  constexpr char kTile1[] = "/vsimem/vrtsourcedrasterband_test/mt_tile1.tif";
+  constexpr char kTile2[] = "/vsimem/vrtsourcedrasterband_test/mt_tile2.tif";
+  CreateByteGeoTiff(kTile1, 500, 1000);
+  CreateByteGeoTiff(kTile2, 500, 1000);
 
   VRTDataset ds(1000, 1000);
-  ds.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
   auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-  ASSERT_NE(poBand, nullptr);
+  ASSERT_NE(nullptr, poBand);
 
-  poBand->AddSimpleSource("/vsimem/mt_tile1.tif", 1, 0, 0, 500, 1000, 0, 0, 500,
-                          1000);
-  poBand->AddSimpleSource("/vsimem/mt_tile2.tif", 1, 0, 0, 500, 1000, 500, 0,
-                          500, 1000);
+  ASSERT_EQ(CE_None, poBand->AddSimpleSource(kTile1, 1, 0, 0, 500, 1000, 0, 0,
+                                             500, 1000));
+  ASSERT_EQ(CE_None, poBand->AddSimpleSource(kTile2, 1, 0, 0, 500, 1000, 500, 0,
+                                             500, 1000));
 
-  // CanMultiThreadRasterIO checks
+  // 1. CanMultiThreadRasterIO checks.
   int nContrib = 0;
   EXPECT_TRUE(poBand->CanMultiThreadRasterIO(0, 0, 1000, 1000, nContrib));
-  EXPECT_EQ(nContrib, 2);
+  EXPECT_EQ(2, nContrib);
 
-  // Overlapping sources -> CanMultiThreadRasterIO returns false
+  // 2. Overlapping sources -> CanMultiThreadRasterIO returns false.
   VRTDataset dsOverlap(1000, 1000);
-  dsOverlap.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, dsOverlap.AddBand(GDT_Byte, nullptr));
   auto poBandOverlap =
       cpl::down_cast<VRTSourcedRasterBand*>(dsOverlap.GetRasterBand(1));
-  poBandOverlap->AddSimpleSource("/vsimem/mt_tile1.tif", 1, 0, 0, 500, 1000, 0,
-                                 0, 500, 1000);
-  poBandOverlap->AddSimpleSource("/vsimem/mt_tile2.tif", 1, 0, 0, 500, 1000,
-                                 250, 0, 500, 1000);
+  ASSERT_NE(nullptr, poBandOverlap);
+  ASSERT_EQ(CE_None, poBandOverlap->AddSimpleSource(kTile1, 1, 0, 0, 500, 1000,
+                                                    0, 0, 500, 1000));
+  ASSERT_EQ(CE_None, poBandOverlap->AddSimpleSource(kTile2, 1, 0, 0, 500, 1000,
+                                                    250, 0, 500, 1000));
   int nContribOverlap = 0;
   EXPECT_FALSE(
       poBandOverlap->CanMultiThreadRasterIO(0, 0, 1000, 1000, nContribOverlap));
 
-  // Multi-threaded RasterIO execution
-  CPLSetConfigOption("VRT_NUM_THREADS", "2");
+  // 3. Multi-threaded RasterIO execution.
+#if defined(THREAD_SANITIZER) || defined(__SANITIZE_THREAD__)
+  // TODO(schwehr): Re-enable multi-threaded TSan once upstream
+  // GDALRasterBlock::TakeLock()/Touch() block-cache race is fixed.
+  CPLConfigOptionSetter vrt_threads("VRT_NUM_THREADS", "1", false);
+#else
+  CPLConfigOptionSetter vrt_threads("VRT_NUM_THREADS", "2", false);
+#endif
   std::vector<GByte> outBuf(1000 * 1000, 0);
   GDALRasterIOExtraArg sMTArg;
   INIT_RASTERIO_EXTRA_ARG(sMTArg);
@@ -408,1144 +403,1077 @@ TEST_F(VRTSourcedRasterBandTest, IRasterIOMultiThreaded) {
   sMTArg.dfYSize = 1000.0;
   sMTArg.pfnProgress = GDALDummyProgress;
 
-  EXPECT_EQ(poBand->IRasterIO(GF_Read, 0, 0, 1000, 1000, outBuf.data(), 1000,
-                              1000, GDT_Byte, 1, 1000, &sMTArg),
-            CE_None);
-  CPLSetConfigOption("VRT_NUM_THREADS", nullptr);
+  EXPECT_EQ(CE_None, poBand->IRasterIO(GF_Read, 0, 0, 1000, 1000, outBuf.data(),
+                                       1000, 1000, GDT_Byte, 1, 1000, &sMTArg));
 }
 
-// 6. CanIRasterIOBeForwardedToEachSource
-TEST_F(VRTSourcedRasterBandTest, CanIRasterIOBeForwardedToEachSource) {
-  TrackFile("/vsimem/fwd_src.tif");
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
-  auto poSrcDS = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/fwd_src.tif", 50, 50, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poSrcDS, nullptr);
-  poSrcDS.reset();
+TEST_F(VrtSourcedRasterBandTest, CanIRasterIOBeForwardedToEachSource) {
+  constexpr char kFwdSrc[] = "/vsimem/vrtsourcedrasterband_test/fwd_src.tif";
+  CreateByteGeoTiff(kFwdSrc, 50, 50);
 
   VRTDataset ds(50, 50);
-  ds.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
   auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-  ASSERT_NE(poBand, nullptr);
+  ASSERT_NE(nullptr, poBand);
 
-  poBand->AddSimpleSource("/vsimem/fwd_src.tif", 1, 0, 0, 50, 50, 0, 0, 50, 50);
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kFwdSrc, 1, 0, 0, 50, 50, 0, 0, 50, 50));
 
   GDALRasterIOExtraArg sExtraArg;
   INIT_RASTERIO_EXTRA_ARG(sExtraArg);
 
-  // 1. Nearest neighbour
+  // 1. Nearest neighbour.
   EXPECT_TRUE(poBand->CanIRasterIOBeForwardedToEachSource(GF_Read, 0, 0, 50, 50,
                                                           50, 50, &sExtraArg));
 
-  // 2. Non-nearest neighbour (bilinear) downsampling
+  // 2. Non-nearest neighbour (bilinear) downsampling.
   sExtraArg.eResampleAlg = GRIORA_Bilinear;
   EXPECT_TRUE(poBand->CanIRasterIOBeForwardedToEachSource(GF_Read, 0, 0, 50, 50,
                                                           25, 25, &sExtraArg));
 
-  // 3. ComplexSource with custom resampling
+  // 3. ComplexSource with custom resampling.
   VRTDataset dsComplex(50, 50);
-  dsComplex.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, dsComplex.AddBand(GDT_Byte, nullptr));
   auto poBandComplex =
       cpl::down_cast<VRTSourcedRasterBand*>(dsComplex.GetRasterBand(1));
-  poBandComplex->AddComplexSource("/vsimem/fwd_src.tif", 1, 0, 0, 50, 50, 0, 0,
-                                  50, 50, 0.0, 1.0, 0.0, 0);
+  ASSERT_NE(nullptr, poBandComplex);
+  ASSERT_EQ(CE_None,
+            poBandComplex->AddComplexSource(kFwdSrc, 1, 0, 0, 50, 50, 0, 0, 50,
+                                            50, 0.0, 1.0, 0.0, 0));
   EXPECT_TRUE(poBandComplex->CanIRasterIOBeForwardedToEachSource(
       GF_Read, 0, 0, 50, 50, 25, 25, &sExtraArg));
 }
 
-// 7. GetDataCoverageStatus
-TEST_F(VRTSourcedRasterBandTest, GetDataCoverageStatus) {
-  TrackFile("/vsimem/cov_src.tif");
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
-  auto poSrcDS = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/cov_src.tif", 50, 50, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poSrcDS, nullptr);
-  poSrcDS.reset();
+TEST_F(VrtSourcedRasterBandTest, GetDataCoverageStatus) {
+  constexpr char kCovSrc[] = "/vsimem/vrtsourcedrasterband_test/cov_src.tif";
+  CreateByteGeoTiff(kCovSrc, 50, 50);
 
   VRTDataset ds(100, 100);
-  ds.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
   auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-  ASSERT_NE(poBand, nullptr);
+  ASSERT_NE(nullptr, poBand);
 
-  // Tile 1 at (0, 0, 50, 50)
-  poBand->AddSimpleSource("/vsimem/cov_src.tif", 1, 0, 0, 50, 50, 0, 0, 50, 50);
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kCovSrc, 1, 0, 0, 50, 50, 0, 0, 50, 50));
 
   double dfPct = -1.0;
-  // Inside source
+  // Inside source.
   int nStatus = poBand->GetDataCoverageStatus(0, 0, 50, 50, 0, &dfPct);
-  EXPECT_NE(nStatus & GDAL_DATA_COVERAGE_STATUS_DATA, 0);
+  EXPECT_NE(0, nStatus & GDAL_DATA_COVERAGE_STATUS_DATA);
 
-  // Outside source
+  // Outside source.
   dfPct = -1.0;
   nStatus = poBand->GetDataCoverageStatus(60, 60, 40, 40, 0, &dfPct);
-  EXPECT_NE(nStatus & GDAL_DATA_COVERAGE_STATUS_EMPTY, 0);
+  EXPECT_NE(0, nStatus & GDAL_DATA_COVERAGE_STATUS_EMPTY);
 
-  // Single simple source covering full band
+  // Single simple source covering full band.
   VRTDataset dsFull(50, 50);
-  dsFull.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, dsFull.AddBand(GDT_Byte, nullptr));
   auto poBandFull =
       cpl::down_cast<VRTSourcedRasterBand*>(dsFull.GetRasterBand(1));
-  poBandFull->AddSimpleSource("/vsimem/cov_src.tif", 1, 0, 0, 50, 50, 0, 0, 50,
-                              50);
+  ASSERT_NE(nullptr, poBandFull);
+  ASSERT_EQ(CE_None, poBandFull->AddSimpleSource(kCovSrc, 1, 0, 0, 50, 50, 0, 0,
+                                                 50, 50));
   dfPct = -1.0;
   nStatus = poBandFull->GetDataCoverageStatus(0, 0, 50, 50, 0, &dfPct);
-  EXPECT_NE(nStatus & GDAL_DATA_COVERAGE_STATUS_DATA, 0);
+  EXPECT_NE(0, nStatus & GDAL_DATA_COVERAGE_STATUS_DATA);
 }
 
-// 8. MinMaxAndStatistics
-TEST_F(VRTSourcedRasterBandTest, MinMaxAndStatistics) {
-  TrackFile("/vsimem/stats_src.tif");
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
-  auto poSrcDS = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/stats_src.tif", 20, 20, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poSrcDS, nullptr);
-  std::vector<GByte> line(20, 50);
-  for (int y = 0; y < 20; ++y) {
-    EXPECT_EQ(poSrcDS->GetRasterBand(1)->RasterIO(
-                  GF_Write, 0, y, 20, 1, line.data(), 20, 1, GDT_Byte, 0, 0),
-              CE_None);
+TEST_F(VrtSourcedRasterBandTest, MinMaxAndStatistics) {
+  constexpr char kStatsSrc[] =
+      "/vsimem/vrtsourcedrasterband_test/stats_src.tif";
+  {
+    GDALDriver* poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
+    ASSERT_NE(nullptr, poDrv);
+    GDALDatasetUniquePtr poSrcDS(
+        poDrv->Create(kStatsSrc, 20, 20, 1, GDT_Byte, nullptr));
+    ASSERT_NE(nullptr, poSrcDS);
+    std::vector<GByte> line(20, 50);
+    for (int y = 0; y < 20; ++y) {
+      ASSERT_EQ(CE_None,
+                poSrcDS->GetRasterBand(1)->RasterIO(
+                    GF_Write, 0, y, 20, 1, line.data(), 20, 1, GDT_Byte, 0, 0));
+    }
+    int anOvr[] = {2};
+    EXPECT_EQ(CE_None, poSrcDS->BuildOverviews("NEAREST", 1, anOvr, 0, nullptr,
+                                               nullptr, nullptr));
   }
-  int anOvr[] = {2};
-  EXPECT_EQ(poSrcDS->BuildOverviews("NEAREST", 1, anOvr, 0, nullptr, nullptr,
-                                    nullptr),
-            CE_None);
-  poSrcDS.reset();
 
   VRTDataset ds(20, 20);
-  ds.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
   auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-  ASSERT_NE(poBand, nullptr);
+  ASSERT_NE(nullptr, poBand);
 
-  poBand->AddSimpleSource("/vsimem/stats_src.tif", 1, 0, 0, 20, 20, 0, 0, 20,
-                          20);
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kStatsSrc, 1, 0, 0, 20, 20, 0, 0, 20, 20));
 
   int bSuccess = FALSE;
-  double dfMin = poBand->GetMinimum(&bSuccess);
-  (void)dfMin;
+  poBand->GetMinimum(&bSuccess);
+  EXPECT_FALSE(bSuccess);
 
   bSuccess = FALSE;
-  double dfMax = poBand->GetMaximum(&bSuccess);
-  (void)dfMax;
+  poBand->GetMaximum(&bSuccess);
+  EXPECT_FALSE(bSuccess);
 
   double adfMinMax[2] = {0.0, 0.0};
-  EXPECT_EQ(poBand->ComputeRasterMinMax(FALSE, adfMinMax), CE_None);
-  EXPECT_DOUBLE_EQ(adfMinMax[0], 50.0);
-  EXPECT_DOUBLE_EQ(adfMinMax[1], 50.0);
+  EXPECT_EQ(CE_None, poBand->ComputeRasterMinMax(FALSE, adfMinMax));
+  EXPECT_DOUBLE_EQ(50.0, adfMinMax[0]);
+  EXPECT_DOUBLE_EQ(50.0, adfMinMax[1]);
 
   double dfSMin = 0.0;
   double dfSMax = 0.0;
   double dfSMean = 0.0;
   double dfSStdDev = 0.0;
-  EXPECT_EQ(poBand->ComputeStatistics(FALSE, &dfSMin, &dfSMax, &dfSMean,
-                                      &dfSStdDev, GDALDummyProgress, nullptr),
-            CE_None);
-  EXPECT_DOUBLE_EQ(dfSMin, 50.0);
-  EXPECT_DOUBLE_EQ(dfSMax, 50.0);
-  EXPECT_DOUBLE_EQ(dfSMean, 50.0);
-  EXPECT_DOUBLE_EQ(dfSStdDev, 0.0);
+  EXPECT_EQ(CE_None,
+            poBand->ComputeStatistics(FALSE, &dfSMin, &dfSMax, &dfSMean,
+                                      &dfSStdDev, GDALDummyProgress, nullptr));
+  EXPECT_DOUBLE_EQ(50.0, dfSMin);
+  EXPECT_DOUBLE_EQ(50.0, dfSMax);
+  EXPECT_DOUBLE_EQ(50.0, dfSMean);
+  EXPECT_DOUBLE_EQ(0.0, dfSStdDev);
 
-  // ComputeStatistics with bApproxOK = TRUE
-  EXPECT_EQ(poBand->ComputeStatistics(TRUE, &dfSMin, &dfSMax, &dfSMean,
-                                      &dfSStdDev, nullptr, nullptr),
-            CE_None);
+  // ComputeStatistics with bApproxOK = TRUE.
+  EXPECT_EQ(CE_None, poBand->ComputeStatistics(TRUE, &dfSMin, &dfSMax, &dfSMean,
+                                               &dfSStdDev, nullptr, nullptr));
 }
 
-// 9. GetHistogram
-TEST_F(VRTSourcedRasterBandTest, GetHistogram) {
-  TrackFile("/vsimem/hist_src.tif");
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
-  auto poSrcDS = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/hist_src.tif", 20, 20, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poSrcDS, nullptr);
-  std::vector<GByte> line(20, 10);
-  for (int y = 0; y < 20; ++y) {
-    EXPECT_EQ(poSrcDS->GetRasterBand(1)->RasterIO(
-                  GF_Write, 0, y, 20, 1, line.data(), 20, 1, GDT_Byte, 0, 0),
-              CE_None);
-  }
-  poSrcDS.reset();
+TEST_F(VrtSourcedRasterBandTest, GetHistogram) {
+  constexpr char kHistSrc[] = "/vsimem/vrtsourcedrasterband_test/hist_src.tif";
+  CreateByteGeoTiff(kHistSrc, 20, 20, 10);
 
   VRTDataset ds(20, 20);
-  ds.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
   auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-  ASSERT_NE(poBand, nullptr);
+  ASSERT_NE(nullptr, poBand);
 
-  poBand->AddSimpleSource("/vsimem/hist_src.tif", 1, 0, 0, 20, 20, 0, 0, 20,
-                          20);
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kHistSrc, 1, 0, 0, 20, 20, 0, 0, 20, 20));
 
   std::vector<GUIntBig> hist(256, 0);
-  EXPECT_EQ(poBand->GetHistogram(0.0, 255.0, 256, hist.data(), FALSE, FALSE,
-                                 GDALDummyProgress, nullptr),
-            CE_None);
-  EXPECT_EQ(hist[10], 400);
+  EXPECT_EQ(CE_None, poBand->GetHistogram(0.0, 255.0, 256, hist.data(), FALSE,
+                                          FALSE, GDALDummyProgress, nullptr));
+  EXPECT_EQ(400U, hist[10]);
 
-  // Multiple sources fallback path
-  poBand->AddSimpleSource("/vsimem/hist_src.tif", 1, 0, 0, 20, 20, 0, 0, 20,
-                          20);
+  // Multiple sources fallback path.
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kHistSrc, 1, 0, 0, 20, 20, 0, 0, 20, 20));
   std::vector<GUIntBig> hist2(256, 0);
-  EXPECT_EQ(poBand->GetHistogram(0.0, 255.0, 256, hist2.data(), FALSE, FALSE,
-                                 nullptr, nullptr),
-            CE_None);
+  EXPECT_EQ(CE_None, poBand->GetHistogram(0.0, 255.0, 256, hist2.data(), FALSE,
+                                          FALSE, nullptr, nullptr));
 }
 
-// 10. MetadataAndLocationInfo
-TEST_F(VRTSourcedRasterBandTest, MetadataAndLocationInfo) {
-  TrackFile("/vsimem/loc_src.tif");
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
-  auto poSrcDS = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/loc_src.tif", 20, 20, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poSrcDS, nullptr);
-  poSrcDS.reset();
+TEST_F(VrtSourcedRasterBandTest, MetadataAndLocationInfo) {
+  constexpr char kLocSrc[] = "/vsimem/vrtsourcedrasterband_test/loc_src.tif";
+  CreateByteGeoTiff(kLocSrc, 20, 20);
 
   VRTDataset ds(20, 20);
-  double gtCoeffs[6] = {0.0, 1.0, 0.0, 20.0, 0.0, -1.0};
-  ds.SetGeoTransform(GDALGeoTransform(gtCoeffs));
+  GDALGeoTransform gtCoeffs(0.0, 1.0, 0.0, 20.0, 0.0, -1.0);
+  EXPECT_EQ(CE_None, ds.SetGeoTransform(gtCoeffs));
 
-  ds.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
   auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-  ASSERT_NE(poBand, nullptr);
+  ASSERT_NE(nullptr, poBand);
 
-  poBand->AddSimpleSource("/vsimem/loc_src.tif", 1, 0, 0, 20, 20, 0, 0, 20, 20);
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kLocSrc, 1, 0, 0, 20, 20, 0, 0, 20, 20));
   static_cast<VRTSimpleSource*>(poBand->m_papoSources[0].get())
-      ->SetSourceDatasetName("/vsimem/loc_src.tif", false);
+      ->SetSourceDatasetName(kLocSrc, false);
 
-  // GetMetadataDomainList
-  char** papszDomains = poBand->GetMetadataDomainList();
-  EXPECT_NE(papszDomains, nullptr);
-  EXPECT_GE(CSLFindString(papszDomains, "LocationInfo"), 0);
-  CSLDestroy(papszDomains);
+  // 1. GetMetadataDomainList.
+  {
+    StringListPtr papszDomains(poBand->GetMetadataDomainList(), CSLDestroy);
+    ASSERT_NE(nullptr, papszDomains.get());
+    EXPECT_GE(CSLFindString(papszDomains.get(), "LocationInfo"), 0);
+  }
 
-  // LocationInfo queries
+  // 2. LocationInfo queries.
   const char* pszLocInfo = poBand->GetMetadataItem("Pixel_5_5", "LocationInfo");
-  ASSERT_NE(pszLocInfo, nullptr);
-  EXPECT_NE(strstr(pszLocInfo, "<File>/vsimem/loc_src.tif</File>"), nullptr);
+  ASSERT_NE(nullptr, pszLocInfo);
+  EXPECT_THAT(
+      std::string_view(pszLocInfo),
+      HasSubstr("<File>/vsimem/vrtsourcedrasterband_test/loc_src.tif</File>"));
 
   const char* pszGeoLocInfo =
       poBand->GetMetadataItem("GeoPixel_5.5_14.5", "LocationInfo");
-  ASSERT_NE(pszGeoLocInfo, nullptr);
-  EXPECT_NE(strstr(pszGeoLocInfo, "<File>/vsimem/loc_src.tif</File>"), nullptr);
+  ASSERT_NE(nullptr, pszGeoLocInfo);
+  EXPECT_THAT(
+      std::string_view(pszGeoLocInfo),
+      HasSubstr("<File>/vsimem/vrtsourcedrasterband_test/loc_src.tif</File>"));
 
-  // LocationInfo edge cases
-  EXPECT_EQ(poBand->GetMetadataItem("Pixel_bad", "LocationInfo"), nullptr);
-  EXPECT_EQ(poBand->GetMetadataItem("Pixel_100_100", "LocationInfo"), nullptr);
-  EXPECT_EQ(poBand->GetMetadataItem("GeoPixel_bad", "LocationInfo"), nullptr);
+  // 3. LocationInfo edge cases.
+  EXPECT_EQ(nullptr, poBand->GetMetadataItem("Pixel_bad", "LocationInfo"));
+  EXPECT_EQ(nullptr, poBand->GetMetadataItem("Pixel_100_100", "LocationInfo"));
+  EXPECT_EQ(nullptr, poBand->GetMetadataItem("GeoPixel_bad", "LocationInfo"));
 
-  // vrt_sources domain
+  // 4. vrt_sources domain.
   char** papszSources = poBand->GetMetadata("vrt_sources");
-  ASSERT_NE(papszSources, nullptr);
+  ASSERT_NE(nullptr, papszSources);
   EXPECT_GE(CSLCount(papszSources), 1);
 
-  // SetMetadataItem in new_vrt_sources
-  const std::string new_src_xml =
-      "<SimpleSource>\n"
-      "  <SourceFilename>/vsimem/loc_src.tif</SourceFilename>\n"
-      "  <SourceBand>1</SourceBand>\n"
-      "</SimpleSource>\n";
-  EXPECT_EQ(poBand->SetMetadataItem("new_source", new_src_xml.c_str(),
-                                    "new_vrt_sources"),
-            CE_None);
+  // 5. SetMetadataItem in new_vrt_sources and vrt_sources.
+  constexpr char kNewSrcXml[] = R"xml(
+<SimpleSource>
+  <SourceFilename>/vsimem/vrtsourcedrasterband_test/loc_src.tif</SourceFilename>
+  <SourceBand>1</SourceBand>
+</SimpleSource>)xml";
+  EXPECT_EQ(CE_None, poBand->SetMetadataItem("new_source", kNewSrcXml,
+                                             "new_vrt_sources"));
+  EXPECT_EQ(CE_None,
+            poBand->SetMetadataItem("source_0", kNewSrcXml, "vrt_sources"));
+  {
+    CPLErrorReset();
+    WithQuietHandler quiet;
+    EXPECT_EQ(CE_Failure,
+              poBand->SetMetadataItem("source_bad", kNewSrcXml, "vrt_sources"));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
 
-  // SetMetadataItem in vrt_sources (replace source_0)
-  EXPECT_EQ(
-      poBand->SetMetadataItem("source_0", new_src_xml.c_str(), "vrt_sources"),
-      CE_None);
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(
-      poBand->SetMetadataItem("source_bad", new_src_xml.c_str(), "vrt_sources"),
-      CE_Failure);
-  CPLPopErrorHandler();
-
-  // SetMetadata in vrt_sources and new_vrt_sources
-  char** papszNewSources = nullptr;
-  papszNewSources =
-      CSLSetNameValue(papszNewSources, "source_0", new_src_xml.c_str());
-  EXPECT_EQ(poBand->SetMetadata(papszNewSources, "vrt_sources"), CE_None);
-  EXPECT_EQ(poBand->SetMetadata(papszNewSources, "new_vrt_sources"), CE_None);
-  CSLDestroy(papszNewSources);
+  // 6. SetMetadata in vrt_sources and new_vrt_sources.
+  CPLStringList aosNewSources;
+  aosNewSources.AddNameValue("source_0", kNewSrcXml);
+  EXPECT_EQ(CE_None, poBand->SetMetadata(aosNewSources.List(), "vrt_sources"));
+  EXPECT_EQ(CE_None,
+            poBand->SetMetadata(aosNewSources.List(), "new_vrt_sources"));
 }
 
-// 11. FileListAndClosing
-TEST_F(VRTSourcedRasterBandTest, FileListAndClosing) {
-  TrackFile("/vsimem/fl_src.tif");
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
-  auto poSrcDS = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/fl_src.tif", 20, 20, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poSrcDS, nullptr);
-  poSrcDS.reset();
+TEST_F(VrtSourcedRasterBandTest, FileListAndClosing) {
+  constexpr char kFlSrc[] = "/vsimem/vrtsourcedrasterband_test/fl_src.tif";
+  CreateByteGeoTiff(kFlSrc, 20, 20);
 
   VRTDataset ds(20, 20);
-  ds.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
   auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-  ASSERT_NE(poBand, nullptr);
+  ASSERT_NE(nullptr, poBand);
 
-  poBand->AddSimpleSource("/vsimem/fl_src.tif", 1, 0, 0, 20, 20, 0, 0, 20, 20);
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kFlSrc, 1, 0, 0, 20, 20, 0, 0, 20, 20));
 
   char** papszFileList = nullptr;
+  absl::Cleanup free_filelist = [&papszFileList] { CSLDestroy(papszFileList); };
   int nSize = 0;
   int nMaxSize = 0;
   CPLHashSet* hSetFiles =
       CPLHashSetNew(CPLHashSetHashStr, CPLHashSetEqualStr, nullptr);
+  ASSERT_NE(nullptr, hSetFiles);
+  absl::Cleanup free_hashset = [hSetFiles] { CPLHashSetDestroy(hSetFiles); };
 
   poBand->GetFileList(&papszFileList, &nSize, &nMaxSize, hSetFiles);
   EXPECT_GE(nSize, 1);
-  EXPECT_NE(CSLFindString(papszFileList, "/vsimem/fl_src.tif"), -1);
+  EXPECT_NE(-1, CSLFindString(papszFileList, kFlSrc));
 
-  CSLDestroy(papszFileList);
-  CPLHashSetDestroy(hSetFiles);
-
-  EXPECT_EQ(poBand->FlushCache(false), CE_None);
-  EXPECT_EQ(poBand->FlushCache(true), CE_None);
-  EXPECT_EQ(poBand->CloseDependentDatasets(), TRUE);
-  EXPECT_EQ(poBand->CloseDependentDatasets(), FALSE);
+  EXPECT_EQ(CE_None, poBand->FlushCache(false));
+  EXPECT_EQ(CE_None, poBand->FlushCache(true));
+  EXPECT_EQ(TRUE, poBand->CloseDependentDatasets());
+  EXPECT_EQ(FALSE, poBand->CloseDependentDatasets());
 }
 
-// 12. RemoveCoveredSources
-TEST_F(VRTSourcedRasterBandTest, RemoveCoveredSources) {
-  TrackFile("/vsimem/cov1.tif");
-  TrackFile("/vsimem/cov2.tif");
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
-  auto poDS1 = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/cov1.tif", 20, 20, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poDS1, nullptr);
-  poDS1.reset();
-  auto poDS2 = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/cov2.tif", 20, 20, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poDS2, nullptr);
-  poDS2.reset();
+TEST_F(VrtSourcedRasterBandTest, RemoveCoveredSources) {
+  constexpr char kCov1[] = "/vsimem/vrtsourcedrasterband_test/cov1.tif";
+  constexpr char kCov2[] = "/vsimem/vrtsourcedrasterband_test/cov2.tif";
+  CreateByteGeoTiff(kCov1, 20, 20);
+  CreateByteGeoTiff(kCov2, 20, 20);
 
   VRTDataset ds(20, 20);
-  ds.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
   auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-  ASSERT_NE(poBand, nullptr);
+  ASSERT_NE(nullptr, poBand);
 
-  // Source 1 is at (0, 0, 10, 10)
-  poBand->AddSimpleSource("/vsimem/cov1.tif", 1, 0, 0, 10, 10, 0, 0, 10, 10);
-
-  // Source 2 is at (0, 0, 20, 20), which completely covers source 1
-  poBand->AddSimpleSource("/vsimem/cov2.tif", 1, 0, 0, 20, 20, 0, 0, 20, 20);
-  EXPECT_EQ(poBand->m_papoSources.size(), 2);
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kCov1, 1, 0, 0, 10, 10, 0, 0, 10, 10));
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kCov2, 1, 0, 0, 20, 20, 0, 0, 20, 20));
+  EXPECT_EQ(2U, poBand->m_papoSources.size());
 
   poBand->RemoveCoveredSources(nullptr);
-  // Source 1 should have been removed
-  EXPECT_EQ(poBand->m_papoSources.size(), 1);
+  EXPECT_EQ(1U, poBand->m_papoSources.size());
 }
 
-// 13. MosaicStatisticsMinMaxHistogram
-TEST_F(VRTSourcedRasterBandTest, MosaicStatisticsMinMaxHistogram) {
-  TrackFile("/vsimem/mos1.tif");
-  TrackFile("/vsimem/mos2.tif");
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
-
-  auto poTile1 = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/mos1.tif", 10, 20, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poTile1, nullptr);
-  std::vector<GByte> line1(10, 20);
-  for (int y = 0; y < 20; ++y) {
-    EXPECT_EQ(poTile1->GetRasterBand(1)->RasterIO(
-                  GF_Write, 0, y, 10, 1, line1.data(), 10, 1, GDT_Byte, 0, 0),
-              CE_None);
-  }
-  poTile1.reset();
-
-  auto poTile2 = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/mos2.tif", 10, 20, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poTile2, nullptr);
-  std::vector<GByte> line2(10, 80);
-  for (int y = 0; y < 20; ++y) {
-    EXPECT_EQ(poTile2->GetRasterBand(1)->RasterIO(
-                  GF_Write, 0, y, 10, 1, line2.data(), 10, 1, GDT_Byte, 0, 0),
-              CE_None);
-  }
-  poTile2.reset();
+TEST_F(VrtSourcedRasterBandTest, MosaicStatisticsMinMaxHistogram) {
+  constexpr char kMos1[] = "/vsimem/vrtsourcedrasterband_test/mos1.tif";
+  constexpr char kMos2[] = "/vsimem/vrtsourcedrasterband_test/mos2.tif";
+  CreateByteGeoTiff(kMos1, 10, 20, 20);
+  CreateByteGeoTiff(kMos2, 10, 20, 80);
 
   VRTDataset dsMos(20, 20);
-  dsMos.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, dsMos.AddBand(GDT_Byte, nullptr));
   auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(dsMos.GetRasterBand(1));
-  ASSERT_NE(poBand, nullptr);
+  ASSERT_NE(nullptr, poBand);
 
-  poBand->AddSimpleSource("/vsimem/mos1.tif", 1, 0, 0, 10, 20, 0, 0, 10, 20);
-  poBand->AddSimpleSource("/vsimem/mos2.tif", 1, 0, 0, 10, 20, 10, 0, 10, 20);
-
-  CPLSetConfigOption("VRT_NUM_THREADS", "2");
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kMos1, 1, 0, 0, 10, 20, 0, 0, 10, 20));
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kMos2, 1, 0, 0, 10, 20, 10, 0, 10, 20));
 
   double dfMin = 0.0;
   double dfMax = 0.0;
   double dfMean = 0.0;
   double dfStdDev = 0.0;
-  EXPECT_EQ(poBand->ComputeStatistics(FALSE, &dfMin, &dfMax, &dfMean, &dfStdDev,
-                                      GDALDummyProgress, nullptr),
-            CE_None);
-  EXPECT_DOUBLE_EQ(dfMin, 20.0);
-  EXPECT_DOUBLE_EQ(dfMax, 80.0);
-  EXPECT_DOUBLE_EQ(dfMean, 50.0);
-
   double adfMinMax[2] = {0.0, 0.0};
-  EXPECT_EQ(poBand->ComputeRasterMinMax(FALSE, adfMinMax), CE_None);
-  EXPECT_DOUBLE_EQ(adfMinMax[0], 20.0);
-  EXPECT_DOUBLE_EQ(adfMinMax[1], 80.0);
+  {
+#if defined(THREAD_SANITIZER) || defined(__SANITIZE_THREAD__)
+    // TODO(schwehr): Re-enable multi-threaded TSan once upstream
+    // GDALRasterBlock::TakeLock()/Touch() block-cache race is fixed.
+    CPLConfigOptionSetter vrt_threads("VRT_NUM_THREADS", "1", false);
+#else
+    CPLConfigOptionSetter vrt_threads("VRT_NUM_THREADS", "2", false);
+#endif
+    EXPECT_EQ(CE_None,
+              poBand->ComputeStatistics(FALSE, &dfMin, &dfMax, &dfMean,
+                                        &dfStdDev, GDALDummyProgress, nullptr));
+    EXPECT_DOUBLE_EQ(20.0, dfMin);
+    EXPECT_DOUBLE_EQ(80.0, dfMax);
+    EXPECT_DOUBLE_EQ(50.0, dfMean);
 
-  std::vector<GUIntBig> hist(256, 0);
-  EXPECT_EQ(poBand->GetHistogram(0.0, 255.0, 256, hist.data(), FALSE, FALSE,
-                                 GDALDummyProgress, nullptr),
-            CE_None);
-  EXPECT_EQ(hist[20], 200);
-  EXPECT_EQ(hist[80], 200);
+    EXPECT_EQ(CE_None, poBand->ComputeRasterMinMax(FALSE, adfMinMax));
+    EXPECT_DOUBLE_EQ(20.0, adfMinMax[0]);
+    EXPECT_DOUBLE_EQ(80.0, adfMinMax[1]);
 
-  CPLSetConfigOption("VRT_NUM_THREADS", nullptr);
+    std::vector<GUIntBig> hist(256, 0);
+    EXPECT_EQ(CE_None, poBand->GetHistogram(0.0, 255.0, 256, hist.data(), FALSE,
+                                            FALSE, GDALDummyProgress, nullptr));
+    EXPECT_EQ(200U, hist[20]);
+    EXPECT_EQ(200U, hist[80]);
 
-  // Partial mosaic (uncovered pixels with nodata)
-  VRTDataset dsPartial(30, 20);
-  dsPartial.AddBand(GDT_Byte, nullptr);
-  auto poBandPartial =
-      cpl::down_cast<VRTSourcedRasterBand*>(dsPartial.GetRasterBand(1));
-  poBandPartial->SetNoDataValue(0.0);
-  poBandPartial->AddSimpleSource("/vsimem/mos1.tif", 1, 0, 0, 10, 20, 0, 0, 10,
-                                 20);
-  poBandPartial->AddSimpleSource("/vsimem/mos2.tif", 1, 0, 0, 10, 20, 10, 0, 10,
-                                 20);
+    // Partial mosaic (uncovered pixels with nodata).
+    VRTDataset dsPartial(30, 20);
+    ASSERT_EQ(CE_None, dsPartial.AddBand(GDT_Byte, nullptr));
+    auto poBandPartial =
+        cpl::down_cast<VRTSourcedRasterBand*>(dsPartial.GetRasterBand(1));
+    ASSERT_NE(nullptr, poBandPartial);
+    EXPECT_EQ(CE_None, poBandPartial->SetNoDataValue(0.0));
+    ASSERT_EQ(CE_None, poBandPartial->AddSimpleSource(kMos1, 1, 0, 0, 10, 20, 0,
+                                                      0, 10, 20));
+    ASSERT_EQ(CE_None, poBandPartial->AddSimpleSource(kMos2, 1, 0, 0, 10, 20,
+                                                      10, 0, 10, 20));
 
-  EXPECT_EQ(poBandPartial->ComputeStatistics(FALSE, &dfMin, &dfMax, &dfMean,
-                                             &dfStdDev, nullptr, nullptr),
-            CE_None);
-  EXPECT_EQ(poBandPartial->ComputeRasterMinMax(FALSE, adfMinMax), CE_None);
-  EXPECT_DOUBLE_EQ(adfMinMax[0], 20.0);
-  EXPECT_DOUBLE_EQ(adfMinMax[1], 80.0);
+    EXPECT_EQ(CE_None,
+              poBandPartial->ComputeStatistics(FALSE, &dfMin, &dfMax, &dfMean,
+                                               &dfStdDev, nullptr, nullptr));
+    EXPECT_EQ(CE_None, poBandPartial->ComputeRasterMinMax(FALSE, adfMinMax));
+    EXPECT_DOUBLE_EQ(20.0, adfMinMax[0]);
+    EXPECT_DOUBLE_EQ(80.0, adfMinMax[1]);
+  }
 }
 
-// 14. OverviewsStatisticsMinMaxHistogramAndRasterIO
-TEST_F(VRTSourcedRasterBandTest,
+TEST_F(VrtSourcedRasterBandTest,
        OverviewsStatisticsMinMaxHistogramAndRasterIO) {
-  TrackFile("/vsimem/ovr_src.tif");
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
-  auto poSrcDS = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/ovr_src.tif", 40, 40, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poSrcDS, nullptr);
-  std::vector<GByte> line(40, 30);
-  for (int y = 0; y < 40; ++y) {
-    EXPECT_EQ(poSrcDS->GetRasterBand(1)->RasterIO(
-                  GF_Write, 0, y, 40, 1, line.data(), 40, 1, GDT_Byte, 0, 0),
-              CE_None);
-  }
-  poSrcDS.reset();
+  constexpr char kOvrSrc[] = "/vsimem/vrtsourcedrasterband_test/ovr_src.tif";
+  CreateByteGeoTiff(kOvrSrc, 40, 40, 30);
 
   VRTDataset ds(40, 40);
-  ds.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
   auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-  ASSERT_NE(poBand, nullptr);
-  poBand->AddSimpleSource("/vsimem/ovr_src.tif", 1, 0, 0, 40, 40, 0, 0, 40, 40);
+  ASSERT_NE(nullptr, poBand);
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kOvrSrc, 1, 0, 0, 40, 40, 0, 0, 40, 40));
 
   int anOvr[] = {2};
-  const char* apszOvrOptions[] = {"VIRTUAL=YES", nullptr};
-  EXPECT_EQ(ds.BuildOverviews("NEAREST", 1, anOvr, 0, nullptr, nullptr, nullptr,
-                              apszOvrOptions),
-            CE_None);
-  EXPECT_EQ(poBand->GetOverviewCount(), 1);
+  CPLStringList aosOvrOptions;
+  aosOvrOptions.AddNameValue("VIRTUAL", "YES");
+  EXPECT_EQ(CE_None, ds.BuildOverviews("NEAREST", 1, anOvr, 0, nullptr, nullptr,
+                                       nullptr, aosOvrOptions.List()));
+  EXPECT_EQ(1, poBand->GetOverviewCount());
 
-  // OverviewRasterIO through downsampled Read
+  // 1. OverviewRasterIO through downsampled Read.
   std::vector<GByte> outBuf(20 * 20, 0);
-  EXPECT_EQ(poBand->RasterIO(GF_Read, 0, 0, 40, 40, outBuf.data(), 20, 20,
-                             GDT_Byte, 1, 20, nullptr),
-            CE_None);
-  EXPECT_EQ(outBuf[0], 30);
+  EXPECT_EQ(CE_None, poBand->RasterIO(GF_Read, 0, 0, 40, 40, outBuf.data(), 20,
+                                      20, GDT_Byte, 1, 20, nullptr));
+  EXPECT_EQ(30, outBuf[0]);
 
-  // ComputeRasterMinMax with bApproxOK = TRUE
+  // 2. ComputeRasterMinMax with bApproxOK = TRUE.
   double adfMinMax[2] = {0.0, 0.0};
-  EXPECT_EQ(poBand->ComputeRasterMinMax(TRUE, adfMinMax), CE_None);
-  EXPECT_DOUBLE_EQ(adfMinMax[0], 30.0);
-  EXPECT_DOUBLE_EQ(adfMinMax[1], 30.0);
+  EXPECT_EQ(CE_None, poBand->ComputeRasterMinMax(TRUE, adfMinMax));
+  EXPECT_DOUBLE_EQ(30.0, adfMinMax[0]);
+  EXPECT_DOUBLE_EQ(30.0, adfMinMax[1]);
 
-  // ComputeStatistics with bApproxOK = TRUE
+  // 3. ComputeStatistics with bApproxOK = TRUE.
   double dfMin = 0.0;
   double dfMax = 0.0;
   double dfMean = 0.0;
   double dfStdDev = 0.0;
-  EXPECT_EQ(poBand->ComputeStatistics(TRUE, &dfMin, &dfMax, &dfMean, &dfStdDev,
-                                      nullptr, nullptr),
-            CE_None);
-  EXPECT_DOUBLE_EQ(dfMin, 30.0);
-  EXPECT_DOUBLE_EQ(dfMax, 30.0);
+  EXPECT_EQ(CE_None, poBand->ComputeStatistics(TRUE, &dfMin, &dfMax, &dfMean,
+                                               &dfStdDev, nullptr, nullptr));
+  EXPECT_DOUBLE_EQ(30.0, dfMin);
+  EXPECT_DOUBLE_EQ(30.0, dfMax);
 
-  // GetHistogram with bApproxOK = TRUE
+  // 4. GetHistogram with bApproxOK = TRUE.
   std::vector<GUIntBig> hist(256, 0);
-  EXPECT_EQ(poBand->GetHistogram(0.0, 255.0, 256, hist.data(), FALSE, TRUE,
-                                 nullptr, nullptr),
-            CE_None);
-  EXPECT_GT(hist[30], 0);
+  EXPECT_EQ(CE_None, poBand->GetHistogram(0.0, 255.0, 256, hist.data(), FALSE,
+                                          TRUE, nullptr, nullptr));
+  EXPECT_GT(hist[30], 0U);
 }
 
-// 15. GetMinimumMaximumBranches
-TEST_F(VRTSourcedRasterBandTest, GetMinimumMaximumBranches) {
-  TrackFile("/vsimem/minmax_src.tif");
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
-  auto poSrcDS = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/minmax_src.tif", 20, 20, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poSrcDS, nullptr);
-  std::vector<GByte> line(20, 0);
-  line[19] = 255;
-  for (int y = 0; y < 20; ++y) {
-    EXPECT_EQ(poSrcDS->GetRasterBand(1)->RasterIO(
-                  GF_Write, 0, y, 20, 1, line.data(), 20, 1, GDT_Byte, 0, 0),
-              CE_None);
+TEST_F(VrtSourcedRasterBandTest, GetMinimumMaximumBranches) {
+  constexpr char kMinMaxSrc[] =
+      "/vsimem/vrtsourcedrasterband_test/minmax_src.tif";
+  {
+    GDALDriver* poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
+    ASSERT_NE(nullptr, poDrv);
+    GDALDatasetUniquePtr poSrcDS(
+        poDrv->Create(kMinMaxSrc, 20, 20, 1, GDT_Byte, nullptr));
+    ASSERT_NE(nullptr, poSrcDS);
+    std::vector<GByte> line(20, 0);
+    line[19] = 255;
+    for (int y = 0; y < 20; ++y) {
+      ASSERT_EQ(CE_None,
+                poSrcDS->GetRasterBand(1)->RasterIO(
+                    GF_Write, 0, y, 20, 1, line.data(), 20, 1, GDT_Byte, 0, 0));
+    }
   }
-  poSrcDS.reset();
 
   VRTDataset ds(20, 20);
-  ds.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
   auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-  ASSERT_NE(poBand, nullptr);
+  ASSERT_NE(nullptr, poBand);
 
-  poBand->AddSimpleSource("/vsimem/minmax_src.tif", 1, 0, 0, 20, 20, 0, 0, 20,
-                          20);
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kMinMaxSrc, 1, 0, 0, 20, 20, 0, 0, 20, 20));
 
-  // 1. STATISTICS_MINIMUM and STATISTICS_MAXIMUM metadata items
-  poBand->SetMetadataItem("STATISTICS_MINIMUM", "5.5");
-  poBand->SetMetadataItem("STATISTICS_MAXIMUM", "99.5");
+  // 1. STATISTICS_MINIMUM and STATISTICS_MAXIMUM metadata items.
+  EXPECT_EQ(CE_None, poBand->SetMetadataItem("STATISTICS_MINIMUM", "5.5"));
+  EXPECT_EQ(CE_None, poBand->SetMetadataItem("STATISTICS_MAXIMUM", "99.5"));
   int bSuccess = FALSE;
-  EXPECT_DOUBLE_EQ(poBand->GetMinimum(&bSuccess), 5.5);
+  EXPECT_DOUBLE_EQ(5.5, poBand->GetMinimum(&bSuccess));
   EXPECT_TRUE(bSuccess);
   bSuccess = FALSE;
-  EXPECT_DOUBLE_EQ(poBand->GetMaximum(&bSuccess), 99.5);
+  EXPECT_DOUBLE_EQ(99.5, poBand->GetMaximum(&bSuccess));
   EXPECT_TRUE(bSuccess);
-  poBand->SetMetadataItem("STATISTICS_MINIMUM", nullptr);
-  poBand->SetMetadataItem("STATISTICS_MAXIMUM", nullptr);
+  EXPECT_EQ(CE_None, poBand->SetMetadataItem("STATISTICS_MINIMUM", nullptr));
+  EXPECT_EQ(CE_None, poBand->SetMetadataItem("STATISTICS_MAXIMUM", nullptr));
 
-  // 2. VRT_MIN_MAX_FROM_SOURCES config option
-  CPLSetConfigOption("VRT_MIN_MAX_FROM_SOURCES", "YES");
-  poBand->GetMinimum(&bSuccess);
-  poBand->GetMaximum(&bSuccess);
-  CPLSetConfigOption("VRT_MIN_MAX_FROM_SOURCES", "NO");
-  poBand->GetMinimum(&bSuccess);
-  poBand->GetMaximum(&bSuccess);
-  CPLSetConfigOption("VRT_MIN_MAX_FROM_SOURCES", nullptr);
+  // 2. VRT_MIN_MAX_FROM_SOURCES config option.
+  {
+    CPLConfigOptionSetter opt("VRT_MIN_MAX_FROM_SOURCES", "YES", false);
+    bSuccess = FALSE;
+    EXPECT_DOUBLE_EQ(0.0, poBand->GetMinimum(&bSuccess));
+    EXPECT_FALSE(bSuccess);
+    bSuccess = FALSE;
+    EXPECT_DOUBLE_EQ(255.0, poBand->GetMaximum(&bSuccess));
+    EXPECT_FALSE(bSuccess);
+  }
+  {
+    CPLConfigOptionSetter opt("VRT_MIN_MAX_FROM_SOURCES", "NO", false);
+    bSuccess = FALSE;
+    EXPECT_DOUBLE_EQ(0.0, poBand->GetMinimum(&bSuccess));
+    EXPECT_FALSE(bSuccess);
+    bSuccess = FALSE;
+    EXPECT_DOUBLE_EQ(255.0, poBand->GetMaximum(&bSuccess));
+    EXPECT_FALSE(bSuccess);
+  }
 
-  // 3. Remote /vsi filename returns false
-  VRTDataset dsVsi(20, 20);
-  dsVsi.AddBand(GDT_Byte, nullptr);
-  auto poBandVsi =
-      cpl::down_cast<VRTSourcedRasterBand*>(dsVsi.GetRasterBand(1));
-  poBandVsi->AddSimpleSource("/vsicurl/http://example.com/test.tif", 1, 0, 0,
-                             20, 20, 0, 0, 20, 20);
-  poBandVsi->GetMinimum(&bSuccess);
-  poBandVsi->GetMaximum(&bSuccess);
+  // 3. Remote /vsicurl filename returns false without touching network.
+  {
+    VRTDataset dsVsi(20, 20);
+    ASSERT_EQ(CE_None, dsVsi.AddBand(GDT_Byte, nullptr));
+    auto poBandVsi =
+        cpl::down_cast<VRTSourcedRasterBand*>(dsVsi.GetRasterBand(1));
+    ASSERT_NE(nullptr, poBandVsi);
+    ASSERT_EQ(CE_None,
+              poBandVsi->AddSimpleSource("/vsicurl/http://example.com/test.tif",
+                                         1, 0, 0, 20, 20, 0, 0, 20, 20));
+    bSuccess = TRUE;
+    EXPECT_DOUBLE_EQ(0.0, poBandVsi->GetMinimum(&bSuccess));
+    EXPECT_FALSE(bSuccess);
+    bSuccess = TRUE;
+    EXPECT_DOUBLE_EQ(255.0, poBandVsi->GetMaximum(&bSuccess));
+    EXPECT_FALSE(bSuccess);
+  }
 
-  // 4. Special character filename loop
-  VRTDataset dsSpecial(20, 20);
-  dsSpecial.AddBand(GDT_Byte, nullptr);
-  auto poBandSpecial =
-      cpl::down_cast<VRTSourcedRasterBand*>(dsSpecial.GetRasterBand(1));
-  poBandSpecial->AddSimpleSource("nonexistent#special.tif", 1, 0, 0, 20, 20, 0,
-                                 0, 20, 20);
-  poBandSpecial->GetMinimum(&bSuccess);
-  poBandSpecial->GetMaximum(&bSuccess);
+  // 4. Special character filename loop.
+  {
+    VRTDataset dsSpecial(20, 20);
+    ASSERT_EQ(CE_None, dsSpecial.AddBand(GDT_Byte, nullptr));
+    auto poBandSpecial =
+        cpl::down_cast<VRTSourcedRasterBand*>(dsSpecial.GetRasterBand(1));
+    ASSERT_NE(nullptr, poBandSpecial);
+    ASSERT_EQ(CE_None,
+              poBandSpecial->AddSimpleSource("nonexistent#special.tif", 1, 0, 0,
+                                             20, 20, 0, 0, 20, 20));
+    CPLErrorReset();
+    WithQuietHandler quiet;
+    bSuccess = TRUE;
+    EXPECT_DOUBLE_EQ(0.0, poBandSpecial->GetMinimum(&bSuccess));
+    EXPECT_FALSE(bSuccess);
+    bSuccess = TRUE;
+    EXPECT_DOUBLE_EQ(255.0, poBandSpecial->GetMaximum(&bSuccess));
+    EXPECT_FALSE(bSuccess);
+    CPLErrorReset();
+  }
 }
 
-// 16. CanIRasterIOBeForwardedBranchesAndComplexResampling
-TEST_F(VRTSourcedRasterBandTest,
+TEST_F(VrtSourcedRasterBandTest,
        CanIRasterIOBeForwardedBranchesAndComplexResampling) {
-  TrackFile("/vsimem/fwd_branch_src.tif");
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
-  auto poSrcDS = std::unique_ptr<GDALDataset>(poDrv->Create(
-      "/vsimem/fwd_branch_src.tif", 20, 20, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poSrcDS, nullptr);
-  poSrcDS.reset();
+  constexpr char kFwdBranchSrc[] =
+      "/vsimem/vrtsourcedrasterband_test/fwd_branch_src.tif";
+  CreateByteGeoTiff(kFwdBranchSrc, 20, 20);
 
-  auto poSrcDSOpen =
-      GDALDataset::Open("/vsimem/fwd_branch_src.tif", GA_ReadOnly);
-  ASSERT_NE(poSrcDSOpen, nullptr);
+  GDALDatasetUniquePtr poSrcDSOpen(GDALDataset::FromHandle(
+      GDALOpenEx(kFwdBranchSrc, GDAL_OF_READONLY | GDAL_OF_RASTER, nullptr,
+                 nullptr, nullptr)));
+  ASSERT_NE(nullptr, poSrcDSOpen);
 
+  VRTDataset ds(20, 20);
+  ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
+  auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
+  ASSERT_NE(nullptr, poBand);
+
+  auto poCS1 = std::make_unique<VRTComplexSource>();
+  poCS1->SetSrcBand(poSrcDSOpen->GetRasterBand(1));
+  poSrcDSOpen->Reference();
+  poCS1->SetResampling("bilinear");
+  poCS1->SetSrcWindow(0, 0, 20, 20);
+  poCS1->SetDstWindow(0, 0, 20, 20);
+  EXPECT_EQ(CE_None, poBand->AddSource(std::move(poCS1)));
+
+  GDALRasterIOExtraArg sArg;
+  INIT_RASTERIO_EXTRA_ARG(sArg);
+
+  // 1. Floating point window.
+  sArg.bFloatingPointWindowValidity = TRUE;
+  sArg.dfXOff = 0.0;
+  sArg.dfYOff = 0.0;
+  sArg.dfXSize = 20.0;
+  sArg.dfYSize = 20.0;
+  EXPECT_TRUE(poBand->CanIRasterIOBeForwardedToEachSource(GF_Read, 0, 0, 20, 20,
+                                                          10, 10, &sArg));
+  sArg.bFloatingPointWindowValidity = FALSE;
+
+  // 2. IsMaskBand() causes false.
   {
-    VRTDataset ds(20, 20);
-    ds.AddBand(GDT_Byte, nullptr);
-    auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-    ASSERT_NE(poBand, nullptr);
-
-    auto poCS1 = std::make_unique<VRTComplexSource>();
-    poCS1->SetSrcBand(poSrcDSOpen->GetRasterBand(1));
-    poSrcDSOpen->Reference();
-    poCS1->SetResampling("bilinear");
-    poCS1->SetSrcWindow(0, 0, 20, 20);
-    poCS1->SetDstWindow(0, 0, 20, 20);
-    EXPECT_EQ(poBand->AddSource(std::move(poCS1)), CE_None);
-
-    GDALRasterIOExtraArg sArg;
-    INIT_RASTERIO_EXTRA_ARG(sArg);
-
-    // 1. Floating point window
-    sArg.bFloatingPointWindowValidity = TRUE;
-    sArg.dfXOff = 0.0;
-    sArg.dfYOff = 0.0;
-    sArg.dfXSize = 20.0;
-    sArg.dfYSize = 20.0;
-    EXPECT_TRUE(poBand->CanIRasterIOBeForwardedToEachSource(GF_Read, 0, 0, 20,
-                                                            20, 10, 10, &sArg));
-    sArg.bFloatingPointWindowValidity = FALSE;
-
-    // 2. IsMaskBand() causes false
     VRTDataset dsMask(20, 20);
-    dsMask.AddBand(GDT_Byte, nullptr);
+    ASSERT_EQ(CE_None, dsMask.AddBand(GDT_Byte, nullptr));
     auto poBandMask =
         cpl::down_cast<VRTSourcedRasterBand*>(dsMask.GetRasterBand(1));
-    ASSERT_NE(poBandMask, nullptr);
+    ASSERT_NE(nullptr, poBandMask);
     auto poCSMask = std::make_unique<VRTComplexSource>();
     poCSMask->SetSrcBand(poSrcDSOpen->GetRasterBand(1));
     poSrcDSOpen->Reference();
     poCSMask->SetResampling("bilinear");
-    poBandMask->AddSource(std::move(poCSMask));
+    EXPECT_EQ(CE_None, poBandMask->AddSource(std::move(poCSMask)));
     poBandMask->SetIsMaskBand();
     EXPECT_FALSE(poBandMask->CanIRasterIOBeForwardedToEachSource(
         GF_Read, 0, 0, 20, 20, 10, 10, &sArg));
+  }
 
-    // 3. Nodata mismatch causes false
-    poBand->SetNoDataValue(42.0);
-    EXPECT_FALSE(poBand->CanIRasterIOBeForwardedToEachSource(
-        GF_Read, 0, 0, 20, 20, 10, 10, &sArg));
+  // 3. Nodata mismatch causes false; matching nodata succeeds.
+  EXPECT_EQ(CE_None, poBand->SetNoDataValue(42.0));
+  EXPECT_FALSE(poBand->CanIRasterIOBeForwardedToEachSource(GF_Read, 0, 0, 20,
+                                                           20, 10, 10, &sArg));
 
-    // Matching nodata allows it to continue
-    poSrcDSOpen->GetRasterBand(1)->SetNoDataValue(42.0);
-    EXPECT_TRUE(poBand->CanIRasterIOBeForwardedToEachSource(GF_Read, 0, 0, 20,
-                                                            20, 10, 10, &sArg));
-    poBand->DeleteNoDataValue();
+  EXPECT_EQ(CE_None, poSrcDSOpen->GetRasterBand(1)->SetNoDataValue(42.0));
+  EXPECT_TRUE(poBand->CanIRasterIOBeForwardedToEachSource(GF_Read, 0, 0, 20, 20,
+                                                          10, 10, &sArg));
+  EXPECT_EQ(CE_None, poBand->DeleteNoDataValue());
 
-    // 4. Downsample read fallback path: when the request cannot be forwarded
-    // to the sources, the band temporarily disables overviews, adopts the
-    // sources' common resampling and delegates to GDALRasterBand::IRasterIO.
-    std::vector<GByte> outBuf(100, 0);
-    EXPECT_EQ(poBand->RasterIO(GF_Read, 0, 0, 20, 20, outBuf.data(), 10, 10,
-                               GDT_Byte, 1, 10, nullptr),
-              CE_None);
+  // 4. Downsample read fallback path.
+  std::vector<GByte> outBuf(100, 0);
+  EXPECT_EQ(CE_None, poBand->RasterIO(GF_Read, 0, 0, 20, 20, outBuf.data(), 10,
+                                      10, GDT_Byte, 1, 10, nullptr));
 
-    // 5. Multiple complex sources with different resampling
-    auto poCS2 = std::make_unique<VRTComplexSource>();
-    poCS2->SetSrcBand(poSrcDSOpen->GetRasterBand(1));
-    poSrcDSOpen->Reference();
-    poCS2->SetResampling("cubic");
-    poCS2->SetSrcWindow(0, 0, 20, 20);
-    poCS2->SetDstWindow(0, 0, 20, 20);
-    EXPECT_EQ(poBand->AddSource(std::move(poCS2)), CE_None);
+  // 5. Multiple complex sources with different resampling.
+  auto poCS2 = std::make_unique<VRTComplexSource>();
+  poCS2->SetSrcBand(poSrcDSOpen->GetRasterBand(1));
+  poSrcDSOpen->Reference();
+  poCS2->SetResampling("cubic");
+  poCS2->SetSrcWindow(0, 0, 20, 20);
+  poCS2->SetDstWindow(0, 0, 20, 20);
+  EXPECT_EQ(CE_None, poBand->AddSource(std::move(poCS2)));
 
-    EXPECT_EQ(poBand->RasterIO(GF_Read, 0, 0, 20, 20, outBuf.data(), 10, 10,
-                               GDT_Byte, 1, 10, nullptr),
-              CE_None);
+  EXPECT_EQ(CE_None, poBand->RasterIO(GF_Read, 0, 0, 20, 20, outBuf.data(), 10,
+                                      10, GDT_Byte, 1, 10, nullptr));
 
-    // 6. FuncSource causes CanIRasterIOBeForwardedToEachSource to return false
+  // 6. FuncSource causes CanIRasterIOBeForwardedToEachSource to return false.
+  {
     VRTDataset dsFunc(20, 20);
-    dsFunc.AddBand(GDT_Byte, nullptr);
+    ASSERT_EQ(CE_None, dsFunc.AddBand(GDT_Byte, nullptr));
     auto poBandFunc =
         cpl::down_cast<VRTSourcedRasterBand*>(dsFunc.GetRasterBand(1));
-    poBandFunc->AddFuncSource(MyImageReadFunc, nullptr, 0.0);
+    ASSERT_NE(nullptr, poBandFunc);
+    EXPECT_EQ(CE_None,
+              poBandFunc->AddFuncSource(MyImageReadFunc, nullptr, 0.0));
     sArg.eResampleAlg = GRIORA_Bilinear;
     EXPECT_FALSE(poBandFunc->CanIRasterIOBeForwardedToEachSource(
         GF_Read, 0, 0, 20, 20, 10, 10, &sArg));
   }
-
-  GDALClose(poSrcDSOpen);
 }
 
-// 17. CanMultiThreadRasterIOBranches
-TEST_F(VRTSourcedRasterBandTest, CanMultiThreadRasterIOBranches) {
+TEST_F(VrtSourcedRasterBandTest, CanMultiThreadRasterIOBranches) {
   VRTDataset ds(20, 20);
-  ds.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
   auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-  ASSERT_NE(poBand, nullptr);
+  ASSERT_NE(nullptr, poBand);
 
-  // FuncSource returns false
-  poBand->AddFuncSource(MyImageReadFunc, nullptr, 0.0);
+  // 1. FuncSource returns false.
+  EXPECT_EQ(CE_None, poBand->AddFuncSource(MyImageReadFunc, nullptr, 0.0));
   int nContrib = 0;
   EXPECT_FALSE(poBand->CanMultiThreadRasterIO(0, 0, 20, 20, nContrib));
 
-  // Two sources with duplicate dataset name returns false
+  // 2. Two sources with duplicate dataset name returns false.
   VRTDataset dsDup(20, 20);
-  dsDup.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, dsDup.AddBand(GDT_Byte, nullptr));
   auto poBandDup =
       cpl::down_cast<VRTSourcedRasterBand*>(dsDup.GetRasterBand(1));
-  poBandDup->AddSimpleSource("/vsimem/dup.tif", 1, 0, 0, 10, 20, 0, 0, 10, 20);
-  poBandDup->AddSimpleSource("/vsimem/dup.tif", 1, 0, 0, 10, 20, 10, 0, 10, 20);
+  ASSERT_NE(nullptr, poBandDup);
+  ASSERT_EQ(CE_None, poBandDup->AddSimpleSource(
+                         "/vsimem/vrtsourcedrasterband_test/dup.tif", 1, 0, 0,
+                         10, 20, 0, 0, 10, 20));
+  ASSERT_EQ(CE_None, poBandDup->AddSimpleSource(
+                         "/vsimem/vrtsourcedrasterband_test/dup.tif", 1, 0, 0,
+                         10, 20, 10, 0, 10, 20));
   EXPECT_FALSE(poBandDup->CanMultiThreadRasterIO(0, 0, 20, 20, nContrib));
 }
 
-// 18. GetDataCoverageStatusAdvanced
-TEST_F(VRTSourcedRasterBandTest, GetDataCoverageStatusAdvanced) {
-  TrackFile("/vsimem/cov_adv1.tif");
-  TrackFile("/vsimem/cov_adv2.tif");
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
-  auto poDS1 = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/cov_adv1.tif", 20, 20, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poDS1, nullptr);
-  poDS1.reset();
-  auto poDS2 = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/cov_adv2.tif", 20, 20, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poDS2, nullptr);
-  poDS2.reset();
+TEST_F(VrtSourcedRasterBandTest, GetDataCoverageStatusAdvanced) {
+  constexpr char kCovAdv1[] = "/vsimem/vrtsourcedrasterband_test/cov_adv1.tif";
+  constexpr char kCovAdv2[] = "/vsimem/vrtsourcedrasterband_test/cov_adv2.tif";
+  CreateByteGeoTiff(kCovAdv1, 20, 20);
+  CreateByteGeoTiff(kCovAdv2, 20, 20);
 
   VRTDataset ds(40, 20);
-  ds.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
   auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-  ASSERT_NE(poBand, nullptr);
+  ASSERT_NE(nullptr, poBand);
 
-  poBand->AddSimpleSource("/vsimem/cov_adv1.tif", 1, 0, 0, 20, 20, 0, 0, 20,
-                          20);
-  poBand->AddSimpleSource("/vsimem/cov_adv2.tif", 1, 0, 0, 20, 20, 20, 0, 20,
-                          20);
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kCovAdv1, 1, 0, 0, 20, 20, 0, 0, 20, 20));
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kCovAdv2, 1, 0, 0, 20, 20, 20, 0, 20, 20));
 
-  // Partial AOI query covering part of both sources: triggers GEOS difference
-  // loop
+  // 1. Partial AOI query covering part of both sources: triggers GEOS
+  // difference loop.
   double dfDataPct = 0.0;
   int nStatus = poBand->GetDataCoverageStatus(10, 0, 20, 20, 0, &dfDataPct);
-  EXPECT_NE(nStatus & GDAL_DATA_COVERAGE_STATUS_DATA, 0);
-  EXPECT_DOUBLE_EQ(dfDataPct, 100.0);
+  EXPECT_NE(0, nStatus & GDAL_DATA_COVERAGE_STATUS_DATA);
+  EXPECT_DOUBLE_EQ(100.0, dfDataPct);
 
-  // Query with nMaskFlagStop
+  // 2. Query with nMaskFlagStop.
   nStatus = poBand->GetDataCoverageStatus(
       0, 0, 40, 20, GDAL_DATA_COVERAGE_STATUS_DATA, nullptr);
-  EXPECT_NE(nStatus & GDAL_DATA_COVERAGE_STATUS_DATA, 0);
+  EXPECT_NE(0, nStatus & GDAL_DATA_COVERAGE_STATUS_DATA);
 
-  // Add source with dfDstXSize = -1 and dfDstYSize = -1
+  // 3. Add source with dfDstXSize = -1 and dfDstYSize = -1.
   VRTDataset dsDefault(20, 20);
-  dsDefault.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, dsDefault.AddBand(GDT_Byte, nullptr));
   auto poBandDef =
       cpl::down_cast<VRTSourcedRasterBand*>(dsDefault.GetRasterBand(1));
+  ASSERT_NE(nullptr, poBandDef);
   auto poSS = std::make_unique<VRTSimpleSource>();
-  poSS->SetSrcBand("/vsimem/cov_adv1.tif", 1);
+  poSS->SetSrcBand(kCovAdv1, 1);
   poSS->SetDstWindow(0, 0, -1, -1);
-  poBandDef->AddSource(std::move(poSS));
-  poBandDef->GetDataCoverageStatus(0, 0, 20, 20, 0, nullptr);
+  EXPECT_EQ(CE_None, poBandDef->AddSource(std::move(poSS)));
+  nStatus = poBandDef->GetDataCoverageStatus(0, 0, 20, 20, 0, nullptr);
+  EXPECT_NE(0, nStatus & GDAL_DATA_COVERAGE_STATUS_DATA);
 }
 
-// 19. ConfigureSourceAndRefBranches
-TEST_F(VRTSourcedRasterBandTest, ConfigureSourceAndRefBranches) {
-  TrackFile("/vsimem/cfg_src.tif");
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
-  auto poSrcDS = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/cfg_src.tif", 20, 20, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poSrcDS, nullptr);
-  poSrcDS.reset();
+TEST_F(VrtSourcedRasterBandTest, ConfigureSourceAndRefBranches) {
+  constexpr char kCfgSrc[] = "/vsimem/vrtsourcedrasterband_test/cfg_src.tif";
+  CreateByteGeoTiff(kCfgSrc, 20, 20);
 
-  auto poSrcDSOpen = GDALDataset::Open("/vsimem/cfg_src.tif", GA_ReadOnly);
-  ASSERT_NE(poSrcDSOpen, nullptr);
+  GDALDatasetUniquePtr poSrcDSOpen(GDALDataset::FromHandle(GDALOpenEx(
+      kCfgSrc, GDAL_OF_READONLY | GDAL_OF_RASTER, nullptr, nullptr, nullptr)));
+  ASSERT_NE(nullptr, poSrcDSOpen);
 
-  {
-    VRTDataset ds(20, 20);
-    ds.AddBand(GDT_Byte, nullptr);
-    auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-    ASSERT_NE(poBand, nullptr);
+  VRTDataset ds(20, 20);
+  ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
+  auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
+  ASSERT_NE(nullptr, poBand);
 
-    // dfSrcYSize == -1 and dfDstYSize == -1 in ConfigureSource
-    EXPECT_EQ(poBand->AddSimpleSource(poSrcDSOpen->GetRasterBand(1), 0, 0, 20,
-                                      -1, 0, 0, 20, -1),
-              CE_None);
+  // dfSrcYSize == -1 and dfDstYSize == -1 in ConfigureSource.
+  EXPECT_EQ(CE_None, poBand->AddSimpleSource(poSrcDSOpen->GetRasterBand(1), 0,
+                                             0, 20, -1, 0, 0, 20, -1));
 
-    // poVRTSrcBandDataset && !poVRTSrcBandDataset->m_bCanTakeRef
-    // BuildOverviews internally calls AddVirtualOverview which sets
-    // m_bCanTakeRef = false on the dataset and adds a source to the overview
-    // band.
-    VRTDataset vrtOverview(20, 20);
-    vrtOverview.AddBand(GDT_Byte, nullptr);
-    int anOvr[] = {2};
-    const char* apszOvrOptions[] = {"VIRTUAL=YES", nullptr};
-    EXPECT_EQ(vrtOverview.BuildOverviews("NEAREST", 1, anOvr, 0, nullptr,
-                                         nullptr, nullptr, apszOvrOptions),
-              CE_None);
-  }
-
-  GDALClose(poSrcDSOpen);
+  // BuildOverviews internally calls AddVirtualOverview which sets
+  // m_bCanTakeRef = false on the dataset.
+  VRTDataset vrtOverview(20, 20);
+  ASSERT_EQ(CE_None, vrtOverview.AddBand(GDT_Byte, nullptr));
+  int anOvr[] = {2};
+  CPLStringList aosOvrOptions;
+  aosOvrOptions.AddNameValue("VIRTUAL", "YES");
+  EXPECT_EQ(CE_None,
+            vrtOverview.BuildOverviews("NEAREST", 1, anOvr, 0, nullptr, nullptr,
+                                       nullptr, aosOvrOptions.List()));
 }
 
-// 20. IReadBlockEdgeBlocks
-TEST_F(VRTSourcedRasterBandTest, IReadBlockEdgeBlocks) {
+TEST_F(VrtSourcedRasterBandTest, IReadBlockEdgeBlocks) {
   VRTDataset ds(25, 25);
   auto poBand =
       std::make_unique<VRTSourcedRasterBand>(&ds, 1, GDT_Byte, 25, 25, 20, 20);
   std::vector<GByte> block(20 * 20, 0);
-  EXPECT_EQ(poBand->IReadBlock(1, 0, block.data()), CE_None);
-  EXPECT_EQ(poBand->IReadBlock(0, 1, block.data()), CE_None);
+  EXPECT_EQ(CE_None, poBand->IReadBlock(1, 0, block.data()));
+  EXPECT_EQ(CE_None, poBand->IReadBlock(0, 1, block.data()));
 }
 
-// 21. MetadataAndXMLInitErrorPaths
-TEST_F(VRTSourcedRasterBandTest, MetadataAndXMLInitErrorPaths) {
+TEST_F(VrtSourcedRasterBandTest, MetadataAndXMLInitErrorPaths) {
   VRTDataset ds(20, 20);
-  ds.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
   auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-  ASSERT_NE(poBand, nullptr);
+  ASSERT_NE(nullptr, poBand);
 
-  // Bad XML for new_vrt_sources and vrt_sources
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(poBand->SetMetadataItem("new", "<bad", "new_vrt_sources"),
-            CE_Failure);
-  EXPECT_EQ(poBand->SetMetadataItem("source_0", "<bad", "vrt_sources"),
-            CE_Failure);
+  CPLStringList aosBadMD;
+  aosBadMD.AddNameValue("source_0", "<bad");
 
-  // Unknown source XML
-  EXPECT_EQ(
-      poBand->SetMetadataItem("new", "<UnknownSource/>", "new_vrt_sources"),
-      CE_Failure);
+  // 1. Bad XML for new_vrt_sources and vrt_sources.
+  {
+    CPLErrorReset();
+    WithQuietHandler quiet;
+    EXPECT_EQ(CE_Failure,
+              poBand->SetMetadataItem("new", "<bad", "new_vrt_sources"));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
+  {
+    CPLErrorReset();
+    WithQuietHandler quiet;
+    EXPECT_EQ(CE_Failure,
+              poBand->SetMetadataItem("source_0", "<bad", "vrt_sources"));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, poBand->SetMetadataItem("new", "<UnknownSource/>",
+                                                  "new_vrt_sources"));
+    CPLErrorReset();
+  }
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, poBand->SetMetadata(aosBadMD.List(), "vrt_sources"));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
 
-  // SetMetadata with bad XML
-  char* papszBadMD[] = {const_cast<char*>("source_0=<bad"), nullptr};
-  EXPECT_EQ(poBand->SetMetadata(papszBadMD, "vrt_sources"), CE_Failure);
-
-  // Standalone band without dataset
+  // 2. Standalone band without dataset.
   VRTSourcedRasterBand standaloneBand(GDT_Byte, 10, 10);
-  EXPECT_EQ(standaloneBand.SetMetadataItem("new", "<SimpleSource/>",
-                                           "new_vrt_sources"),
-            CE_Failure);
-  EXPECT_EQ(standaloneBand.SetMetadataItem("source_0", "<SimpleSource/>",
-                                           "vrt_sources"),
-            CE_Failure);
-  EXPECT_EQ(standaloneBand.SetMetadata(papszBadMD, "vrt_sources"), CE_Failure);
+  {
+    CPLErrorReset();
+    WithQuietHandler quiet;
+    EXPECT_EQ(CE_Failure, standaloneBand.SetMetadataItem(
+                              "new", "<SimpleSource/>", "new_vrt_sources"));
+    EXPECT_EQ(CE_Failure, standaloneBand.SetMetadataItem(
+                              "source_0", "<SimpleSource/>", "vrt_sources"));
+    EXPECT_EQ(CE_Failure,
+              standaloneBand.SetMetadata(aosBadMD.List(), "vrt_sources"));
+    CPLErrorReset();
+  }
 
-  // LocationInfo error paths
-  EXPECT_EQ(standaloneBand.GetMetadataItem("GeoPixel_5.0_5.0", "LocationInfo"),
-            nullptr);
-  EXPECT_EQ(poBand->GetMetadataItem("GeoPixel_5.0_5.0", "LocationInfo"),
-            nullptr);
-  EXPECT_EQ(poBand->GetMetadataItem("GeoPixel_bad_coord", "LocationInfo"),
-            nullptr);
+  // 3. LocationInfo error paths.
+  EXPECT_EQ(nullptr,
+            standaloneBand.GetMetadataItem("GeoPixel_5.0_5.0", "LocationInfo"));
+  EXPECT_EQ(nullptr,
+            poBand->GetMetadataItem("GeoPixel_5.0_5.0", "LocationInfo"));
+  EXPECT_EQ(nullptr,
+            poBand->GetMetadataItem("GeoPixel_bad_coord", "LocationInfo"));
 
-  // XMLInit with unknown child tag
-  const std::string bad_vrt =
-      "<VRTRasterBand dataType=\"Byte\">\n"
-      "  <UnknownTag/>\n"
-      "</VRTRasterBand>\n";
-  CPLXMLTreeCloser psTree(CPLParseXMLString(bad_vrt.c_str()));
+  // 4. XMLInit with unknown child tag succeeds.
+  constexpr char kBadVrt[] = R"xml(
+<VRTRasterBand dataType="Byte">
+  <UnknownTag/>
+</VRTRasterBand>)xml";
+  CPLXMLTreeCloser psTree(CPLParseXMLString(kBadVrt));
+  ASSERT_NE(nullptr, psTree.get());
   VRTMapSharedResources mapRes;
-  EXPECT_EQ(poBand->XMLInit(psTree.get(), nullptr, mapRes), CE_None);
+  EXPECT_EQ(CE_None, poBand->XMLInit(psTree.get(), nullptr, mapRes));
 
-  // IRasterIO with GF_Write returns failure
-  std::vector<GByte> buf(400, 0);
-  EXPECT_EQ(poBand->RasterIO(GF_Write, 0, 0, 20, 20, buf.data(), 20, 20,
-                             GDT_Byte, 1, 20, nullptr),
-            CE_Failure);
-  CPLPopErrorHandler();
+  // 5. IRasterIO with GF_Write returns failure.
+  {
+    std::vector<GByte> buf(400, 0);
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, poBand->RasterIO(GF_Write, 0, 0, 20, 20, buf.data(),
+                                           20, 20, GDT_Byte, 1, 20, nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
 }
 
-// 22. RemoveCoveredSourcesMultipleUpper
-TEST_F(VRTSourcedRasterBandTest, RemoveCoveredSourcesMultipleUpper) {
-  TrackFile("/vsimem/rm_base.tif");
-  TrackFile("/vsimem/rm_top.tif");
-  TrackFile("/vsimem/rm_bottom.tif");
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
-
-  auto poBase = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/rm_base.tif", 20, 20, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poBase, nullptr);
-  poBase.reset();
-
-  auto poTop = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/rm_top.tif", 20, 10, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poTop, nullptr);
-  poTop.reset();
-
-  auto poBottom = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/rm_bottom.tif", 20, 10, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poBottom, nullptr);
-  poBottom.reset();
+TEST_F(VrtSourcedRasterBandTest, RemoveCoveredSourcesMultipleUpper) {
+  constexpr char kRmBase[] = "/vsimem/vrtsourcedrasterband_test/rm_base.tif";
+  constexpr char kRmTop[] = "/vsimem/vrtsourcedrasterband_test/rm_top.tif";
+  constexpr char kRmBottom[] =
+      "/vsimem/vrtsourcedrasterband_test/rm_bottom.tif";
+  CreateByteGeoTiff(kRmBase, 20, 20);
+  CreateByteGeoTiff(kRmTop, 20, 10);
+  CreateByteGeoTiff(kRmBottom, 20, 10);
 
   VRTDataset ds(20, 20);
-  ds.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
   auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-  ASSERT_NE(poBand, nullptr);
+  ASSERT_NE(nullptr, poBand);
 
-  // Lower source 0: (0, 0, 20, 20)
-  poBand->AddSimpleSource("/vsimem/rm_base.tif", 1, 0, 0, 20, 20, 0, 0, 20, 20);
-  // Upper source 1: (0, 0, 20, 10)
-  poBand->AddSimpleSource("/vsimem/rm_top.tif", 1, 0, 0, 20, 10, 0, 0, 20, 10);
-  // Upper source 2: (0, 10, 20, 10)
-  poBand->AddSimpleSource("/vsimem/rm_bottom.tif", 1, 0, 0, 20, 10, 0, 10, 20,
-                          10);
-  EXPECT_EQ(poBand->m_papoSources.size(), 3);
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kRmBase, 1, 0, 0, 20, 20, 0, 0, 20, 20));
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kRmTop, 1, 0, 0, 20, 10, 0, 0, 20, 10));
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kRmBottom, 1, 0, 0, 20, 10, 0, 10, 20, 10));
+  EXPECT_EQ(3U, poBand->m_papoSources.size());
 
-  // Together source 1 and source 2 completely cover source 0
+  // Together source 1 and source 2 completely cover source 0.
   poBand->RemoveCoveredSources(nullptr);
-  EXPECT_EQ(poBand->m_papoSources.size(), 2);
+  EXPECT_EQ(2U, poBand->m_papoSources.size());
 }
 
-TEST_F(VRTSourcedRasterBandTest, XMLInitErrorHandling) {
+TEST_F(VrtSourcedRasterBandTest, XMLInitErrorHandling) {
   VRTDataset ds(10, 10);
   VRTSourcedRasterBand band(&ds, 1);
   VRTMapSharedResources mapSharedSources;
 
-  // Invalid data type in VRTRasterBand XML
+  // 1. Invalid data type in VRTRasterBand XML.
   {
     CPLXMLTreeCloser oTree(CPLParseXMLString(
         "<VRTRasterBand dataType=\"NonExistentDataType\" band=\"1\"/>"));
-    ASSERT_NE(oTree.get(), nullptr);
-    CPLErrorStateBackuper oErrorStateBackuper(CPLQuietErrorHandler);
-    EXPECT_EQ(band.XMLInit(oTree.get(), nullptr, mapSharedSources), CE_Failure);
+    ASSERT_NE(nullptr, oTree.get());
+    CPLErrorReset();
+    WithQuietHandler quiet;
+    EXPECT_EQ(CE_Failure, band.XMLInit(oTree.get(), nullptr, mapSharedSources));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
   }
 
-  // Invalid Source XML that causes ParseSource to fail
+  // 2. Invalid Source XML that causes ParseSource to fail.
   {
     CPLXMLTreeCloser oTree(
         CPLParseXMLString("<VRTRasterBand dataType=\"Byte\" band=\"1\">"
-                          "  <SimpleSource/>"  // Missing SourceFilename
+                          "  <SimpleSource/>"
                           "</VRTRasterBand>"));
-    ASSERT_NE(oTree.get(), nullptr);
-    CPLErrorStateBackuper oErrorStateBackuper(CPLQuietErrorHandler);
-    EXPECT_EQ(band.XMLInit(oTree.get(), nullptr, mapSharedSources), CE_Failure);
+    ASSERT_NE(nullptr, oTree.get());
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, band.XMLInit(oTree.get(), nullptr, mapSharedSources));
+    CPLErrorReset();
   }
 }
 
-TEST_F(VRTSourcedRasterBandTest, OverviewRasterIOBranch) {
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
+TEST_F(VrtSourcedRasterBandTest, OverviewRasterIOBranch) {
+  constexpr char kOvrFull[] = "/vsimem/vrtsourcedrasterband_test/ovr_full.tif";
+  constexpr char kOvrHalf[] = "/vsimem/vrtsourcedrasterband_test/ovr_half.tif";
+  CreateByteGeoTiff(kOvrFull, 20, 20);
+  CreateByteGeoTiff(kOvrHalf, 10, 10, 42);
 
-  auto poFull = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/ovr_full.tif", 20, 20, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poFull, nullptr);
-  poFull.reset();
+  constexpr char kVrtXml[] = R"xml(
+<VRTDataset rasterXSize="20" rasterYSize="20">
+  <VRTRasterBand dataType="Byte" band="1">
+    <SimpleSource>
+      <SourceFilename relativeToVRT="0">/vsimem/vrtsourcedrasterband_test/ovr_full.tif</SourceFilename>
+      <SourceBand>1</SourceBand>
+      <SrcRect xOff="0" yOff="0" xSize="20" ySize="20"/>
+      <DstRect xOff="0" yOff="0" xSize="20" ySize="20"/>
+    </SimpleSource>
+    <Overview>
+      <SourceFilename relativeToVRT="0">/vsimem/vrtsourcedrasterband_test/ovr_half.tif</SourceFilename>
+      <SourceBand>1</SourceBand>
+    </Overview>
+  </VRTRasterBand>
+</VRTDataset>)xml";
 
-  auto poHalf = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/ovr_half.tif", 10, 10, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poHalf, nullptr);
-  std::vector<GByte> abyHalfData(100, 42);
-  EXPECT_EQ(poHalf->GetRasterBand(1)->RasterIO(GF_Write, 0, 0, 10, 10,
-                                               abyHalfData.data(), 10, 10,
-                                               GDT_Byte, 1, 10, nullptr),
-            CE_None);
-  poHalf.reset();
-
-  const char* pszVRTXML =
-      "<VRTDataset rasterXSize=\"20\" rasterYSize=\"20\">"
-      "  <VRTRasterBand dataType=\"Byte\" band=\"1\">"
-      "    <SimpleSource>"
-      "      <SourceFilename "
-      "relativeToVRT=\"0\">/vsimem/ovr_full.tif</SourceFilename>"
-      "      <SourceBand>1</SourceBand>"
-      "      <SrcRect xOff=\"0\" yOff=\"0\" xSize=\"20\" ySize=\"20\"/>"
-      "      <DstRect xOff=\"0\" yOff=\"0\" xSize=\"20\" ySize=\"20\"/>"
-      "    </SimpleSource>"
-      "    <Overview>"
-      "      <SourceFilename "
-      "relativeToVRT=\"0\">/vsimem/ovr_half.tif</SourceFilename>"
-      "      <SourceBand>1</SourceBand>"
-      "    </Overview>"
-      "  </VRTRasterBand>"
-      "</VRTDataset>";
-
-  auto poDS = std::unique_ptr<GDALDataset>(
-      GDALDataset::Open(pszVRTXML, GDAL_OF_RASTER | GDAL_OF_READONLY));
-  ASSERT_NE(poDS, nullptr);
-  auto poBand = poDS->GetRasterBand(1);
-  ASSERT_NE(poBand, nullptr);
-  EXPECT_EQ(poBand->GetOverviewCount(), 1);
+  GDALDatasetUniquePtr poDS(GDALDataset::FromHandle(GDALOpenEx(
+      kVrtXml, GDAL_OF_RASTER | GDAL_OF_READONLY, nullptr, nullptr, nullptr)));
+  ASSERT_NE(nullptr, poDS);
+  GDALRasterBand* poBand = poDS->GetRasterBand(1);
+  ASSERT_NE(nullptr, poBand);
+  EXPECT_EQ(1, poBand->GetOverviewCount());
 
   std::vector<GByte> abyBuf(100, 0);
-  EXPECT_EQ(poBand->RasterIO(GF_Read, 0, 0, 20, 20, abyBuf.data(), 10, 10,
-                             GDT_Byte, 1, 10, nullptr),
-            CE_None);
-  EXPECT_EQ(abyBuf[0], 42);
-  EXPECT_EQ(abyBuf[99], 42);
+  EXPECT_EQ(CE_None, poBand->RasterIO(GF_Read, 0, 0, 20, 20, abyBuf.data(), 10,
+                                      10, GDT_Byte, 1, 10, nullptr));
+  EXPECT_EQ(42, abyBuf[0]);
+  EXPECT_EQ(42, abyBuf[99]);
 
-  // Also test GetHistogram, which is delegated to the overview band.
-  GUIntBig anHistogram[256];
-  EXPECT_EQ(poBand->GetHistogram(-0.5, 255.5, 256, anHistogram, FALSE, TRUE,
-                                 nullptr, nullptr),
-            CE_None);
-  EXPECT_EQ(anHistogram[42], 100);
+  // GetHistogram delegated to the overview band.
+  GUIntBig anHistogram[256] = {};
+  EXPECT_EQ(CE_None, poBand->GetHistogram(-0.5, 255.5, 256, anHistogram, FALSE,
+                                          TRUE, nullptr, nullptr));
+  EXPECT_EQ(100U, anHistogram[42]);
 }
 
-TEST_F(VRTSourcedRasterBandTest, OverviewMinMaxAndStatistics) {
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
-
-  auto poSrc = std::unique_ptr<GDALDataset>(poDrv->Create(
-      "/vsimem/stats_ovr_src.tif", 200, 200, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poSrc, nullptr);
-  std::vector<GByte> abyData(200 * 200, 150);
-  for (int i = 0; i < 200 * 100; ++i) {
-    abyData[i] = 50;
+TEST_F(VrtSourcedRasterBandTest, OverviewMinMaxAndStatistics) {
+  constexpr char kStatsOvrSrc[] =
+      "/vsimem/vrtsourcedrasterband_test/stats_ovr_src.tif";
+  {
+    GDALDriver* poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
+    ASSERT_NE(nullptr, poDrv);
+    GDALDatasetUniquePtr poSrc(
+        poDrv->Create(kStatsOvrSrc, 200, 200, 1, GDT_Byte, nullptr));
+    ASSERT_NE(nullptr, poSrc);
+    std::vector<GByte> abyData(200 * 200, 150);
+    std::fill_n(abyData.begin(), 200 * 100, static_cast<GByte>(50));
+    ASSERT_EQ(CE_None, poSrc->GetRasterBand(1)->RasterIO(
+                           GF_Write, 0, 0, 200, 200, abyData.data(), 200, 200,
+                           GDT_Byte, 1, 200, nullptr));
   }
-  EXPECT_EQ(poSrc->GetRasterBand(1)->RasterIO(GF_Write, 0, 0, 200, 200,
-                                              abyData.data(), 200, 200,
-                                              GDT_Byte, 1, 200, nullptr),
-            CE_None);
-  poSrc.reset();
 
   VRTDataset ds(200, 200);
-  ds.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
   auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-  ASSERT_NE(poBand, nullptr);
+  ASSERT_NE(nullptr, poBand);
 
-  poBand->AddSimpleSource("/vsimem/stats_ovr_src.tif", 1, 0, 0, 200, 200, 0, 0,
-                          200, 200);
+  ASSERT_EQ(CE_None, poBand->AddSimpleSource(kStatsOvrSrc, 1, 0, 0, 200, 200, 0,
+                                             0, 200, 200));
 
   // Build virtual overviews: factor 2 (100x100 = 10,000 pixels > 2500
-  // GDALSTAT_APPROX_NUMSAMPLES)
-  const char* apszOvrOptions[] = {"VIRTUAL=YES", nullptr};
+  // GDALSTAT_APPROX_NUMSAMPLES).
+  CPLStringList aosOvrOptions;
+  aosOvrOptions.AddNameValue("VIRTUAL", "YES");
   int anOverviewList[] = {2};
-  EXPECT_EQ(ds.BuildOverviews("NEAR", 1, anOverviewList, 0, nullptr, nullptr,
-                              nullptr, const_cast<char**>(apszOvrOptions)),
-            CE_None);
-  EXPECT_EQ(poBand->GetOverviewCount(), 1);
+  EXPECT_EQ(CE_None, ds.BuildOverviews("NEAR", 1, anOverviewList, 0, nullptr,
+                                       nullptr, nullptr, aosOvrOptions.List()));
+  EXPECT_EQ(1, poBand->GetOverviewCount());
 
-  // Approximate min/max using overview
-  double adfMinMax[2] = {0, 0};
-  EXPECT_EQ(poBand->ComputeRasterMinMax(TRUE, adfMinMax), CE_None);
+  double adfMinMax[2] = {0.0, 0.0};
+  EXPECT_EQ(CE_None, poBand->ComputeRasterMinMax(TRUE, adfMinMax));
   EXPECT_LE(adfMinMax[0], 50.0);
   EXPECT_GE(adfMinMax[1], 150.0);
 
-  // Approximate statistics using overview
-  double dfMin = 0, dfMax = 0, dfMean = 0, dfStdDev = 0;
-  EXPECT_EQ(poBand->ComputeStatistics(TRUE, &dfMin, &dfMax, &dfMean, &dfStdDev,
-                                      nullptr, nullptr),
-            CE_None);
-  EXPECT_STREQ(poBand->GetMetadataItem("STATISTICS_APPROXIMATE"), "YES");
-  EXPECT_NE(poBand->GetMetadataItem("STATISTICS_VALID_PERCENT"), nullptr);
+  double dfMin = 0.0;
+  double dfMax = 0.0;
+  double dfMean = 0.0;
+  double dfStdDev = 0.0;
+  EXPECT_EQ(CE_None, poBand->ComputeStatistics(TRUE, &dfMin, &dfMax, &dfMean,
+                                               &dfStdDev, nullptr, nullptr));
+  EXPECT_STREQ("YES", poBand->GetMetadataItem("STATISTICS_APPROXIMATE"));
+  EXPECT_NE(nullptr, poBand->GetMetadataItem("STATISTICS_VALID_PERCENT"));
 }
 
-TEST_F(VRTSourcedRasterBandTest, ComputeRasterMinMaxBranches) {
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
+TEST_F(VrtSourcedRasterBandTest, ComputeRasterMinMaxBranches) {
+  GDALDriver* poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
+  ASSERT_NE(nullptr, poDrv);
 
-  // 1. NeedMaxValAdjustment: the per-source min/max is clamped to the
-  // source's declared maximum value.
+  // 1. NeedMaxValAdjustment: per-source min/max is clamped to the source's
+  // declared maximum value.
   {
-    auto poSrc = std::unique_ptr<GDALDataset>(
-        poDrv->Create("/vsimem/maxval_src.tif", 10, 10, 1, GDT_Byte, nullptr));
-    ASSERT_NE(poSrc, nullptr);
-    std::vector<GByte> abyData(100, 80);
-    abyData[0] = 20;
-    EXPECT_EQ(poSrc->GetRasterBand(1)->RasterIO(GF_Write, 0, 0, 10, 10,
-                                                abyData.data(), 10, 10,
-                                                GDT_Byte, 1, 10, nullptr),
-              CE_None);
-    poSrc->GetRasterBand(1)->SetMetadataItem("NBITS", "12", "IMAGE_STRUCTURE");
-    poSrc.reset();
+    constexpr char kMaxValSrc[] =
+        "/vsimem/vrtsourcedrasterband_test/maxval_src.tif";
+    {
+      GDALDatasetUniquePtr poSrc(
+          poDrv->Create(kMaxValSrc, 10, 10, 1, GDT_Byte, nullptr));
+      ASSERT_NE(nullptr, poSrc);
+      std::vector<GByte> abyData(100, 80);
+      abyData[0] = 20;
+      ASSERT_EQ(CE_None, poSrc->GetRasterBand(1)->RasterIO(
+                             GF_Write, 0, 0, 10, 10, abyData.data(), 10, 10,
+                             GDT_Byte, 1, 10, nullptr));
+      EXPECT_EQ(CE_None, poSrc->GetRasterBand(1)->SetMetadataItem(
+                             "NBITS", "12", "IMAGE_STRUCTURE"));
+    }
 
     VRTDataset ds(10, 10);
-    ds.AddBand(GDT_Byte, nullptr);
+    ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
     auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-    ASSERT_NE(poBand, nullptr);
+    ASSERT_NE(nullptr, poBand);
 
     auto poSS = std::make_unique<VRTSimpleSource>();
-    poSS->SetSrcBand("/vsimem/maxval_src.tif", 1);
+    poSS->SetSrcBand(kMaxValSrc, 1);
     poSS->SetSrcWindow(0, 0, 10, 10);
     poSS->SetDstWindow(0, 0, 10, 10);
-    poSS->SetMaxValue(50);  // Less than 80!
-    poBand->AddSource(std::move(poSS));
+    poSS->SetMaxValue(50);
+    EXPECT_EQ(CE_None, poBand->AddSource(std::move(poSS)));
 
-    double adfMinMax[2] = {0, 0};
-    EXPECT_EQ(poBand->ComputeRasterMinMax(FALSE, adfMinMax), CE_None);
-    EXPECT_EQ(adfMinMax[0], 20.0);
-    EXPECT_EQ(adfMinMax[1], 50.0);  // Clamped to 50!
+    double adfMinMax[2] = {0.0, 0.0};
+    EXPECT_EQ(CE_None, poBand->ComputeRasterMinMax(FALSE, adfMinMax));
+    EXPECT_DOUBLE_EQ(20.0, adfMinMax[0]);
+    EXPECT_DOUBLE_EQ(50.0, adfMinMax[1]);
   }
 
   // 2. Mosaic does not cover the whole VRT raster and the VRT has a hidden
   // nodata value: the nodata value is folded into the global min/max.
   {
-    auto poSrc = std::unique_ptr<GDALDataset>(
-        poDrv->Create("/vsimem/part_src.tif", 10, 10, 1, GDT_Byte, nullptr));
-    ASSERT_NE(poSrc, nullptr);
-    std::vector<GByte> abyData(100, 100);
-    EXPECT_EQ(poSrc->GetRasterBand(1)->RasterIO(GF_Write, 0, 0, 10, 10,
-                                                abyData.data(), 10, 10,
-                                                GDT_Byte, 1, 10, nullptr),
-              CE_None);
-    poSrc.reset();
+    constexpr char kPartSrc[] =
+        "/vsimem/vrtsourcedrasterband_test/part_src.tif";
+    CreateByteGeoTiff(kPartSrc, 10, 10, 100);
 
-    VRTDataset ds(20, 20);  // 400 > 100
-    ds.AddBand(GDT_Byte, nullptr);
+    VRTDataset ds(20, 20);
+    ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
     auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-    ASSERT_NE(poBand, nullptr);
+    ASSERT_NE(nullptr, poBand);
 
-    poBand->SetNoDataValue(42.0);
-    poBand->SetMetadataItem("HideNoDataValue", "1");
-    poBand->AddSimpleSource("/vsimem/part_src.tif", 1, 0, 0, 10, 10, 0, 0, 10,
-                            10);
+    EXPECT_EQ(CE_None, poBand->SetNoDataValue(42.0));
+    EXPECT_EQ(CE_None, poBand->SetMetadataItem("HideNoDataValue", "1"));
+    ASSERT_EQ(CE_None,
+              poBand->AddSimpleSource(kPartSrc, 1, 0, 0, 10, 10, 0, 0, 10, 10));
 
-    double adfMinMax[2] = {0, 0};
-    EXPECT_EQ(poBand->ComputeRasterMinMax(FALSE, adfMinMax), CE_None);
-    EXPECT_EQ(adfMinMax[0], 42.0);
-    EXPECT_EQ(adfMinMax[1], 100.0);
+    double adfMinMax[2] = {0.0, 0.0};
+    EXPECT_EQ(CE_None, poBand->ComputeRasterMinMax(FALSE, adfMinMax));
+    EXPECT_DOUBLE_EQ(42.0, adfMinMax[0]);
+    EXPECT_DOUBLE_EQ(100.0, adfMinMax[1]);
   }
 
-  // 3. Fallback to ComputeStatistics() when a source has a nodata value: its
-  // failure error message is captured and re-reported.
+  // 3. Fallback to ComputeStatistics() when a source has only nodata values:
+  // fails with an error.
   {
-    auto poSrc = std::unique_ptr<GDALDataset>(poDrv->Create(
-        "/vsimem/all_nodata_src.tif", 10, 10, 1, GDT_Byte, nullptr));
-    ASSERT_NE(poSrc, nullptr);
-    std::vector<GByte> abyData(100, 0);
-    EXPECT_EQ(poSrc->GetRasterBand(1)->RasterIO(GF_Write, 0, 0, 10, 10,
-                                                abyData.data(), 10, 10,
-                                                GDT_Byte, 1, 10, nullptr),
-              CE_None);
-    poSrc->GetRasterBand(1)->SetNoDataValue(0.0);
-    poSrc.reset();
+    constexpr char kAllNodataSrc[] =
+        "/vsimem/vrtsourcedrasterband_test/all_nodata_src.tif";
+    {
+      GDALDatasetUniquePtr poSrc(
+          poDrv->Create(kAllNodataSrc, 10, 10, 1, GDT_Byte, nullptr));
+      ASSERT_NE(nullptr, poSrc);
+      std::vector<GByte> abyData(100, 0);
+      ASSERT_EQ(CE_None, poSrc->GetRasterBand(1)->RasterIO(
+                             GF_Write, 0, 0, 10, 10, abyData.data(), 10, 10,
+                             GDT_Byte, 1, 10, nullptr));
+      EXPECT_EQ(CE_None, poSrc->GetRasterBand(1)->SetNoDataValue(0.0));
+    }
 
     VRTDataset ds(10, 10);
-    ds.AddBand(GDT_Byte, nullptr);
+    ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
     auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-    ASSERT_NE(poBand, nullptr);
+    ASSERT_NE(nullptr, poBand);
 
-    poBand->SetNoDataValue(0.0);
-    poBand->AddSimpleSource("/vsimem/all_nodata_src.tif", 1, 0, 0, 10, 10, 0, 0,
-                            10, 10);
+    EXPECT_EQ(CE_None, poBand->SetNoDataValue(0.0));
+    ASSERT_EQ(CE_None, poBand->AddSimpleSource(kAllNodataSrc, 1, 0, 0, 10, 10,
+                                               0, 0, 10, 10));
 
-    double adfMinMax[2] = {0, 0};
-    CPLErrorStateBackuper oErrorStateBackuper(CPLQuietErrorHandler);
-    EXPECT_EQ(poBand->ComputeRasterMinMax(FALSE, adfMinMax), CE_Failure);
+    double adfMinMax[2] = {0.0, 0.0};
+    CPLErrorReset();
+    WithQuietHandler quiet;
+    EXPECT_EQ(CE_Failure, poBand->ComputeRasterMinMax(FALSE, adfMinMax));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
   }
 }
 
-TEST_F(VRTSourcedRasterBandTest, ComputeStatisticsMosaicAndThreading) {
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
+TEST_F(VrtSourcedRasterBandTest, ComputeStatisticsMosaicAndThreading) {
+  GDALDriver* poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
+  ASSERT_NE(nullptr, poDrv);
 
-  // 1. Multi-threaded mosaic statistics: per-job progress is aggregated and
-  // forwarded to the user progress callback, a source nodata value distinct
-  // from the VRT one is accounted for as a constant value, and jobs are
-  // submitted to a thread pool queue.
+  constexpr char kThSrc1[] = "/vsimem/vrtsourcedrasterband_test/th_src1.tif";
+  constexpr char kThSrc2[] = "/vsimem/vrtsourcedrasterband_test/th_src2.tif";
+
+  // 1. Multi-threaded mosaic statistics.
   {
-    auto poSrc1 = std::unique_ptr<GDALDataset>(
-        poDrv->Create("/vsimem/th_src1.tif", 20, 20, 1, GDT_Byte, nullptr));
-    ASSERT_NE(poSrc1, nullptr);
-    std::vector<GByte> abyData1(400, 50);
-    abyData1[0] = 10;  // This pixel is nodata
-    EXPECT_EQ(poSrc1->GetRasterBand(1)->RasterIO(GF_Write, 0, 0, 20, 20,
-                                                 abyData1.data(), 20, 20,
-                                                 GDT_Byte, 1, 20, nullptr),
-              CE_None);
-    poSrc1->GetRasterBand(1)->SetNoDataValue(10.0);
-    poSrc1.reset();
+    {
+      GDALDatasetUniquePtr poSrc1(
+          poDrv->Create(kThSrc1, 20, 20, 1, GDT_Byte, nullptr));
+      ASSERT_NE(nullptr, poSrc1);
+      std::vector<GByte> abyData1(400, 50);
+      abyData1[0] = 10;
+      ASSERT_EQ(CE_None, poSrc1->GetRasterBand(1)->RasterIO(
+                             GF_Write, 0, 0, 20, 20, abyData1.data(), 20, 20,
+                             GDT_Byte, 1, 20, nullptr));
+      EXPECT_EQ(CE_None, poSrc1->GetRasterBand(1)->SetNoDataValue(10.0));
+    }
 
-    auto poSrc2 = std::unique_ptr<GDALDataset>(
-        poDrv->Create("/vsimem/th_src2.tif", 20, 20, 1, GDT_Byte, nullptr));
-    ASSERT_NE(poSrc2, nullptr);
-    std::vector<GByte> abyData2(400, 60);
-    EXPECT_EQ(poSrc2->GetRasterBand(1)->RasterIO(GF_Write, 0, 0, 20, 20,
-                                                 abyData2.data(), 20, 20,
-                                                 GDT_Byte, 1, 20, nullptr),
-              CE_None);
-    poSrc2.reset();
+    CreateByteGeoTiff(kThSrc2, 20, 20, 60);
 
     VRTDataset ds(40, 20);
-    ds.AddBand(GDT_Byte, nullptr);
+    ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
     auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-    ASSERT_NE(poBand, nullptr);
+    ASSERT_NE(nullptr, poBand);
 
-    // No nodata set on VRT band -> nodata in src1 (10.0) is treated as real
-    // value
-    poBand->AddSimpleSource("/vsimem/th_src1.tif", 1, 0, 0, 20, 20, 0, 0, 20,
-                            20);
-    poBand->AddSimpleSource("/vsimem/th_src2.tif", 1, 0, 0, 20, 20, 20, 0, 20,
-                            20);
+    ASSERT_EQ(CE_None,
+              poBand->AddSimpleSource(kThSrc1, 1, 0, 0, 20, 20, 0, 0, 20, 20));
+    ASSERT_EQ(CE_None,
+              poBand->AddSimpleSource(kThSrc2, 1, 0, 0, 20, 20, 20, 0, 20, 20));
 
-    CPLSetConfigOption("VRT_NUM_THREADS", "2");
+#if defined(THREAD_SANITIZER) || defined(__SANITIZE_THREAD__)
+    // TODO(schwehr): Re-enable multi-threaded TSan once upstream
+    // GDALRasterBlock::TakeLock()/Touch() block-cache race is fixed.
+    CPLConfigOptionSetter vrt_threads("VRT_NUM_THREADS", "1", false);
+#else
+    CPLConfigOptionSetter vrt_threads("VRT_NUM_THREADS", "2", false);
+#endif
 
     int nProgressCount = 0;
     auto pfnProgress = [](double /*dfComplete*/, const char* /*pszMsg*/,
@@ -1554,216 +1482,214 @@ TEST_F(VRTSourcedRasterBandTest, ComputeStatisticsMosaicAndThreading) {
       return 1;
     };
 
-    double dfMin = 0, dfMax = 0, dfMean = 0, dfStdDev = 0;
-    EXPECT_EQ(
-        poBand->ComputeStatistics(FALSE, &dfMin, &dfMax, &dfMean, &dfStdDev,
-                                  pfnProgress, &nProgressCount),
-        CE_None);
+    double dfMin = 0.0;
+    double dfMax = 0.0;
+    double dfMean = 0.0;
+    double dfStdDev = 0.0;
+    EXPECT_EQ(CE_None, poBand->ComputeStatistics(FALSE, &dfMin, &dfMax, &dfMean,
+                                                 &dfStdDev, pfnProgress,
+                                                 &nProgressCount));
     EXPECT_GT(nProgressCount, 0);
-    EXPECT_EQ(dfMin, 10.0);
-    EXPECT_EQ(dfMax, 60.0);
+    EXPECT_DOUBLE_EQ(10.0, dfMin);
+    EXPECT_DOUBLE_EQ(60.0, dfMax);
 
     // 2. An exact run clears a previously set STATISTICS_APPROXIMATE item.
-    poBand->SetMetadataItem("STATISTICS_APPROXIMATE", "YES");
-    EXPECT_EQ(poBand->ComputeStatistics(FALSE, &dfMin, &dfMax, &dfMean,
-                                        &dfStdDev, nullptr, nullptr),
-              CE_None);
-    EXPECT_EQ(poBand->GetMetadataItem("STATISTICS_APPROXIMATE"), nullptr);
+    EXPECT_EQ(CE_None,
+              poBand->SetMetadataItem("STATISTICS_APPROXIMATE", "YES"));
+    EXPECT_EQ(CE_None, poBand->ComputeStatistics(FALSE, &dfMin, &dfMax, &dfMean,
+                                                 &dfStdDev, nullptr, nullptr));
+    EXPECT_EQ(nullptr, poBand->GetMetadataItem("STATISTICS_APPROXIMATE"));
 
-    // 3. Fallback to GDALRasterBand::ComputeStatistics() when the VRT nodata
-    // value lies within the [min, max] range of a source without nodata.
-    poBand->SetNoDataValue(
-        60.0);  // inside src2 [60, 60], and src2 has no nodata
-    EXPECT_EQ(poBand->ComputeStatistics(FALSE, &dfMin, &dfMax, &dfMean,
-                                        &dfStdDev, nullptr, nullptr),
-              CE_None);
-
-    CPLSetConfigOption("VRT_NUM_THREADS", nullptr);
+    // 3. Fallback when VRT nodata lies within [min, max] of a source without
+    // nodata.
+    EXPECT_EQ(CE_None, poBand->SetNoDataValue(60.0));
+    EXPECT_EQ(CE_None, poBand->ComputeStatistics(FALSE, &dfMin, &dfMax, &dfMean,
+                                                 &dfStdDev, nullptr, nullptr));
   }
 
-  // 4. Non-simple source: the mosaic optimization is not applicable and the
-  // generic GDALRasterBand::ComputeStatistics() is used.
+  // 4. Non-simple source falls back to GDALRasterBand::ComputeStatistics().
   {
     VRTDataset ds(10, 10);
-    ds.AddBand(GDT_Byte, nullptr);
+    ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
     auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-    ASSERT_NE(poBand, nullptr);
+    ASSERT_NE(nullptr, poBand);
 
-    poBand->AddComplexSource("/vsimem/th_src1.tif", 1);
+    ASSERT_EQ(CE_None, poBand->AddComplexSource(kThSrc1, 1));
 
-    double dfMin = 0, dfMax = 0, dfMean = 0, dfStdDev = 0;
-    EXPECT_EQ(poBand->ComputeStatistics(FALSE, &dfMin, &dfMax, &dfMean,
-                                        &dfStdDev, nullptr, nullptr),
-              CE_None);
+    double dfMin = 0.0;
+    double dfMax = 0.0;
+    double dfMean = 0.0;
+    double dfStdDev = 0.0;
+    EXPECT_EQ(CE_None, poBand->ComputeStatistics(FALSE, &dfMin, &dfMax, &dfMean,
+                                                 &dfStdDev, nullptr, nullptr));
   }
 
-  // 5. Zero valid pixels in mosaic: global min/max are reset to 0 and
-  // ComputeStatistics() fails with "no valid pixels found".
+  // 5. Zero valid pixels in mosaic fails.
   {
-    auto poSrc = std::unique_ptr<GDALDataset>(poDrv->Create(
-        "/vsimem/zero_valid_src.tif", 10, 10, 1, GDT_Byte, nullptr));
-    ASSERT_NE(poSrc, nullptr);
-    std::vector<GByte> abyData(100, 0);
-    EXPECT_EQ(poSrc->GetRasterBand(1)->RasterIO(GF_Write, 0, 0, 10, 10,
-                                                abyData.data(), 10, 10,
-                                                GDT_Byte, 1, 10, nullptr),
-              CE_None);
-    poSrc->GetRasterBand(1)->SetNoDataValue(0.0);
-    poSrc.reset();
+    constexpr char kZeroValidSrc[] =
+        "/vsimem/vrtsourcedrasterband_test/zero_valid_src.tif";
+    {
+      GDALDatasetUniquePtr poSrc(
+          poDrv->Create(kZeroValidSrc, 10, 10, 1, GDT_Byte, nullptr));
+      ASSERT_NE(nullptr, poSrc);
+      std::vector<GByte> abyData(100, 0);
+      ASSERT_EQ(CE_None, poSrc->GetRasterBand(1)->RasterIO(
+                             GF_Write, 0, 0, 10, 10, abyData.data(), 10, 10,
+                             GDT_Byte, 1, 10, nullptr));
+      EXPECT_EQ(CE_None, poSrc->GetRasterBand(1)->SetNoDataValue(0.0));
+    }
 
     VRTDataset ds(10, 10);
-    ds.AddBand(GDT_Byte, nullptr);
+    ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
     auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-    ASSERT_NE(poBand, nullptr);
-    poBand->SetNoDataValue(0.0);
-    poBand->AddSimpleSource("/vsimem/zero_valid_src.tif", 1, 0, 0, 10, 10, 0, 0,
-                            10, 10);
+    ASSERT_NE(nullptr, poBand);
+    EXPECT_EQ(CE_None, poBand->SetNoDataValue(0.0));
+    ASSERT_EQ(CE_None, poBand->AddSimpleSource(kZeroValidSrc, 1, 0, 0, 10, 10,
+                                               0, 0, 10, 10));
 
-    double dfMin = 0, dfMax = 0, dfMean = 0, dfStdDev = 0;
-    CPLErrorStateBackuper oErrorStateBackuper(CPLQuietErrorHandler);
-    EXPECT_EQ(poBand->ComputeStatistics(FALSE, &dfMin, &dfMax, &dfMean,
-                                        &dfStdDev, nullptr, nullptr),
-              CE_Failure);
+    double dfMin = 0.0;
+    double dfMax = 0.0;
+    double dfMean = 0.0;
+    double dfStdDev = 0.0;
+    CPLErrorReset();
+    WithQuietHandler quiet;
+    EXPECT_EQ(CE_Failure,
+              poBand->ComputeStatistics(FALSE, &dfMin, &dfMax, &dfMean,
+                                        &dfStdDev, nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
   }
 }
 
-TEST_F(VRTSourcedRasterBandTest, GetMinimumMaximumSourcesAndRecursion) {
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
+TEST_F(VrtSourcedRasterBandTest, GetMinimumMaximumSourcesAndRecursion) {
+  GDALDriver* poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
+  ASSERT_NE(nullptr, poDrv);
 
-  // 1. Sources with statistics: for Byte bands the source loop stops early
-  // once a minimum of 0 / a maximum of 255 is found.
+  // 1. Sources with statistics.
   {
-    auto poSrc1 = std::unique_ptr<GDALDataset>(
-        poDrv->Create("/vsimem/mm_src1.tif", 10, 10, 1, GDT_Byte, nullptr));
-    ASSERT_NE(poSrc1, nullptr);
-    poSrc1->GetRasterBand(1)->SetStatistics(10.0, 100.0, 50.0, 20.0);
-    poSrc1.reset();
-
-    auto poSrc2 = std::unique_ptr<GDALDataset>(
-        poDrv->Create("/vsimem/mm_src2.tif", 10, 10, 1, GDT_Byte, nullptr));
-    ASSERT_NE(poSrc2, nullptr);
-    poSrc2->GetRasterBand(1)->SetStatistics(0.0, 255.0, 128.0, 50.0);
-    poSrc2.reset();
+    constexpr char kMmSrc1[] = "/vsimem/vrtsourcedrasterband_test/mm_src1.tif";
+    constexpr char kMmSrc2[] = "/vsimem/vrtsourcedrasterband_test/mm_src2.tif";
+    {
+      GDALDatasetUniquePtr poSrc1(
+          poDrv->Create(kMmSrc1, 10, 10, 1, GDT_Byte, nullptr));
+      ASSERT_NE(nullptr, poSrc1);
+      EXPECT_EQ(CE_None, poSrc1->GetRasterBand(1)->SetStatistics(10.0, 100.0,
+                                                                 50.0, 20.0));
+    }
+    {
+      GDALDatasetUniquePtr poSrc2(
+          poDrv->Create(kMmSrc2, 10, 10, 1, GDT_Byte, nullptr));
+      ASSERT_NE(nullptr, poSrc2);
+      EXPECT_EQ(CE_None, poSrc2->GetRasterBand(1)->SetStatistics(0.0, 255.0,
+                                                                 128.0, 50.0));
+    }
 
     VRTDataset ds(20, 10);
-    ds.AddBand(GDT_Byte, nullptr);
+    ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
     auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-    ASSERT_NE(poBand, nullptr);
+    ASSERT_NE(nullptr, poBand);
 
-    poBand->AddSimpleSource("/vsimem/mm_src1.tif", 1, 0, 0, 10, 10, 0, 0, 10,
-                            10);
-    poBand->AddSimpleSource("/vsimem/mm_src2.tif", 1, 0, 0, 10, 10, 10, 0, 10,
-                            10);
+    ASSERT_EQ(CE_None,
+              poBand->AddSimpleSource(kMmSrc1, 1, 0, 0, 10, 10, 0, 0, 10, 10));
+    ASSERT_EQ(CE_None,
+              poBand->AddSimpleSource(kMmSrc2, 1, 0, 0, 10, 10, 10, 0, 10, 10));
 
-    CPLSetConfigOption("VRT_MIN_MAX_FROM_SOURCES", "YES");
+    CPLConfigOptionSetter opt("VRT_MIN_MAX_FROM_SOURCES", "YES", false);
 
     int bSuccess = FALSE;
-    double dfMin = poBand->GetMinimum(&bSuccess);
+    const double dfMin = poBand->GetMinimum(&bSuccess);
     EXPECT_TRUE(bSuccess);
-    EXPECT_EQ(dfMin, 0.0);
+    EXPECT_DOUBLE_EQ(0.0, dfMin);
 
-    double dfMax = poBand->GetMaximum(&bSuccess);
+    bSuccess = FALSE;
+    const double dfMax = poBand->GetMaximum(&bSuccess);
     EXPECT_TRUE(bSuccess);
-    EXPECT_EQ(dfMax, 255.0);
-
-    CPLSetConfigOption("VRT_MIN_MAX_FROM_SOURCES", nullptr);
+    EXPECT_DOUBLE_EQ(255.0, dfMax);
   }
 
-  // 2. Recursion detection in GetMinimum, GetMaximum, GetHistogram: the
-  // anti-recursion guard reports "Recursion detected" and fails the call.
+  // 2. Recursion detection in GetMinimum, GetMaximum, and GetHistogram.
   {
-    const char* pszRecVRT =
-        "<VRTDataset rasterXSize=\"10\" rasterYSize=\"10\">"
-        "  <VRTRasterBand dataType=\"Byte\" band=\"1\">"
-        "    <SimpleSource>"
-        "      <SourceFilename "
-        "relativeToVRT=\"0\">/vsimem/rec_vrt.vrt</SourceFilename>"
-        "      <SourceBand>1</SourceBand>"
-        "      <SrcRect xOff=\"0\" yOff=\"0\" xSize=\"10\" ySize=\"10\"/>"
-        "      <DstRect xOff=\"0\" yOff=\"0\" xSize=\"10\" ySize=\"10\"/>"
-        "    </SimpleSource>"
-        "  </VRTRasterBand>"
-        "</VRTDataset>";
+    constexpr char kRecVrt[] = "/vsimem/vrtsourcedrasterband_test/rec_vrt.vrt";
+    constexpr char kRecVrtXml[] = R"xml(
+<VRTDataset rasterXSize="10" rasterYSize="10">
+  <VRTRasterBand dataType="Byte" band="1">
+    <SimpleSource>
+      <SourceFilename relativeToVRT="0">/vsimem/vrtsourcedrasterband_test/rec_vrt.vrt</SourceFilename>
+      <SourceBand>1</SourceBand>
+      <SrcRect xOff="0" yOff="0" xSize="10" ySize="10"/>
+      <DstRect xOff="0" yOff="0" xSize="10" ySize="10"/>
+    </SimpleSource>
+  </VRTRasterBand>
+</VRTDataset>)xml";
+    VsiMemTempWrapper rec_vrt_mem(kRecVrt, kRecVrtXml);
 
-    VSIFCloseL(VSIFileFromMemBuffer(
-        "/vsimem/rec_vrt.vrt",
-        const_cast<GByte*>(reinterpret_cast<const GByte*>(pszRecVRT)),
-        strlen(pszRecVRT), FALSE));
+    GDALDatasetUniquePtr poDS(GDALDataset::FromHandle(
+        GDALOpenEx(kRecVrt, GDAL_OF_RASTER | GDAL_OF_READONLY, nullptr, nullptr,
+                   nullptr)));
+    ASSERT_NE(nullptr, poDS);
+    GDALRasterBand* poBand = poDS->GetRasterBand(1);
+    ASSERT_NE(nullptr, poBand);
 
-    auto poDS = std::unique_ptr<GDALDataset>(GDALDataset::Open(
-        "/vsimem/rec_vrt.vrt", GDAL_OF_RASTER | GDAL_OF_READONLY));
-    ASSERT_NE(poDS, nullptr);
-    auto poBand = poDS->GetRasterBand(1);
-    ASSERT_NE(poBand, nullptr);
+    CPLErrorReset();
+    WithQuietHandler quiet;
 
-    CPLErrorStateBackuper oErrorStateBackuper(CPLQuietErrorHandler);
     int bSuccess = FALSE;
-    EXPECT_EQ(poBand->GetMinimum(&bSuccess), 0.0);
+    EXPECT_DOUBLE_EQ(0.0, poBand->GetMinimum(&bSuccess));
     EXPECT_FALSE(bSuccess);
 
-    EXPECT_EQ(poBand->GetMaximum(&bSuccess), 255.0);
+    bSuccess = FALSE;
+    EXPECT_DOUBLE_EQ(255.0, poBand->GetMaximum(&bSuccess));
     EXPECT_FALSE(bSuccess);
 
-    GUIntBig anHistogram[256];
-    EXPECT_EQ(poBand->GetHistogram(-0.5, 255.5, 256, anHistogram, FALSE, FALSE,
-                                   nullptr, nullptr),
-              CE_Failure);
-
-    poDS.reset();
-    VSIUnlink("/vsimem/rec_vrt.vrt");
+    GUIntBig anHistogram[256] = {};
+    EXPECT_EQ(CE_Failure, poBand->GetHistogram(-0.5, 255.5, 256, anHistogram,
+                                               FALSE, FALSE, nullptr, nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
   }
 }
 
-TEST_F(VRTSourcedRasterBandTest, CanIRasterIOBeForwardedBranches) {
-  auto poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
-  ASSERT_NE(poDrv, nullptr);
-
-  auto poSrc1 = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/fwd_src1.tif", 20, 20, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poSrc1, nullptr);
-  int anOverviewList[] = {2};
-  EXPECT_EQ(poSrc1->BuildOverviews("NEAR", 1, anOverviewList, 0, nullptr,
-                                   nullptr, nullptr),
-            CE_None);
-  poSrc1.reset();
-
-  auto poSrc2 = std::unique_ptr<GDALDataset>(
-      poDrv->Create("/vsimem/fwd_src2.tif", 20, 20, 1, GDT_Byte, nullptr));
-  ASSERT_NE(poSrc2, nullptr);
-  poSrc2.reset();
+TEST_F(VrtSourcedRasterBandTest, CanIRasterIOBeForwardedBranches) {
+  constexpr char kFwdSrc1[] = "/vsimem/vrtsourcedrasterband_test/fwd_src1.tif";
+  constexpr char kFwdSrc2[] = "/vsimem/vrtsourcedrasterband_test/fwd_src2.tif";
+  {
+    GDALDriver* poDrv = GetGDALDriverManager()->GetDriverByName("GTiff");
+    ASSERT_NE(nullptr, poDrv);
+    GDALDatasetUniquePtr poSrc1(
+        poDrv->Create(kFwdSrc1, 20, 20, 1, GDT_Byte, nullptr));
+    ASSERT_NE(nullptr, poSrc1);
+    int anOverviewList[] = {2};
+    EXPECT_EQ(CE_None, poSrc1->BuildOverviews("NEAR", 1, anOverviewList, 0,
+                                              nullptr, nullptr, nullptr));
+  }
+  CreateByteGeoTiff(kFwdSrc2, 20, 20);
 
   VRTDataset ds(40, 20);
-  ds.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
   auto poBand = cpl::down_cast<VRTSourcedRasterBand*>(ds.GetRasterBand(1));
-  ASSERT_NE(poBand, nullptr);
+  ASSERT_NE(nullptr, poBand);
 
-  poBand->AddSimpleSource("/vsimem/fwd_src1.tif", 1, 0, 0, 20, 20, 0, 0, 20,
-                          20);
-  poBand->AddSimpleSource("/vsimem/fwd_src2.tif", 1, 0, 0, 20, 20, 20, 0, 20,
-                          20);
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kFwdSrc1, 1, 0, 0, 20, 20, 0, 0, 20, 20));
+  ASSERT_EQ(CE_None,
+            poBand->AddSimpleSource(kFwdSrc2, 1, 0, 0, 20, 20, 20, 0, 20, 20));
 
-  // Request window (0, 0, 20, 20) with downsampled buffer (10, 10) and Bilinear
-  // resampling:
-  // - src1 has overviews, so bSourceHasOverviews is set when downsampling
-  // - src2 does not intersect window (0, 0, 20, 20) -> GetSrcDstWindow returns
-  // false -> source is skipped
   GDALRasterIOExtraArg sExtraArg;
   INIT_RASTERIO_EXTRA_ARG(sExtraArg);
   sExtraArg.eResampleAlg = GRIORA_Bilinear;
 
   std::vector<GByte> abyBuf(100, 0);
-  EXPECT_EQ(poBand->RasterIO(GF_Read, 0, 0, 20, 20, abyBuf.data(), 10, 10,
-                             GDT_Byte, 1, 10, &sExtraArg),
-            CE_None);
+  EXPECT_EQ(CE_None, poBand->RasterIO(GF_Read, 0, 0, 20, 20, abyBuf.data(), 10,
+                                      10, GDT_Byte, 1, 10, &sExtraArg));
 
-  // Request window across both sources (0, 0, 40, 20) downsampled to (20, 10):
-  // Neither source fully satisfies buffer request ->
-  // bSourceFullySatisfiesRequest is cleared
   std::vector<GByte> abyBuf2(200, 0);
-  EXPECT_EQ(poBand->RasterIO(GF_Read, 0, 0, 40, 20, abyBuf2.data(), 20, 10,
-                             GDT_Byte, 1, 20, &sExtraArg),
-            CE_None);
+  EXPECT_EQ(CE_None, poBand->RasterIO(GF_Read, 0, 0, 40, 20, abyBuf2.data(), 20,
+                                      10, GDT_Byte, 1, 20, &sExtraArg));
 }
 
 }  // namespace
+}  // namespace autotest2
+
+// TODO(schwehr): Cover remaining defensive OOM and multi-threaded statistics
+// accumulation error branches in VRTSourcedRasterBand in
+// vrtsourcedrasterband.cpp.

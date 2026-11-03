@@ -12,15 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests for vrtrawrasterband.cpp.
+// Tests VRTRawRasterBand link validation, XML serialization, raw block I/O,
+// file list tracking, and GDAL_VRT_ENABLE_RAWRASTERBAND handling
+// (vrtrawrasterband.cpp).
+//
+// google3 build caveat:
+//   //third_party/gdal/BUILD passes -DGDAL_VRT_ENABLE_RAWRASTERBAND=ON (see
+//   b/429626570), so tests explicitly set GDAL_VRT_ENABLE_RAWRASTERBAND via
+//   CPLConfigOptionSetter rather than assuming a build default.
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/frmts/vrt/vrtrawrasterband.cpp
+//   https://gdal.org/drivers/raster/vrt.html
 
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
+#include <format>
 #include <memory>
+#include <string>
 #include <vector>
 
+#include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_memory.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
+#include "third_party/gdal/autotest2/cpp/util/vsimem.h"
 #include "third_party/gdal/frmts/vrt/vrtdataset.h"
 #include "third_party/gdal/gcore/gdal.h"
 #include "third_party/gdal/gcore/gdal_priv.h"
@@ -33,6 +50,10 @@
 
 namespace autotest2 {
 namespace {
+
+using ::testing::HasSubstr;
+
+constexpr char kTestDir[] = "/vsimem/vrtrawrasterband_test";
 
 class TestVRTDataset : public VRTDataset {
  public:
@@ -49,483 +70,424 @@ class TestVRTRawRasterBand : public VRTRawRasterBand {
 
 class VrtRawRasterBandTest : public ::testing::Test {
  protected:
-  void SetUp() override { GDALAllRegister(); }
+  void SetUp() override { GDALRegister_VRT(); }
 
-  void TearDown() override {
-    CPLSetConfigOption("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE", nullptr);
-    CPLSetConfigOption("GDAL_VRT_ENABLE_RAWRASTERBAND", nullptr);
-  }
+  void TearDown() override { VSIRmdirRecursive(kTestDir); }
 };
 
 TEST_F(VrtRawRasterBandTest, DisabledByConfig) {
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  CPLSetConfigOption("GDAL_VRT_ENABLE_RAWRASTERBAND", "NO");
+  CPLConfigOptionSetter enable_raw("GDAL_VRT_ENABLE_RAWRASTERBAND", "NO",
+                                   false);
   EXPECT_FALSE(VRTDataset::IsRawRasterBandEnabled());
 
-  const char* vrt_xml =
-      "<VRTDataset rasterXSize=\"10\" rasterYSize=\"10\">"
-      "  <VRTRasterBand dataType=\"Byte\" band=\"1\" "
-      "subClass=\"VRTRawRasterBand\">"
-      "    <SourceFilename "
-      "relativeToVRT=\"0\">/vsimem/fake.bin</SourceFilename>"
-      "  </VRTRasterBand>"
-      "</VRTDataset>";
-  GDALDataset* poDS = static_cast<GDALDataset*>(GDALOpen(vrt_xml, GA_ReadOnly));
-  EXPECT_EQ(poDS, nullptr);
+  constexpr char kVrtXml[] = R"vrt(
+<VRTDataset rasterXSize="10" rasterYSize="10">
+  <VRTRasterBand dataType="Byte" band="1" subClass="VRTRawRasterBand">
+    <SourceFilename relativeToVRT="0">/vsimem/vrtrawrasterband_test/fake.bin</SourceFilename>
+  </VRTRasterBand>
+</VRTDataset>)vrt";
 
-  CPLSetConfigOption("GDAL_VRT_ENABLE_RAWRASTERBAND", nullptr);
-  CPLPopErrorHandler();
+  WithQuietHandler quiet;
+  CPLErrorReset();
+  GDALDatasetUniquePtr poDS(GDALDataset::FromHandle(GDALOpenEx(
+      kVrtXml, GDAL_OF_READONLY | GDAL_OF_RASTER, nullptr, nullptr, nullptr)));
+  EXPECT_EQ(nullptr, poDS);
+  EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
 }
 
 TEST_F(VrtRawRasterBandTest, ConstructWithUnknownType) {
   VRTDataset ds(10, 10);
   VRTRawRasterBand band(&ds, 1, GDT_Unknown);
-  EXPECT_EQ(band.GetRasterDataType(), GDT_Byte);  // VRTRasterBand default
+  EXPECT_EQ(GDT_Byte, band.GetRasterDataType());
 }
 
 TEST_F(VrtRawRasterBandTest, OperationsWithoutRawRaster) {
-  CPLPushErrorHandler(CPLQuietErrorHandler);
+  WithQuietHandler quiet;
   VRTDataset ds(10, 10);
   VRTRawRasterBand band(&ds, 1, GDT_Byte);
 
   uint8_t buffer[100] = {0};
-  EXPECT_EQ(band.RasterIO(GF_Read, 0, 0, 10, 10, buffer, 10, 10, GDT_Byte, 0, 0,
-                          nullptr),
-            CE_Failure);
-
-  EXPECT_EQ(band.ReadBlock(0, 0, buffer), CE_Failure);
-  EXPECT_EQ(band.WriteBlock(0, 0, buffer), CE_Failure);
+  CPLErrorReset();
+  EXPECT_EQ(CE_Failure, band.RasterIO(GF_Read, 0, 0, 10, 10, buffer, 10, 10,
+                                      GDT_Byte, 0, 0, nullptr));
+  EXPECT_EQ(CE_Failure, band.ReadBlock(0, 0, buffer));
+  EXPECT_EQ(CE_Failure, band.WriteBlock(0, 0, buffer));
 
   bool warned = false;
   size_t ram = 0;
-  EXPECT_EQ(band.SerializeToXML(nullptr, warned, ram), nullptr);
+  EXPECT_EQ(nullptr, band.SerializeToXML(nullptr, warned, ram));
 
   int pixel_space = 0;
   GIntBig line_space = 0;
-  // GetVirtualMemAuto falls back to base class when m_poRawRaster is null
-  CPLVirtualMem* vmem =
-      band.GetVirtualMemAuto(GF_Read, &pixel_space, &line_space, nullptr);
-  EXPECT_NE(vmem, nullptr);
-  if (vmem != nullptr) {
-    CPLVirtualMemFree(vmem);
-  }
-
-  CPLPopErrorHandler();
+  std::unique_ptr<CPLVirtualMem, decltype([](CPLVirtualMem* m) {
+                    if (m != nullptr) CPLVirtualMemFree(m);
+                  })>
+      vmem(band.GetVirtualMemAuto(GF_Read, &pixel_space, &line_space, nullptr));
+  EXPECT_NE(nullptr, vmem);
 }
 
 TEST_F(VrtRawRasterBandTest, SetRawLinkValidationErrors) {
-  CPLPushErrorHandler(CPLQuietErrorHandler);
+  WithQuietHandler quiet;
   VRTDataset ds(10, 10);
   VRTRawRasterBand band(&ds, 1, GDT_Byte);
 
-  // Missing filename
-  EXPECT_EQ(band.SetRawLink(nullptr, nullptr, FALSE, 0, 1, 10, nullptr),
-            CE_Failure);
+  // Missing filename.
+  EXPECT_EQ(CE_Failure,
+            band.SetRawLink(nullptr, nullptr, FALSE, 0, 1, 10, nullptr));
 
-  // SIBLING_OR_CHILD default: relativeToVRT must be true
-  EXPECT_EQ(band.SetRawLink("raw.bin", "/vsimem", FALSE, 0, 1, 10, nullptr),
-            CE_Failure);
+  // SIBLING_OR_CHILD default: relativeToVRT must be true.
+  EXPECT_EQ(CE_Failure,
+            band.SetRawLink("raw.bin", kTestDir, FALSE, 0, 1, 10, nullptr));
 
-  // SIBLING_OR_CHILD: absolute path rejected
-  EXPECT_EQ(
-      band.SetRawLink("/vsimem/raw.bin", "/vsimem", TRUE, 0, 1, 10, nullptr),
-      CE_Failure);
+  // SIBLING_OR_CHILD: absolute path rejected.
+  EXPECT_EQ(CE_Failure, band.SetRawLink("/vsimem/vrtrawrasterband_test/raw.bin",
+                                        kTestDir, TRUE, 0, 1, 10, nullptr));
 
-  // SIBLING_OR_CHILD: path containing ../ or ..\ rejected
-  EXPECT_EQ(
-      band.SetRawLink("../raw.bin", "/vsimem/sub", TRUE, 0, 1, 10, nullptr),
-      CE_Failure);
-  EXPECT_EQ(
-      band.SetRawLink("..\\raw.bin", "/vsimem/sub", TRUE, 0, 1, 10, nullptr),
-      CE_Failure);
+  // SIBLING_OR_CHILD: parent traversal rejected.
+  EXPECT_EQ(CE_Failure,
+            band.SetRawLink("../raw.bin", "/vsimem/vrtrawrasterband_test/sub",
+                            TRUE, 0, 1, 10, nullptr));
+  EXPECT_EQ(CE_Failure,
+            band.SetRawLink("..\\raw.bin", "/vsimem/vrtrawrasterband_test/sub",
+                            TRUE, 0, 1, 10, nullptr));
 
-  // ONLY_REMOTE: local file rejected
-  CPLSetConfigOption("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE", "ONLY_REMOTE");
-  EXPECT_EQ(band.SetRawLink("raw.bin", "/vsimem", TRUE, 0, 1, 10, nullptr),
-            CE_Failure);
+  // ONLY_REMOTE: local file rejected.
+  {
+    CPLConfigOptionSetter setter("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE",
+                                 "ONLY_REMOTE", false);
+    EXPECT_EQ(CE_Failure,
+              band.SetRawLink("raw.bin", kTestDir, TRUE, 0, 1, 10, nullptr));
+  }
 
-  // Explicit allowed paths
-  // Path with ../ rejected
-  CPLSetConfigOption("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE", "/vsimem/dir");
-  EXPECT_EQ(
-      band.SetRawLink("../raw.bin", "/vsimem/dir", TRUE, 0, 1, 10, nullptr),
-      CE_Failure);
+  // Explicit allowed directory rejects parent traversal.
+  {
+    CPLConfigOptionSetter setter("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE",
+                                 "/vsimem/vrtrawrasterband_test/dir", false);
+    EXPECT_EQ(CE_Failure,
+              band.SetRawLink("../raw.bin", "/vsimem/vrtrawrasterband_test/dir",
+                              TRUE, 0, 1, 10, nullptr));
+  }
 
-  // Config option contains relative path -> error
-  CPLSetConfigOption("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE", "relative/dir");
-  EXPECT_EQ(band.SetRawLink("raw.bin", "/vsimem/dir", TRUE, 0, 1, 10, nullptr),
-            CE_Failure);
+  // Relative allowed path config option fails.
+  {
+    CPLConfigOptionSetter setter("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE",
+                                 "relative/dir", false);
+    EXPECT_EQ(CE_Failure,
+              band.SetRawLink("raw.bin", "/vsimem/vrtrawrasterband_test/dir",
+                              TRUE, 0, 1, 10, nullptr));
+  }
 
-  // Not in allowed paths
-  CPLSetConfigOption("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE", "/vsimem/other");
-  EXPECT_EQ(band.SetRawLink("raw.bin", "/vsimem/dir", TRUE, 0, 1, 10, nullptr),
-            CE_Failure);
-
-  CPLSetConfigOption("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE", nullptr);
-  CPLPopErrorHandler();
+  // Path outside allowed directory fails.
+  {
+    CPLConfigOptionSetter setter("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE",
+                                 "/vsimem/vrtrawrasterband_test/other", false);
+    EXPECT_EQ(CE_Failure,
+              band.SetRawLink("raw.bin", "/vsimem/vrtrawrasterband_test/dir",
+                              TRUE, 0, 1, 10, nullptr));
+  }
 }
 
 TEST_F(VrtRawRasterBandTest, SetRawLinkFileAndByteOrderErrors) {
-  CPLPushErrorHandler(CPLQuietErrorHandler);
+  CPLConfigOptionSetter enable_raw("GDAL_VRT_ENABLE_RAWRASTERBAND", "YES",
+                                   false);
+  CPLConfigOptionSetter allow_src("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE",
+                                  "ALL", false);
+  WithQuietHandler quiet;
   VRTDataset ds(10, 10);
   VRTRawRasterBand band(&ds, 1, GDT_Byte);
 
-  CPLSetConfigOption("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE", "ALL");
+  // Non-existent file.
+  EXPECT_EQ(CE_Failure,
+            band.SetRawLink("/vsimem/vrtrawrasterband_test/nonexistent.bin",
+                            nullptr, FALSE, 0, 1, 10, nullptr));
 
-  // File does not exist
-  EXPECT_EQ(band.SetRawLink("/vsimem/nonexistent.bin", nullptr, FALSE, 0, 1, 10,
-                            nullptr),
-            CE_Failure);
+  constexpr char kRawFile[] = "/vsimem/vrtrawrasterband_test/test_raw.bin";
+  VsiMemTempWrapper raw_file(kRawFile, std::string(100, '\x2A'));
 
-  // Create valid file in vsimem
-  const char* raw_file = "/vsimem/test_raw.bin";
-  std::vector<uint8_t> data(100, 42);
-  VSILFILE* fp = VSIFOpenL(raw_file, "wb");
-  ASSERT_NE(fp, nullptr);
-  ASSERT_EQ(VSIFWriteL(data.data(), 1, data.size(), fp), data.size());
-  ASSERT_EQ(VSIFCloseL(fp), 0);
+  // Invalid ByteOrder.
+  EXPECT_EQ(CE_Failure, band.SetRawLink(kRawFile, nullptr, FALSE, 0, 1, 10,
+                                        "INVALID_ORDER"));
 
-  // Invalid ByteOrder
-  EXPECT_EQ(
-      band.SetRawLink(raw_file, nullptr, FALSE, 0, 1, 10, "INVALID_ORDER"),
-      CE_Failure);
-
-  // Memory usage check failure (overflow / absurd offsets)
-  EXPECT_EQ(band.SetRawLink(raw_file, nullptr, FALSE, 1000000000, 1000000,
-                            1000000, "LSB"),
-            CE_Failure);
-
-  VSIUnlink(raw_file);
-  CPLPopErrorHandler();
+  // File smaller than required offset + band extent fails in
+  // RAWDatasetCheckMemoryUsage ("Image file is too small").
+  CPLErrorReset();
+  EXPECT_EQ(CE_Failure, band.SetRawLink(kRawFile, nullptr, FALSE, 1000000000,
+                                        1000000, 1000000, "LSB"));
+  EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+  EXPECT_THAT(CPLGetLastErrorMsg(), HasSubstr("too small"));
 }
 
 TEST_F(VrtRawRasterBandTest, ReadWriteSuccessAndRasterIO) {
-  CPLSetConfigOption("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE", "ALL");
+  CPLConfigOptionSetter enable_raw("GDAL_VRT_ENABLE_RAWRASTERBAND", "YES",
+                                   false);
+  CPLConfigOptionSetter allow_src("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE",
+                                  "ALL", false);
 
-  const char* raw_file = "/vsimem/rw_test.bin";
-  std::vector<uint8_t> initial_data(100, 0);
+  constexpr char kRawFile[] = "/vsimem/vrtrawrasterband_test/rw_test.bin";
+  std::string initial_data(100, '\0');
   for (int i = 0; i < 100; ++i) {
-    initial_data[i] = static_cast<uint8_t>(i + 1);
+    initial_data[i] = static_cast<char>(i + 1);
   }
-  VSILFILE* fp = VSIFOpenL(raw_file, "wb");
-  ASSERT_NE(fp, nullptr);
-  ASSERT_EQ(VSIFWriteL(initial_data.data(), 1, initial_data.size(), fp),
-            initial_data.size());
-  ASSERT_EQ(VSIFCloseL(fp), 0);
+  VsiMemTempWrapper raw_file(kRawFile, initial_data);
 
   VRTDataset ds(10, 10);
-  auto band = std::make_unique<VRTRawRasterBand>(&ds, 1, GDT_Byte);
-  ASSERT_EQ(band->SetRawLink(raw_file, nullptr, FALSE, 0, 1, 10, "LSB"),
-            CE_None);
+  VRTRawRasterBand band(&ds, 1, GDT_Byte);
+  ASSERT_EQ(CE_None,
+            band.SetRawLink(kRawFile, nullptr, FALSE, 0, 1, 10, "LSB"));
 
-  // Test ReadBlock
   std::vector<uint8_t> block_data(10);
-  EXPECT_EQ(band->ReadBlock(0, 0, block_data.data()), CE_None);
+  EXPECT_EQ(CE_None, band.ReadBlock(0, 0, block_data.data()));
   for (int i = 0; i < 10; ++i) {
-    EXPECT_EQ(block_data[i], i + 1);
+    EXPECT_EQ(static_cast<uint8_t>(i + 1), block_data[i]);
   }
 
-  // Test Write on read-only dataset -> fails
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(band->RasterIO(GF_Write, 0, 0, 1, 1, block_data.data(), 1, 1,
-                           GDT_Byte, 0, 0, nullptr),
-            CE_Failure);
-  CPLPopErrorHandler();
+  // Write on read-only dataset fails.
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, band.RasterIO(GF_Write, 0, 0, 1, 1, block_data.data(),
+                                        1, 1, GDT_Byte, 0, 0, nullptr));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+  }
 
-  // Test WriteBlock with GA_Update
+  // WriteBlock and RasterIO read on GA_Update dataset.
   TestVRTDataset update_ds(10, 10);
-  auto update_band =
-      std::make_unique<TestVRTRawRasterBand>(&update_ds, 1, GDT_Byte);
-  ASSERT_EQ(update_band->SetRawLink(raw_file, nullptr, FALSE, 0, 1, 10, "MSB"),
-            CE_None);
+  TestVRTRawRasterBand update_band(&update_ds, 1, GDT_Byte);
+  ASSERT_EQ(CE_None,
+            update_band.SetRawLink(kRawFile, nullptr, FALSE, 0, 1, 10, "MSB"));
 
   block_data[0] = 99;
-  EXPECT_EQ(update_band->WriteBlock(0, 0, block_data.data()), CE_None);
+  EXPECT_EQ(CE_None, update_band.WriteBlock(0, 0, block_data.data()));
 
-  // Test RasterIO Read
   std::vector<uint8_t> read_buf(100);
-  EXPECT_EQ(update_band->RasterIO(GF_Read, 0, 0, 10, 10, read_buf.data(), 10,
-                                  10, GDT_Byte, 1, 10, nullptr),
-            CE_None);
-  EXPECT_EQ(read_buf[0], 99);
+  EXPECT_EQ(CE_None,
+            update_band.RasterIO(GF_Read, 0, 0, 10, 10, read_buf.data(), 10, 10,
+                                 GDT_Byte, 1, 10, nullptr));
+  EXPECT_EQ(99, read_buf[0]);
 
-  // Test GetVirtualMemAuto with valid raw raster
   int pixel_space = 0;
   GIntBig line_space = 0;
-  CPLVirtualMem* vmem = update_band->GetVirtualMemAuto(GF_Read, &pixel_space,
-                                                       &line_space, nullptr);
-  if (vmem != nullptr) {
-    CPLVirtualMemFree(vmem);
-  }
+  std::unique_ptr<CPLVirtualMem, decltype([](CPLVirtualMem* m) {
+                    if (m != nullptr) CPLVirtualMemFree(m);
+                  })>
+      vmem(update_band.GetVirtualMemAuto(GF_Read, &pixel_space, &line_space,
+                                         nullptr));
 
-  // Test ByteOrder LSB serialization
   bool warned = false;
   size_t ram = 0;
-  auto lsb_band = std::make_unique<VRTRawRasterBand>(&ds, 1, GDT_Byte);
-  EXPECT_EQ(lsb_band->SetRawLink(raw_file, nullptr, FALSE, 0, 1, 10, "LSB"),
-            CE_None);
-  CPLXMLNode* lsb_xml = lsb_band->SerializeToXML(nullptr, warned, ram);
-  ASSERT_NE(lsb_xml, nullptr);
-  char* lsb_xml_str = CPLSerializeXMLTree(lsb_xml);
-  EXPECT_NE(strstr(lsb_xml_str, "LSB"), nullptr);
-  CPLFree(lsb_xml_str);
-  CPLDestroyXMLNode(lsb_xml);
+  for (const char* order : {"LSB", "MSB", "VAX"}) {
+    VRTRawRasterBand order_band(&ds, 1, GDT_Byte);
+    EXPECT_EQ(CE_None,
+              order_band.SetRawLink(kRawFile, nullptr, FALSE, 0, 1, 10, order));
+    CPLXMLTreeCloser xml(order_band.SerializeToXML(nullptr, warned, ram));
+    ASSERT_NE(nullptr, xml);
+    std::unique_ptr<char, CplFreeDeleter> xml_str(
+        CPLSerializeXMLTree(xml.get()));
+    ASSERT_NE(nullptr, xml_str);
+    EXPECT_THAT(xml_str.get(), HasSubstr("VRTRawRasterBand"));
+    EXPECT_THAT(xml_str.get(), HasSubstr("SourceFilename"));
+    EXPECT_THAT(xml_str.get(), HasSubstr(order));
+  }
 
-  // Test ByteOrder VAX
-  auto vax_band = std::make_unique<VRTRawRasterBand>(&ds, 1, GDT_Byte);
-  EXPECT_EQ(vax_band->SetRawLink(raw_file, nullptr, FALSE, 0, 1, 10, "VAX"),
-            CE_None);
-
-  // Test SerializeToXML
-  CPLXMLNode* xml = update_band->SerializeToXML(nullptr, warned, ram);
-  ASSERT_NE(xml, nullptr);
-  char* xml_str = CPLSerializeXMLTree(xml);
-  EXPECT_NE(xml_str, nullptr);
-  EXPECT_NE(strstr(xml_str, "VRTRawRasterBand"), nullptr);
-  EXPECT_NE(strstr(xml_str, "SourceFilename"), nullptr);
-  CPLFree(xml_str);
-  CPLDestroyXMLNode(xml);
-
-  // Serialize with VAX byte order
-  CPLXMLNode* vax_xml = vax_band->SerializeToXML(nullptr, warned, ram);
-  ASSERT_NE(vax_xml, nullptr);
-  char* vax_xml_str = CPLSerializeXMLTree(vax_xml);
-  EXPECT_NE(strstr(vax_xml_str, "VAX"), nullptr);
-  CPLFree(vax_xml_str);
-  CPLDestroyXMLNode(vax_xml);
-
-  // Test GetFileList
+  // GetFileList deduplication and internal array growth.
   char** file_list = nullptr;
   int file_list_size = 0;
   int file_list_max = 0;
   CPLHashSet* hash_set =
       CPLHashSetNew(CPLHashSetHashStr, CPLHashSetEqualStr, nullptr);
+  absl::Cleanup cleanup_list = [&file_list, &hash_set] {
+    CSLDestroy(file_list);
+    CPLHashSetDestroy(hash_set);
+  };
 
-  update_band->GetFileList(&file_list, &file_list_size, &file_list_max,
-                           hash_set);
+  update_band.GetFileList(&file_list, &file_list_size, &file_list_max,
+                          hash_set);
   EXPECT_GE(file_list_size, 1);
-  // Calling again tests the duplicate suppression in hash_set
-  update_band->GetFileList(&file_list, &file_list_size, &file_list_max,
-                           hash_set);
+  update_band.GetFileList(&file_list, &file_list_size, &file_list_max,
+                          hash_set);
   EXPECT_GE(file_list_size, 1);
 
-  // Test growing file list array
-  for (int i = file_list_size; i < file_list_max; ++i) {
-    char fake_name[64];
-    snprintf(fake_name, sizeof(fake_name), "/vsimem/fake_%d.bin", i);
-    file_list[file_list_size] = CPLStrdup(fake_name);
-    file_list_size++;
+  while (file_list_size < file_list_max) {
+    const int idx = file_list_size;
+    file_list[file_list_size++] = CPLStrdup(
+        std::format("/vsimem/vrtrawrasterband_test/fake_{}.bin", idx).c_str());
   }
-  // Now file_list_size == file_list_max, calling with a new filename triggers
-  // resize
-  auto new_band = std::make_unique<VRTRawRasterBand>(&ds, 1, GDT_Byte);
-  const char* raw_file2 = "/vsimem/raw2.bin";
-  VSILFILE* fp2 = VSIFOpenL(raw_file2, "wb");
-  VSIFCloseL(fp2);
-  ASSERT_EQ(new_band->SetRawLink(raw_file2, nullptr, FALSE, 0, 1, 10, "LSB"),
-            CE_None);
-  new_band->GetFileList(&file_list, &file_list_size, &file_list_max, hash_set);
-  VSIUnlink(raw_file2);
+  constexpr char kRawFile2[] = "/vsimem/vrtrawrasterband_test/raw2.bin";
+  VsiMemTempWrapper raw_file2(kRawFile2, "");
+  VRTRawRasterBand new_band(&ds, 1, GDT_Byte);
+  ASSERT_EQ(CE_None,
+            new_band.SetRawLink(kRawFile2, nullptr, FALSE, 0, 1, 10, "LSB"));
+  new_band.GetFileList(&file_list, &file_list_size, &file_list_max, hash_set);
 
-  CSLDestroy(file_list);
-  CPLHashSetDestroy(hash_set);
-
-  // Test ClearRawLink
-  update_band->ClearRawLink();
-
-  // Test GetFileList with null source filename
+  // ClearRawLink clears filename; subsequent GetFileList adds nothing.
+  update_band.ClearRawLink();
   char** empty_list = nullptr;
   int empty_size = 0;
   int empty_max = 0;
   CPLHashSet* empty_hash =
       CPLHashSetNew(CPLHashSetHashStr, CPLHashSetEqualStr, nullptr);
-  update_band->GetFileList(&empty_list, &empty_size, &empty_max, empty_hash);
-  EXPECT_EQ(empty_size, 0);
-  CPLHashSetDestroy(empty_hash);
-
-  VSIUnlink(raw_file);
+  absl::Cleanup cleanup_empty = [&empty_list, &empty_hash] {
+    CSLDestroy(empty_list);
+    CPLHashSetDestroy(empty_hash);
+  };
+  update_band.GetFileList(&empty_list, &empty_size, &empty_max, empty_hash);
+  EXPECT_EQ(0, empty_size);
 }
 
 TEST_F(VrtRawRasterBandTest, SetRawLinkUpdateCreateFile) {
-  CPLSetConfigOption("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE", "ALL");
-  const char* new_file = "/vsimem/new_created_file.bin";
+  CPLConfigOptionSetter enable_raw("GDAL_VRT_ENABLE_RAWRASTERBAND", "YES",
+                                   false);
+  CPLConfigOptionSetter allow_src("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE",
+                                  "ALL", false);
   TestVRTDataset update_ds(10, 10);
-  auto update_band =
-      std::make_unique<TestVRTRawRasterBand>(&update_ds, 1, GDT_Byte);
-  EXPECT_EQ(update_band->SetRawLink(new_file, nullptr, FALSE, 0, 1, 10, "LSB"),
-            CE_None);
-  VSIUnlink(new_file);
+  TestVRTRawRasterBand update_band(&update_ds, 1, GDT_Byte);
+  EXPECT_EQ(CE_None, update_band.SetRawLink(
+                         "/vsimem/vrtrawrasterband_test/new_created_file.bin",
+                         nullptr, FALSE, 0, 1, 10, "LSB"));
 }
 
 TEST_F(VrtRawRasterBandTest, GetFileListRelativeToVRT) {
-  CPLSetConfigOption("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE", "ALL");
-  const char* raw_file = "/vsimem/dir/rel_raw.bin";
-  VSILFILE* fp = VSIFOpenL(raw_file, "wb");
-  VSIFCloseL(fp);
+  CPLConfigOptionSetter enable_raw("GDAL_VRT_ENABLE_RAWRASTERBAND", "YES",
+                                   false);
+  CPLConfigOptionSetter allow_src("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE",
+                                  "ALL", false);
+  VsiMemTempWrapper raw_file("/vsimem/vrtrawrasterband_test/dir/rel_raw.bin",
+                             "");
 
   VRTDataset ds(10, 10);
-  ds.SetDescription("/vsimem/dir/test.vrt");
-  auto band = std::make_unique<VRTRawRasterBand>(&ds, 1, GDT_Byte);
-  ASSERT_EQ(
-      band->SetRawLink("rel_raw.bin", "/vsimem/dir", TRUE, 0, 1, 10, "LSB"),
-      CE_None);
+  ds.SetDescription("/vsimem/vrtrawrasterband_test/dir/test.vrt");
+  VRTRawRasterBand band(&ds, 1, GDT_Byte);
+  ASSERT_EQ(CE_None,
+            band.SetRawLink("rel_raw.bin", "/vsimem/vrtrawrasterband_test/dir",
+                            TRUE, 0, 1, 10, "LSB"));
 
   char** file_list = nullptr;
   int file_list_size = 0;
   int file_list_max = 0;
   CPLHashSet* hash_set =
       CPLHashSetNew(CPLHashSetHashStr, CPLHashSetEqualStr, nullptr);
-  band->GetFileList(&file_list, &file_list_size, &file_list_max, hash_set);
-  EXPECT_EQ(file_list_size, 1);
-
-  CSLDestroy(file_list);
-  CPLHashSetDestroy(hash_set);
-  VSIUnlink(raw_file);
+  absl::Cleanup cleanup_list = [&file_list, &hash_set] {
+    CSLDestroy(file_list);
+    CPLHashSetDestroy(hash_set);
+  };
+  band.GetFileList(&file_list, &file_list_size, &file_list_max, hash_set);
+  EXPECT_EQ(1, file_list_size);
 }
 
 TEST_F(VrtRawRasterBandTest, XMLInitValidation) {
-  CPLSetConfigOption("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE", "ALL");
-
-  const char* raw_file = "/vsimem/xml_raw.bin";
-  std::vector<uint8_t> data(100, 7);
-  VSILFILE* fp = VSIFOpenL(raw_file, "wb");
-  ASSERT_NE(fp, nullptr);
-  VSIFWriteL(data.data(), 1, data.size(), fp);
-  VSIFCloseL(fp);
+  CPLConfigOptionSetter enable_raw("GDAL_VRT_ENABLE_RAWRASTERBAND", "YES",
+                                   false);
+  CPLConfigOptionSetter allow_src("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE",
+                                  "ALL", false);
+  VsiMemTempWrapper raw_file("/vsimem/vrtrawrasterband_test/xml_raw.bin",
+                             std::string(100, '\x07'));
 
   VRTDataset ds(10, 10);
   VRTRawRasterBand band(&ds, 1, GDT_Byte);
   VRTMapSharedResources map_resources;
 
-  // XMLInit error: invalid root node
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(band.XMLInit(nullptr, nullptr, map_resources), CE_Failure);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, band.XMLInit(nullptr, nullptr, map_resources));
 
-  CPLXMLNode* invalid_node = CPLCreateXMLNode(nullptr, CXT_Text, "Invalid");
-  EXPECT_EQ(band.XMLInit(invalid_node, nullptr, map_resources), CE_Failure);
-  CPLDestroyXMLNode(invalid_node);
+    CPLXMLTreeCloser invalid_node(
+        CPLCreateXMLNode(nullptr, CXT_Text, "Invalid"));
+    EXPECT_EQ(CE_Failure,
+              band.XMLInit(invalid_node.get(), nullptr, map_resources));
 
-  CPLXMLNode* wrong_elem =
-      CPLCreateXMLNode(nullptr, CXT_Element, "WrongElement");
-  EXPECT_EQ(band.XMLInit(wrong_elem, nullptr, map_resources), CE_Failure);
-  CPLDestroyXMLNode(wrong_elem);
+    CPLXMLTreeCloser wrong_elem(
+        CPLCreateXMLNode(nullptr, CXT_Element, "WrongElement"));
+    EXPECT_EQ(CE_Failure,
+              band.XMLInit(wrong_elem.get(), nullptr, map_resources));
 
-  CPLXMLNode* wrong_subclass =
-      CPLCreateXMLNode(nullptr, CXT_Element, "VRTRasterBand");
-  CPLAddXMLAttributeAndValue(wrong_subclass, "subClass",
-                             "VRTSourcedRasterBand");
-  EXPECT_EQ(band.XMLInit(wrong_subclass, nullptr, map_resources), CE_Failure);
-  CPLDestroyXMLNode(wrong_subclass);
+    constexpr const char* kBadXmls[] = {
+        R"xml(<VRTRasterBand subClass="VRTSourcedRasterBand"/>)xml",
+        R"xml(<VRTRasterBand subClass="VRTRawRasterBand"/>)xml",
+        R"xml(
+<VRTRasterBand dataType="Byte" subClass="VRTRawRasterBand">
+  <SourceFilename>/vsimem/vrtrawrasterband_test/xml_raw.bin</SourceFilename>
+  <PixelOffset>0</PixelOffset>
+</VRTRasterBand>)xml",
+        R"xml(
+<VRTRasterBand dataType="Byte" subClass="VRTRawRasterBand">
+  <SourceFilename>/vsimem/vrtrawrasterband_test/xml_raw.bin</SourceFilename>
+  <PixelOffset>1000000000</PixelOffset>
+</VRTRasterBand>)xml",
+    };
+    for (const char* xml : kBadXmls) {
+      CPLErrorReset();
+      CPLXMLTreeCloser tree(CPLParseXMLString(xml));
+      ASSERT_NE(nullptr, tree);
+      EXPECT_EQ(CE_Failure, band.XMLInit(tree.get(), nullptr, map_resources));
+    }
+  }
 
-  // Missing SourceFilename
-  CPLXMLNode* missing_source =
-      CPLCreateXMLNode(nullptr, CXT_Element, "VRTRasterBand");
-  CPLAddXMLAttributeAndValue(missing_source, "subClass", "VRTRawRasterBand");
-  EXPECT_EQ(band.XMLInit(missing_source, nullptr, map_resources), CE_Failure);
-  CPLDestroyXMLNode(missing_source);
+  constexpr char kValidXml[] = R"xml(
+<VRTRasterBand dataType="Byte" subClass="VRTRawRasterBand">
+  <SourceFilename relativeToVRT="0">/vsimem/vrtrawrasterband_test/xml_raw.bin</SourceFilename>
+  <ImageOffset>0</ImageOffset>
+  <PixelOffset>1</PixelOffset>
+  <LineOffset>10</LineOffset>
+  <ByteOrder>LSB</ByteOrder>
+</VRTRasterBand>)xml";
+  {
+    CPLXMLTreeCloser tree(CPLParseXMLString(kValidXml));
+    ASSERT_NE(nullptr, tree);
+    EXPECT_EQ(CE_None, band.XMLInit(tree.get(), nullptr, map_resources));
+  }
 
-  // Invalid PixelOffset <= 0
-  const char* invalid_pixel_offset_xml =
-      "<VRTRasterBand dataType=\"Byte\" subClass=\"VRTRawRasterBand\">"
-      "  <SourceFilename>/vsimem/xml_raw.bin</SourceFilename>"
-      "  <PixelOffset>0</PixelOffset>"
-      "</VRTRasterBand>";
-  CPLXMLNode* invalid_po_tree = CPLParseXMLString(invalid_pixel_offset_xml);
-  ASSERT_NE(invalid_po_tree, nullptr);
-  EXPECT_EQ(band.XMLInit(invalid_po_tree, nullptr, map_resources), CE_Failure);
-  CPLDestroyXMLNode(invalid_po_tree);
-
-  // Integer overflow in LineOffset calculation
-  const char* overflow_line_offset_xml =
-      "<VRTRasterBand dataType=\"Byte\" subClass=\"VRTRawRasterBand\">"
-      "  <SourceFilename>/vsimem/xml_raw.bin</SourceFilename>"
-      "  <PixelOffset>1000000000</PixelOffset>"
-      "</VRTRasterBand>";
-  CPLXMLNode* overflow_tree = CPLParseXMLString(overflow_line_offset_xml);
-  ASSERT_NE(overflow_tree, nullptr);
-  EXPECT_EQ(band.XMLInit(overflow_tree, nullptr, map_resources), CE_Failure);
-  CPLDestroyXMLNode(overflow_tree);
-
-  CPLPopErrorHandler();
-
-  // Valid XMLInit with all fields
-  const char* valid_xml =
-      "<VRTRasterBand dataType=\"Byte\" subClass=\"VRTRawRasterBand\">"
-      "  <SourceFilename "
-      "relativeToVRT=\"0\">/vsimem/xml_raw.bin</SourceFilename>"
-      "  <ImageOffset>0</ImageOffset>"
-      "  <PixelOffset>1</PixelOffset>"
-      "  <LineOffset>10</LineOffset>"
-      "  <ByteOrder>LSB</ByteOrder>"
-      "</VRTRasterBand>";
-  CPLXMLNode* valid_tree = CPLParseXMLString(valid_xml);
-  ASSERT_NE(valid_tree, nullptr);
-  EXPECT_EQ(band.XMLInit(valid_tree, nullptr, map_resources), CE_None);
-  CPLDestroyXMLNode(valid_tree);
-
-  // Valid XMLInit with default LineOffset (not specified)
-  const char* default_line_xml =
-      "<VRTRasterBand dataType=\"Byte\" subClass=\"VRTRawRasterBand\">"
-      "  <SourceFilename "
-      "relativeToVRT=\"0\">/vsimem/xml_raw.bin</SourceFilename>"
-      "  <PixelOffset>1</PixelOffset>"
-      "</VRTRasterBand>";
-  CPLXMLNode* default_line_tree = CPLParseXMLString(default_line_xml);
-  ASSERT_NE(default_line_tree, nullptr);
-  EXPECT_EQ(band.XMLInit(default_line_tree, nullptr, map_resources), CE_None);
-  CPLDestroyXMLNode(default_line_tree);
-
-  VSIUnlink(raw_file);
+  constexpr char kDefaultLineXml[] = R"xml(
+<VRTRasterBand dataType="Byte" subClass="VRTRawRasterBand">
+  <SourceFilename relativeToVRT="0">/vsimem/vrtrawrasterband_test/xml_raw.bin</SourceFilename>
+  <PixelOffset>1</PixelOffset>
+</VRTRasterBand>)xml";
+  {
+    CPLXMLTreeCloser tree(CPLParseXMLString(kDefaultLineXml));
+    ASSERT_NE(nullptr, tree);
+    EXPECT_EQ(CE_None, band.XMLInit(tree.get(), nullptr, map_resources));
+  }
 }
 
 TEST_F(VrtRawRasterBandTest, OpenDatasetFromVsimem) {
-  CPLSetConfigOption("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE", "ALL");
+  CPLConfigOptionSetter enable_raw("GDAL_VRT_ENABLE_RAWRASTERBAND", "YES",
+                                   false);
+  CPLConfigOptionSetter allow_src("GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE",
+                                  "ALL", false);
 
-  const char* raw_file = "/vsimem/ds_raw.bin";
-  std::vector<uint8_t> data(100, 123);
-  VSILFILE* fp = VSIFOpenL(raw_file, "wb");
-  ASSERT_NE(fp, nullptr);
-  VSIFWriteL(data.data(), 1, data.size(), fp);
-  VSIFCloseL(fp);
+  VsiMemTempWrapper raw_file("/vsimem/vrtrawrasterband_test/ds_raw.bin",
+                             std::string(100, '\x7B'));
+  constexpr char kVrtXml[] = R"vrt(
+<VRTDataset rasterXSize="10" rasterYSize="10">
+  <VRTRasterBand dataType="Byte" band="1" subClass="VRTRawRasterBand">
+    <SourceFilename relativeToVRT="0">/vsimem/vrtrawrasterband_test/ds_raw.bin</SourceFilename>
+    <ImageOffset>0</ImageOffset>
+    <PixelOffset>1</PixelOffset>
+    <LineOffset>10</LineOffset>
+    <ByteOrder>LSB</ByteOrder>
+  </VRTRasterBand>
+</VRTDataset>)vrt";
+  constexpr char kVrtFile[] = "/vsimem/vrtrawrasterband_test/ds_test.vrt";
+  VsiMemTempWrapper vrt_file(kVrtFile, kVrtXml);
 
-  const char* vrt_file = "/vsimem/ds_test.vrt";
-  const char* vrt_xml =
-      "<VRTDataset rasterXSize=\"10\" rasterYSize=\"10\">"
-      "  <VRTRasterBand dataType=\"Byte\" band=\"1\" "
-      "subClass=\"VRTRawRasterBand\">"
-      "    <SourceFilename "
-      "relativeToVRT=\"0\">/vsimem/ds_raw.bin</SourceFilename>"
-      "    <ImageOffset>0</ImageOffset>"
-      "    <PixelOffset>1</PixelOffset>"
-      "    <LineOffset>10</LineOffset>"
-      "    <ByteOrder>LSB</ByteOrder>"
-      "  </VRTRasterBand>"
-      "</VRTDataset>";
-
-  fp = VSIFOpenL(vrt_file, "wb");
-  ASSERT_NE(fp, nullptr);
-  VSIFWriteL(vrt_xml, 1, strlen(vrt_xml), fp);
-  VSIFCloseL(fp);
-
-  GDALDataset* poDS =
-      static_cast<GDALDataset*>(GDALOpen(vrt_file, GA_ReadOnly));
-  ASSERT_NE(poDS, nullptr);
-  EXPECT_EQ(poDS->GetRasterXSize(), 10);
-  EXPECT_EQ(poDS->GetRasterYSize(), 10);
-  EXPECT_EQ(poDS->GetRasterCount(), 1);
+  GDALDatasetUniquePtr poDS(GDALDataset::FromHandle(GDALOpenEx(
+      kVrtFile, GDAL_OF_READONLY | GDAL_OF_RASTER, nullptr, nullptr, nullptr)));
+  ASSERT_NE(nullptr, poDS);
+  EXPECT_EQ(10, poDS->GetRasterXSize());
+  EXPECT_EQ(10, poDS->GetRasterYSize());
+  EXPECT_EQ(1, poDS->GetRasterCount());
 
   GDALRasterBand* poBand = poDS->GetRasterBand(1);
-  ASSERT_NE(poBand, nullptr);
+  ASSERT_NE(nullptr, poBand);
   uint8_t pixel_val = 0;
-  EXPECT_EQ(poBand->RasterIO(GF_Read, 0, 0, 1, 1, &pixel_val, 1, 1, GDT_Byte, 0,
-                             0, nullptr),
-            CE_None);
-  EXPECT_EQ(pixel_val, 123);
-
-  GDALClose(poDS);
-  VSIUnlink(vrt_file);
-  VSIUnlink(raw_file);
+  EXPECT_EQ(CE_None, poBand->RasterIO(GF_Read, 0, 0, 1, 1, &pixel_val, 1, 1,
+                                      GDT_Byte, 0, 0, nullptr));
+  EXPECT_EQ(123, pixel_val);
 }
 
 }  // namespace
 }  // namespace autotest2
+
+// TODO(schwehr): Cover remaining defensive OOM/I/O error paths in
+// VRTRawRasterBand::SetRawLink and ReadBlock/WriteBlock in
+// vrtrawrasterband.cpp.

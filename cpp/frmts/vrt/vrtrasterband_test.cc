@@ -12,16 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests for vrtrasterband.cpp.
+// Tests VRTRasterBand properties, nodata handling, histograms, mask bands,
+// overviews, and XML serialization (vrtrasterband.cpp).
+//
+// google3 build caveat: //third_party/gdal/BUILD passes
+// -DGDAL_VRT_ENABLE_RAWRASTERBAND=ON (see b/429626570), so raw-raster-band
+// enable/disable tests explicitly toggle GDAL_VRT_ENABLE_RAWRASTERBAND at
+// runtime via CPLConfigOptionSetter.
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/frmts/vrt/vrtrasterband.cpp
+//   https://gdal.org/drivers/raster/vrt.html
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <string>
+#include <string_view>
 #include <vector>
 
+#include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_cstringlist.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_memory.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
+#include "third_party/gdal/autotest2/cpp/util/vsimem.h"
 #include "third_party/gdal/frmts/vrt/vrt_priv.h"
 #include "third_party/gdal/frmts/vrt/vrtdataset.h"
 #include "third_party/gdal/gcore/gdal.h"
@@ -38,21 +57,27 @@
 namespace autotest2 {
 namespace {
 
+using ::testing::HasSubstr;
+
+constexpr char kTestDir[] = "/vsimem/vrtrasterband_test";
+
 class TestVRTRasterBand : public VRTRasterBand {
  public:
   using VRTRasterBand::IsNoDataValueInDataTypeRange;
   using VRTRasterBand::m_bIsMaskBand;
 
   TestVRTRasterBand(GDALDataset* ds, int band, GDALDataType type = GDT_Byte) {
-    Initialize(ds ? ds->GetRasterXSize() : 10, ds ? ds->GetRasterYSize() : 10);
+    Initialize(ds != nullptr ? ds->GetRasterXSize() : 10,
+               ds != nullptr ? ds->GetRasterYSize() : 10);
     poDS = ds;
     nBand = band;
     eDataType = type;
   }
 
   CPLErr IReadBlock(int, int, void* buffer) override {
-    memset(buffer, 0,
-           nBlockXSize * nBlockYSize * GDALGetDataTypeSizeBytes(eDataType));
+    std::memset(buffer, 0,
+                static_cast<size_t>(nBlockXSize) * nBlockYSize *
+                    GDALGetDataTypeSizeBytes(eDataType));
     return CE_None;
   }
 
@@ -61,132 +86,120 @@ class TestVRTRasterBand : public VRTRasterBand {
 
 class VrtRasterBandTest : public ::testing::Test {
  protected:
-  void SetUp() override { GDALAllRegister(); }
+  void SetUp() override {
+    GDALRegister_VRT();
+    GDALRegister_MEM();
+  }
+
+  void TearDown() override { VSIRmdirRecursive(kTestDir); }
 };
 
 TEST_F(VrtRasterBandTest, VRTSerializeNoDataValues) {
-  // NaN
-  EXPECT_EQ(VRTSerializeNoData(std::numeric_limits<double>::quiet_NaN(),
-                               GDT_Float32, 16),
-            "nan");
+  EXPECT_EQ("nan", VRTSerializeNoData(std::numeric_limits<double>::quiet_NaN(),
+                                      GDT_Float32, 16));
 
-  // Float16 min / max
-  EXPECT_EQ(VRTSerializeNoData(-6.55e4, GDT_Float16, 16), "-6.55e4");
-  EXPECT_EQ(VRTSerializeNoData(6.55e4, GDT_Float16, 16), "6.55e4");
+  EXPECT_EQ("-6.55e4", VRTSerializeNoData(-6.55e4, GDT_Float16, 16));
+  EXPECT_EQ("6.55e4", VRTSerializeNoData(6.55e4, GDT_Float16, 16));
 
-  // Float32 min / max
-  EXPECT_EQ(VRTSerializeNoData(
+  EXPECT_EQ("-3.4028234663852886e+38",
+            VRTSerializeNoData(
                 -static_cast<double>(std::numeric_limits<float>::max()),
-                GDT_Float32, 16),
-            "-3.4028234663852886e+38");
+                GDT_Float32, 16));
   EXPECT_EQ(
+      "3.4028234663852886e+38",
       VRTSerializeNoData(static_cast<double>(std::numeric_limits<float>::max()),
-                         GDT_Float32, 16),
-      "3.4028234663852886e+38");
+                         GDT_Float32, 16));
 
-  // Normal double value
-  EXPECT_EQ(VRTSerializeNoData(42.5, GDT_Float64, 6), "42.5");
+  EXPECT_EQ("42.5", VRTSerializeNoData(42.5, GDT_Float64, 6));
 }
 
 TEST_F(VrtRasterBandTest, VRTParseCategoryNamesAndColorTable) {
-  const char* cat_xml =
-      "<CategoryNames>"
-      "  <Category>Water</Category>"
-      "  <Category>Land</Category>"
-      "  <Category/>"
-      "</CategoryNames>";
-  CPLXMLNode* cat_tree = CPLParseXMLString(cat_xml);
-  ASSERT_NE(cat_tree, nullptr);
-  CPLStringList categories = VRTParseCategoryNames(cat_tree);
-  EXPECT_EQ(categories.size(), 3);
-  EXPECT_STREQ(categories[0], "Water");
-  EXPECT_STREQ(categories[1], "Land");
-  EXPECT_STREQ(categories[2], "");
-  CPLDestroyXMLNode(cat_tree);
+  constexpr char kCatXml[] = R"xml(
+<CategoryNames>
+  <Category>Water</Category>
+  <Category>Land</Category>
+  <Category/>
+</CategoryNames>)xml";
+  CPLXMLTreeCloser cat_tree(CPLParseXMLString(kCatXml));
+  ASSERT_NE(nullptr, cat_tree.get());
+  CPLStringList categories = VRTParseCategoryNames(cat_tree.get());
+  EXPECT_EQ(3, categories.size());
+  EXPECT_STREQ("Water", categories[0]);
+  EXPECT_STREQ("Land", categories[1]);
+  EXPECT_STREQ("", categories[2]);
 
-  const char* ct_xml =
-      "<ColorTable>"
-      "  <Entry c1=\"255\" c2=\"0\" c3=\"0\" c4=\"255\"/>"
-      "  <Entry c1=\"0\" c2=\"255\" c3=\"0\" c4=\"255\"/>"
-      "</ColorTable>";
-  CPLXMLNode* ct_tree = CPLParseXMLString(ct_xml);
-  ASSERT_NE(ct_tree, nullptr);
-  auto ct = VRTParseColorTable(ct_tree);
-  ASSERT_NE(ct, nullptr);
-  EXPECT_EQ(ct->GetColorEntryCount(), 2);
+  constexpr char kColorTableXml[] = R"xml(
+<ColorTable>
+  <Entry c1="255" c2="0" c3="0" c4="255"/>
+  <Entry c1="0" c2="255" c3="0" c4="255"/>
+</ColorTable>)xml";
+  CPLXMLTreeCloser ct_tree(CPLParseXMLString(kColorTableXml));
+  ASSERT_NE(nullptr, ct_tree.get());
+  auto ct = VRTParseColorTable(ct_tree.get());
+  ASSERT_NE(nullptr, ct);
+  EXPECT_EQ(2, ct->GetColorEntryCount());
   const GDALColorEntry* e0 = ct->GetColorEntry(0);
-  ASSERT_NE(e0, nullptr);
-  EXPECT_EQ(e0->c1, 255);
-  EXPECT_EQ(e0->c2, 0);
-  CPLDestroyXMLNode(ct_tree);
+  ASSERT_NE(nullptr, e0);
+  EXPECT_EQ(255, e0->c1);
+  EXPECT_EQ(0, e0->c2);
 }
 
 TEST_F(VrtRasterBandTest, BasicPropertiesAndAccessors) {
   VRTDataset ds(20, 20);
   TestVRTRasterBand band(&ds, 1, GDT_Float32);
 
-  // UnitType
-  EXPECT_STREQ(band.GetUnitType(), "");
+  EXPECT_STREQ("", band.GetUnitType());
   band.SetUnitType("meters");
-  EXPECT_STREQ(band.GetUnitType(), "meters");
+  EXPECT_STREQ("meters", band.GetUnitType());
   band.SetUnitType(nullptr);
-  EXPECT_STREQ(band.GetUnitType(), "");
+  EXPECT_STREQ("", band.GetUnitType());
 
-  // Offset & Scale
   int success = 0;
-  EXPECT_DOUBLE_EQ(band.GetOffset(&success), 0.0);
+  EXPECT_DOUBLE_EQ(0.0, band.GetOffset(&success));
   EXPECT_TRUE(success);
   band.SetOffset(10.5);
-  EXPECT_DOUBLE_EQ(band.GetOffset(&success), 10.5);
+  EXPECT_DOUBLE_EQ(10.5, band.GetOffset(&success));
 
-  EXPECT_DOUBLE_EQ(band.GetScale(&success), 1.0);
+  EXPECT_DOUBLE_EQ(1.0, band.GetScale(&success));
   band.SetScale(2.5);
-  EXPECT_DOUBLE_EQ(band.GetScale(&success), 2.5);
+  EXPECT_DOUBLE_EQ(2.5, band.GetScale(&success));
 
-  // Description
   band.SetDescription("My Band");
-  EXPECT_STREQ(band.GetDescription(), "My Band");
+  EXPECT_STREQ("My Band", band.GetDescription());
 
-  // Metadata & HideNoDataValue
   band.SetMetadataItem("HideNoDataValue", "YES");
-  char* md[] = {CPLStrdup("FOO=BAR"), nullptr};
-  band.SetMetadata(md);
-  EXPECT_STREQ(band.GetMetadataItem("FOO"), "BAR");
-  CPLFree(md[0]);
+  CPLStringList metadata;
+  metadata.SetNameValue("FOO", "BAR");
+  band.SetMetadata(metadata.List());
+  EXPECT_STREQ("BAR", band.GetMetadataItem("FOO"));
 
-  // Color Interpretation
-  EXPECT_EQ(band.GetColorInterpretation(), GCI_Undefined);
+  EXPECT_EQ(GCI_Undefined, band.GetColorInterpretation());
   band.SetColorInterpretation(GCI_RedBand);
-  EXPECT_EQ(band.GetColorInterpretation(), GCI_RedBand);
+  EXPECT_EQ(GCI_RedBand, band.GetColorInterpretation());
 
-  // Category Names
   CPLStringList cats;
   cats.AddString("CatA");
   cats.AddString("CatB");
   band.SetCategoryNames(cats.List());
-  char** ret_cats = band.GetCategoryNames();
-  ASSERT_NE(ret_cats, nullptr);
-  EXPECT_STREQ(ret_cats[0], "CatA");
-  EXPECT_STREQ(ret_cats[1], "CatB");
+  EXPECT_THAT(CslToVector(band.GetCategoryNames()),
+              ::testing::ElementsAre("CatA", "CatB"));
 
-  // Color Table
-  EXPECT_EQ(band.GetColorTable(), nullptr);
+  EXPECT_EQ(nullptr, band.GetColorTable());
   GDALColorTable ct;
-  GDALColorEntry ce = {10, 20, 30, 255};
+  const GDALColorEntry ce = {10, 20, 30, 255};
   ct.SetColorEntry(0, &ce);
   band.SetColorTable(&ct);
-  ASSERT_NE(band.GetColorTable(), nullptr);
-  EXPECT_EQ(band.GetColorInterpretation(), GCI_PaletteIndex);
+  ASSERT_NE(nullptr, band.GetColorTable());
+  EXPECT_EQ(GCI_PaletteIndex, band.GetColorInterpretation());
   band.SetColorTable(nullptr);
-  EXPECT_EQ(band.GetColorTable(), nullptr);
+  EXPECT_EQ(nullptr, band.GetColorTable());
 
-  // RAT
-  EXPECT_EQ(band.GetDefaultRAT(), nullptr);
+  EXPECT_EQ(nullptr, band.GetDefaultRAT());
   GDALDefaultRasterAttributeTable rat;
   band.SetDefaultRAT(&rat);
-  EXPECT_NE(band.GetDefaultRAT(), nullptr);
+  EXPECT_NE(nullptr, band.GetDefaultRAT());
   band.SetDefaultRAT(nullptr);
-  EXPECT_EQ(band.GetDefaultRAT(), nullptr);
+  EXPECT_EQ(nullptr, band.GetDefaultRAT());
 }
 
 TEST_F(VrtRasterBandTest, NoDataValueVariants) {
@@ -198,7 +211,7 @@ TEST_F(VrtRasterBandTest, NoDataValueVariants) {
   EXPECT_FALSE(success);
 
   band.SetNoDataValue(-9999.0);
-  EXPECT_DOUBLE_EQ(band.GetNoDataValue(&success), -9999.0);
+  EXPECT_DOUBLE_EQ(-9999.0, band.GetNoDataValue(&success));
   EXPECT_TRUE(success);
   EXPECT_TRUE(band.IsNoDataValueInDataTypeRange());
 
@@ -211,7 +224,6 @@ TEST_F(VrtRasterBandTest, NoDataValueVariants) {
   band.GetNoDataValue(&success);
   EXPECT_FALSE(success);
 
-  // HideNoDataValue test
   band.SetNoDataValue(123.0);
   band.SetMetadataItem("HideNoDataValue", "1");
   band.GetNoDataValue(&success);
@@ -220,48 +232,56 @@ TEST_F(VrtRasterBandTest, NoDataValueVariants) {
   band.GetNoDataValue(&success);
   EXPECT_TRUE(success);
 
-  // Int64 NoData
   TestVRTRasterBand int64_band(&ds, 2, GDT_Int64);
   int64_band.SetNoDataValueAsInt64(-123456789012345LL);
-  EXPECT_EQ(int64_band.GetNoDataValueAsInt64(&success), -123456789012345LL);
+  EXPECT_EQ(-123456789012345LL, int64_band.GetNoDataValueAsInt64(&success));
   EXPECT_TRUE(success);
   EXPECT_TRUE(int64_band.IsNoDataValueInDataTypeRange());
 
-  // UInt64 NoData
   TestVRTRasterBand uint64_band(&ds, 3, GDT_UInt64);
   uint64_band.SetNoDataValueAsUInt64(123456789012345ULL);
-  EXPECT_EQ(uint64_band.GetNoDataValueAsUInt64(&success), 123456789012345ULL);
+  EXPECT_EQ(123456789012345ULL, uint64_band.GetNoDataValueAsUInt64(&success));
   EXPECT_TRUE(success);
   EXPECT_TRUE(uint64_band.IsNoDataValueInDataTypeRange());
 
-  // Calling Int64/UInt64 on wrong type -> error
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(band.GetNoDataValueAsInt64(&success),
-            GDAL_PAM_DEFAULT_NODATA_VALUE_INT64);
-  EXPECT_FALSE(success);
-  EXPECT_EQ(int64_band.GetNoDataValueAsUInt64(&success),
-            GDAL_PAM_DEFAULT_NODATA_VALUE_UINT64);
-  EXPECT_FALSE(success);
-  EXPECT_EQ(uint64_band.GetNoDataValueAsInt64(&success),
-            GDAL_PAM_DEFAULT_NODATA_VALUE_INT64);
-  EXPECT_FALSE(success);
-  CPLPopErrorHandler();
+  // Calling Int64/UInt64 nodata accessors on mismatched band types must fail.
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(GDAL_PAM_DEFAULT_NODATA_VALUE_INT64,
+              band.GetNoDataValueAsInt64(&success));
+    EXPECT_FALSE(success);
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+
+    CPLErrorReset();
+    EXPECT_EQ(GDAL_PAM_DEFAULT_NODATA_VALUE_UINT64,
+              int64_band.GetNoDataValueAsUInt64(&success));
+    EXPECT_FALSE(success);
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+
+    CPLErrorReset();
+    EXPECT_EQ(GDAL_PAM_DEFAULT_NODATA_VALUE_INT64,
+              uint64_band.GetNoDataValueAsInt64(&success));
+    EXPECT_FALSE(success);
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+  }
 }
 
 TEST_F(VrtRasterBandTest, CopyCommonInfoFromSource) {
   GDALDriver* mem_drv = GetGDALDriverManager()->GetDriverByName("MEM");
-  ASSERT_NE(mem_drv, nullptr);
-  GDALDataset* src_ds = mem_drv->Create("", 10, 10, 1, GDT_Byte, nullptr);
-  ASSERT_NE(src_ds, nullptr);
+  ASSERT_NE(nullptr, mem_drv);
+  GDALDatasetUniquePtr src_ds(
+      mem_drv->Create("", 10, 10, 1, GDT_Byte, nullptr));
+  ASSERT_NE(nullptr, src_ds);
 
   GDALRasterBand* src_band = src_ds->GetRasterBand(1);
-  ASSERT_NE(src_band, nullptr);
+  ASSERT_NE(nullptr, src_band);
   src_band->SetDescription("SourceBandDesc");
-  src_band->SetNoDataValue(255.0);
-  src_band->SetOffset(1.0);
-  src_band->SetScale(2.0);
-  src_band->SetUnitType("km");
-  src_band->SetColorInterpretation(GCI_AlphaBand);
+  EXPECT_EQ(CE_None, src_band->SetNoDataValue(255.0));
+  EXPECT_EQ(CE_None, src_band->SetOffset(1.0));
+  EXPECT_EQ(CE_None, src_band->SetScale(2.0));
+  EXPECT_EQ(CE_None, src_band->SetUnitType("km"));
+  EXPECT_EQ(CE_None, src_band->SetColorInterpretation(GCI_AlphaBand));
   src_band->SetMetadataItem("NBITS", "4", "IMAGE_STRUCTURE");
   src_band->SetMetadataItem("PIXELTYPE", "SIGNEDBYTE", "IMAGE_STRUCTURE");
 
@@ -270,20 +290,19 @@ TEST_F(VrtRasterBandTest, CopyCommonInfoFromSource) {
 
   VRTDataset vrt_ds(10, 10);
   TestVRTRasterBand dst_band(&vrt_ds, 1, GDT_Byte);
-  EXPECT_EQ(dst_band.CopyCommonInfoFrom(src_band), CE_None);
+  EXPECT_EQ(CE_None, dst_band.CopyCommonInfoFrom(src_band));
 
-  EXPECT_STREQ(dst_band.GetDescription(), "SourceBandDesc");
+  EXPECT_STREQ("SourceBandDesc", dst_band.GetDescription());
   int success = 0;
-  EXPECT_DOUBLE_EQ(dst_band.GetNoDataValue(&success), 255.0);
-  EXPECT_DOUBLE_EQ(dst_band.GetOffset(), 1.0);
-  EXPECT_DOUBLE_EQ(dst_band.GetScale(), 2.0);
-  EXPECT_STREQ(dst_band.GetUnitType(), "km");
-  EXPECT_EQ(dst_band.GetColorInterpretation(), GCI_AlphaBand);
-  EXPECT_STREQ(dst_band.GetMetadataItem("NBITS", "IMAGE_STRUCTURE"), "4");
-  EXPECT_STREQ(dst_band.GetMetadataItem("PIXELTYPE", "IMAGE_STRUCTURE"),
-               "SIGNEDBYTE");
-
-  GDALClose(src_ds);
+  EXPECT_DOUBLE_EQ(255.0, dst_band.GetNoDataValue(&success));
+  EXPECT_TRUE(success);
+  EXPECT_DOUBLE_EQ(1.0, dst_band.GetOffset());
+  EXPECT_DOUBLE_EQ(2.0, dst_band.GetScale());
+  EXPECT_STREQ("km", dst_band.GetUnitType());
+  EXPECT_EQ(GCI_AlphaBand, dst_band.GetColorInterpretation());
+  EXPECT_STREQ("4", dst_band.GetMetadataItem("NBITS", "IMAGE_STRUCTURE"));
+  EXPECT_STREQ("SIGNEDBYTE",
+               dst_band.GetMetadataItem("PIXELTYPE", "IMAGE_STRUCTURE"));
 }
 
 TEST_F(VrtRasterBandTest, Histograms) {
@@ -291,58 +310,55 @@ TEST_F(VrtRasterBandTest, Histograms) {
   TestVRTRasterBand band(&ds, 1, GDT_Byte);
 
   GUIntBig hist[10] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
-  EXPECT_EQ(band.SetDefaultHistogram(0.0, 10.0, 10, hist), CE_None);
+  EXPECT_EQ(CE_None, band.SetDefaultHistogram(0.0, 10.0, 10, hist));
 
-  double dfMin = 0.0;
-  double dfMax = 0.0;
-  int nBuckets = 0;
-  GUIntBig* ret_hist = nullptr;
-  EXPECT_EQ(band.GetDefaultHistogram(&dfMin, &dfMax, &nBuckets, &ret_hist,
-                                     FALSE, nullptr, nullptr),
-            CE_None);
-  EXPECT_DOUBLE_EQ(dfMin, 0.0);
-  EXPECT_DOUBLE_EQ(dfMax, 10.0);
-  EXPECT_EQ(nBuckets, 10);
-  ASSERT_NE(ret_hist, nullptr);
-  EXPECT_EQ(ret_hist[0], 1);
-  EXPECT_EQ(ret_hist[9], 10);
-  CPLFree(ret_hist);
+  double df_min = 0.0;
+  double df_max = 0.0;
+  int n_buckets = 0;
+  GUIntBig* ret_hist_raw = nullptr;
+  EXPECT_EQ(CE_None,
+            band.GetDefaultHistogram(&df_min, &df_max, &n_buckets,
+                                     &ret_hist_raw, FALSE, nullptr, nullptr));
+  std::unique_ptr<GUIntBig, CplFreeDeleter> ret_hist(ret_hist_raw);
+  EXPECT_DOUBLE_EQ(0.0, df_min);
+  EXPECT_DOUBLE_EQ(10.0, df_max);
+  EXPECT_EQ(10, n_buckets);
+  ASSERT_NE(nullptr, ret_hist);
+  EXPECT_EQ(1, ret_hist.get()[0]);
+  EXPECT_EQ(10, ret_hist.get()[9]);
 
-  // Replacing existing histogram
   GUIntBig hist2[10] = {10, 9, 8, 7, 6, 5, 4, 3, 2, 1};
-  EXPECT_EQ(band.SetDefaultHistogram(0.0, 10.0, 10, hist2), CE_None);
+  EXPECT_EQ(CE_None, band.SetDefaultHistogram(0.0, 10.0, 10, hist2));
 
-  // GetHistogram matching saved histogram
   GUIntBig query_hist[10] = {0};
-  EXPECT_EQ(band.GetHistogram(0.0, 10.0, 10, query_hist, TRUE, TRUE, nullptr,
-                              nullptr),
-            CE_None);
-  EXPECT_EQ(query_hist[0], 10);
+  EXPECT_EQ(CE_None, band.GetHistogram(0.0, 10.0, 10, query_hist, TRUE, TRUE,
+                                       nullptr, nullptr));
+  EXPECT_EQ(10, query_hist[0]);
 }
 
 TEST_F(VrtRasterBandTest, MaskBandOperations) {
   VRTDataset ds(10, 10);
   TestVRTRasterBand band(&ds, 1, GDT_Byte);
 
-  EXPECT_EQ(band.GetMaskFlags(), GMF_ALL_VALID);
-  EXPECT_NE(band.GetMaskBand(), nullptr);
+  EXPECT_EQ(GMF_ALL_VALID, band.GetMaskFlags());
+  EXPECT_NE(nullptr, band.GetMaskBand());
 
-  // Create band mask band
-  EXPECT_EQ(band.CreateMaskBand(0), CE_None);
-  EXPECT_EQ(band.GetMaskFlags(), 0);
-  ASSERT_NE(band.GetMaskBand(), nullptr);
+  EXPECT_EQ(CE_None, band.CreateMaskBand(0));
+  EXPECT_EQ(0, band.GetMaskFlags());
+  ASSERT_NE(nullptr, band.GetMaskBand());
   EXPECT_TRUE(band.GetMaskBand()->IsMaskBand());
 
-  // Error creating second mask band
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(band.CreateMaskBand(0), CE_Failure);
-  CPLPopErrorHandler();
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, band.CreateMaskBand(0));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+  }
 
-  // Dataset mask band flag
   VRTDataset ds2(10, 10);
   TestVRTRasterBand band2(&ds2, 1, GDT_Byte);
-  EXPECT_EQ(band2.CreateMaskBand(GMF_PER_DATASET), CE_None);
-  EXPECT_EQ(band2.GetMaskFlags(), GMF_PER_DATASET);
+  EXPECT_EQ(CE_None, band2.CreateMaskBand(GMF_PER_DATASET));
+  EXPECT_EQ(GMF_PER_DATASET, band2.GetMaskFlags());
 }
 
 TEST_F(VrtRasterBandTest, XMLInitValidationAndOverviews) {
@@ -350,511 +366,535 @@ TEST_F(VrtRasterBandTest, XMLInitValidationAndOverviews) {
   TestVRTRasterBand band(&ds, 1, GDT_Byte);
   VRTMapSharedResources map_resources;
 
-  // Invalid node
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(band.XMLInit(nullptr, nullptr, map_resources), CE_Failure);
-  CPLXMLNode* invalid_node = CPLCreateXMLNode(nullptr, CXT_Text, "Invalid");
-  EXPECT_EQ(band.XMLInit(invalid_node, nullptr, map_resources), CE_Failure);
-  CPLDestroyXMLNode(invalid_node);
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, band.XMLInit(nullptr, nullptr, map_resources));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
 
-  // Invalid dataType
-  const char* bad_type_xml = "<VRTRasterBand dataType=\"InvalidType\"/>";
-  CPLXMLNode* bad_type = CPLParseXMLString(bad_type_xml);
-  ASSERT_NE(bad_type, nullptr);
-  EXPECT_EQ(band.XMLInit(bad_type, nullptr, map_resources), CE_Failure);
-  CPLDestroyXMLNode(bad_type);
-  CPLPopErrorHandler();
+    CPLXMLTreeCloser invalid_node(
+        CPLCreateXMLNode(nullptr, CXT_Text, "Invalid"));
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure,
+              band.XMLInit(invalid_node.get(), nullptr, map_resources));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
 
-  // Full valid XML with Overviews, ColorTable, RAT, MaskBand
-  const char* ovr_file = "/vsimem/ovr_test.bin";
-  VSILFILE* fp = VSIFOpenL(ovr_file, "wb");
-  if (fp) {
-    uint8_t zero = 0;
-    VSIFWriteL(&zero, 1, 1, fp);
-    VSIFCloseL(fp);
+    CPLXMLTreeCloser bad_type(
+        CPLParseXMLString(R"xml(<VRTRasterBand dataType="InvalidType"/>)xml"));
+    ASSERT_NE(nullptr, bad_type.get());
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, band.XMLInit(bad_type.get(), nullptr, map_resources));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
   }
 
-  const char* full_xml =
-      "<VRTRasterBand dataType=\"Float32\" band=\"1\" blockXSize=\"64\" "
-      "blockYSize=\"64\">"
-      "  <Description>FullDesc</Description>"
-      "  <NoDataValue>-999</NoDataValue>"
-      "  <HideNoDataValue>0</HideNoDataValue>"
-      "  <UnitType>m</UnitType>"
-      "  <Offset>10</Offset>"
-      "  <Scale>2</Scale>"
-      "  <ColorInterp>Gray</ColorInterp>"
-      "  <CategoryNames>"
-      "    <Category>A</Category>"
-      "  </CategoryNames>"
-      "  <ColorTable>"
-      "    <Entry c1=\"1\" c2=\"2\" c3=\"3\" c4=\"255\"/>"
-      "  </ColorTable>"
-      "  <Overview>"
-      "    <SourceFilename "
-      "relativeToVRT=\"0\">/vsimem/ovr_test.bin</SourceFilename>"
-      "    <SourceBand>1</SourceBand>"
-      "  </Overview>"
-      "  <MaskBand>"
-      "    <VRTRasterBand dataType=\"Byte\" subClass=\"VRTSourcedRasterBand\"/>"
-      "  </MaskBand>"
-      "</VRTRasterBand>";
+  constexpr char kOvrFile[] = "/vsimem/vrtrasterband_test/ovr_test.bin";
+  VsiMemTempWrapper ovr_wrapper(kOvrFile, std::string(1, '\0'));
 
-  CPLXMLNode* tree = CPLParseXMLString(full_xml);
-  ASSERT_NE(tree, nullptr);
-  EXPECT_EQ(band.XMLInit(tree, nullptr, map_resources), CE_None);
-  CPLDestroyXMLNode(tree);
+  constexpr char kFullXml[] = R"xml(
+<VRTRasterBand dataType="Float32" band="1" blockXSize="64" blockYSize="64">
+  <Description>FullDesc</Description>
+  <NoDataValue>-999</NoDataValue>
+  <HideNoDataValue>0</HideNoDataValue>
+  <UnitType>m</UnitType>
+  <Offset>10</Offset>
+  <Scale>2</Scale>
+  <ColorInterp>Gray</ColorInterp>
+  <CategoryNames>
+    <Category>A</Category>
+  </CategoryNames>
+  <ColorTable>
+    <Entry c1="1" c2="2" c3="3" c4="255"/>
+  </ColorTable>
+  <Overview>
+    <SourceFilename relativeToVRT="0">/vsimem/vrtrasterband_test/ovr_test.bin</SourceFilename>
+    <SourceBand>1</SourceBand>
+  </Overview>
+  <MaskBand>
+    <VRTRasterBand dataType="Byte" subClass="VRTSourcedRasterBand"/>
+  </MaskBand>
+</VRTRasterBand>)xml";
 
-  EXPECT_EQ(band.GetRasterDataType(), GDT_Float32);
-  EXPECT_STREQ(band.GetDescription(), "FullDesc");
-  EXPECT_STREQ(band.GetUnitType(), "m");
-  EXPECT_DOUBLE_EQ(band.GetOffset(), 10.0);
-  EXPECT_DOUBLE_EQ(band.GetScale(), 2.0);
-  EXPECT_EQ(band.GetOverviewCount(), 1);
-  EXPECT_EQ(band.GetMaskFlags(), 0);
+  CPLXMLTreeCloser tree(CPLParseXMLString(kFullXml));
+  ASSERT_NE(nullptr, tree.get());
+  EXPECT_EQ(CE_None, band.XMLInit(tree.get(), nullptr, map_resources));
 
-  // Serialize to XML
+  EXPECT_EQ(GDT_Float32, band.GetRasterDataType());
+  EXPECT_STREQ("FullDesc", band.GetDescription());
+  EXPECT_STREQ("m", band.GetUnitType());
+  EXPECT_DOUBLE_EQ(10.0, band.GetOffset());
+  EXPECT_DOUBLE_EQ(2.0, band.GetScale());
+  EXPECT_EQ(1, band.GetOverviewCount());
+  EXPECT_EQ(0, band.GetMaskFlags());
+
   bool warned = false;
   size_t ram = 0;
-  CPLXMLNode* serialized = band.SerializeToXML(nullptr, warned, ram);
-  ASSERT_NE(serialized, nullptr);
-  char* str = CPLSerializeXMLTree(serialized);
-  EXPECT_NE(strstr(str, "FullDesc"), nullptr);
-  EXPECT_NE(strstr(str, "Overview"), nullptr);
-  EXPECT_NE(strstr(str, "MaskBand"), nullptr);
-  EXPECT_NE(strstr(str, "CategoryNames"), nullptr);
-  EXPECT_NE(strstr(str, "ColorTable"), nullptr);
-  CPLFree(str);
-  CPLDestroyXMLNode(serialized);
+  CPLXMLTreeCloser serialized(band.SerializeToXML(nullptr, warned, ram));
+  ASSERT_NE(nullptr, serialized.get());
+  std::unique_ptr<char, CplFreeDeleter> xml_str(
+      CPLSerializeXMLTree(serialized.get()));
+  ASSERT_NE(nullptr, xml_str);
+  EXPECT_THAT(xml_str.get(), HasSubstr("FullDesc"));
+  EXPECT_THAT(xml_str.get(), HasSubstr("Overview"));
+  EXPECT_THAT(xml_str.get(), HasSubstr("MaskBand"));
+  EXPECT_THAT(xml_str.get(), HasSubstr("CategoryNames"));
+  EXPECT_THAT(xml_str.get(), HasSubstr("ColorTable"));
 
-  // Test GetFileList
   char** file_list = nullptr;
   int file_list_size = 0;
   int file_list_max = 0;
+  absl::Cleanup cleanup_files = [&file_list] { CSLDestroy(file_list); };
   CPLHashSet* hash_set =
       CPLHashSetNew(CPLHashSetHashStr, CPLHashSetEqualStr, nullptr);
+  absl::Cleanup cleanup_hash = [hash_set] { CPLHashSetDestroy(hash_set); };
   band.GetFileList(&file_list, &file_list_size, &file_list_max, hash_set);
   EXPECT_GE(file_list_size, 1);
-  CSLDestroy(file_list);
-  CPLHashSetDestroy(hash_set);
 
-  // Test CloseDependentDatasets
   band.CloseDependentDatasets();
-
-  VSIUnlink(ovr_file);
 }
 
 TEST_F(VrtRasterBandTest, OverviewAccessAndDetails) {
-  const char* ovr_xml =
-      "<VRTDataset rasterXSize=\"10\" rasterYSize=\"10\">"
-      "  <VRTRasterBand dataType=\"Byte\" band=\"1\"/>"
-      "</VRTDataset>";
-  VSIFCloseL(
-      VSIFileFromMemBuffer("/vsimem/ovr_target.vrt",
-                           reinterpret_cast<GByte*>(const_cast<char*>(ovr_xml)),
-                           strlen(ovr_xml), FALSE));
+  constexpr char kOvrVrtPath[] = "/vsimem/vrtrasterband_test/ovr_target.vrt";
+  constexpr char kOvrXml[] = R"xml(
+<VRTDataset rasterXSize="10" rasterYSize="10">
+  <VRTRasterBand dataType="Byte" band="1"/>
+</VRTDataset>)xml";
+  VsiMemTempWrapper ovr_target(kOvrVrtPath, kOvrXml);
 
   VRTDataset ds(20, 20);
   TestVRTRasterBand band(&ds, 1, GDT_Byte);
 
-  const char* band_xml =
-      "<VRTRasterBand dataType=\"Byte\" band=\"1\">"
-      "  <Overview>"
-      "    <SourceFilename "
-      "relativeToVRT=\"0\">/vsimem/ovr_target.vrt</SourceFilename>"
-      "    <SourceBand>1</SourceBand>"
-      "  </Overview>"
-      "</VRTRasterBand>";
-  CPLXMLNode* tree = CPLParseXMLString(band_xml);
-  ASSERT_NE(tree, nullptr);
+  constexpr char kBandXml[] = R"xml(
+<VRTRasterBand dataType="Byte" band="1">
+  <Overview>
+    <SourceFilename relativeToVRT="0">/vsimem/vrtrasterband_test/ovr_target.vrt</SourceFilename>
+    <SourceBand>1</SourceBand>
+  </Overview>
+</VRTRasterBand>)xml";
+  CPLXMLTreeCloser tree(CPLParseXMLString(kBandXml));
+  ASSERT_NE(nullptr, tree.get());
   VRTMapSharedResources map_resources;
-  EXPECT_EQ(band.XMLInit(tree, nullptr, map_resources), CE_None);
-  CPLDestroyXMLNode(tree);
+  EXPECT_EQ(CE_None, band.XMLInit(tree.get(), nullptr, map_resources));
 
-  EXPECT_EQ(band.GetOverviewCount(), 1);
-  EXPECT_EQ(band.GetOverview(-1), nullptr);
-  EXPECT_EQ(band.GetOverview(5), nullptr);
+  EXPECT_EQ(1, band.GetOverviewCount());
+  EXPECT_EQ(nullptr, band.GetOverview(-1));
+  EXPECT_EQ(nullptr, band.GetOverview(5));
   GDALRasterBand* ovr_band = band.GetOverview(0);
-  ASSERT_NE(ovr_band, nullptr);
-  // Second call returns cached pointer
-  EXPECT_EQ(band.GetOverview(0), ovr_band);
+  ASSERT_NE(nullptr, ovr_band);
+  EXPECT_EQ(ovr_band, band.GetOverview(0));
   band.CloseDependentDatasets();
 
-  // Test recursive overview detection
-  ds.SetDescription("/vsimem/recursive.vrt");
-  const char* rec_xml =
-      "<VRTRasterBand dataType=\"Byte\" band=\"1\">"
-      "  <Overview>"
-      "    <SourceFilename "
-      "relativeToVRT=\"0\">/vsimem/recursive.vrt</SourceFilename>"
-      "    <SourceBand>1</SourceBand>"
-      "  </Overview>"
-      "</VRTRasterBand>";
-  tree = CPLParseXMLString(rec_xml);
+  // Recursive overview detection.
+  ds.SetDescription("/vsimem/vrtrasterband_test/recursive.vrt");
+  constexpr char kRecXml[] = R"xml(
+<VRTRasterBand dataType="Byte" band="1">
+  <Overview>
+    <SourceFilename relativeToVRT="0">/vsimem/vrtrasterband_test/recursive.vrt</SourceFilename>
+    <SourceBand>1</SourceBand>
+  </Overview>
+</VRTRasterBand>)xml";
+  CPLXMLTreeCloser rec_tree(CPLParseXMLString(kRecXml));
+  ASSERT_NE(nullptr, rec_tree.get());
   TestVRTRasterBand rec_band(&ds, 1, GDT_Byte);
-  EXPECT_EQ(rec_band.XMLInit(tree, nullptr, map_resources), CE_None);
-  CPLDestroyXMLNode(tree);
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(rec_band.GetOverview(0), nullptr);
-  CPLPopErrorHandler();
+  EXPECT_EQ(CE_None, rec_band.XMLInit(rec_tree.get(), nullptr, map_resources));
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, rec_band.GetOverview(0));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+  }
 
-  // Test invalid overview file
-  const char* bad_xml =
-      "<VRTRasterBand dataType=\"Byte\" band=\"1\">"
-      "  <Overview>"
-      "    <SourceFilename "
-      "relativeToVRT=\"0\">/vsimem/does_not_exist.tif</SourceFilename>"
-      "    <SourceBand>1</SourceBand>"
-      "  </Overview>"
-      "</VRTRasterBand>";
-  tree = CPLParseXMLString(bad_xml);
+  // Non-existent overview file.
+  constexpr char kBadFileXml[] = R"xml(
+<VRTRasterBand dataType="Byte" band="1">
+  <Overview>
+    <SourceFilename relativeToVRT="0">/vsimem/vrtrasterband_test/does_not_exist.tif</SourceFilename>
+    <SourceBand>1</SourceBand>
+  </Overview>
+</VRTRasterBand>)xml";
+  CPLXMLTreeCloser bad_tree(CPLParseXMLString(kBadFileXml));
+  ASSERT_NE(nullptr, bad_tree.get());
   TestVRTRasterBand bad_band(&ds, 1, GDT_Byte);
-  EXPECT_EQ(bad_band.XMLInit(tree, nullptr, map_resources), CE_None);
-  CPLDestroyXMLNode(tree);
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(bad_band.GetOverview(0), nullptr);
-  CPLPopErrorHandler();
+  EXPECT_EQ(CE_None, bad_band.XMLInit(bad_tree.get(), nullptr, map_resources));
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, bad_band.GetOverview(0));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+  }
 
-  // Test overview with invalid band
-  const char* badband_xml =
-      "<VRTRasterBand dataType=\"Byte\" band=\"1\">"
-      "  <Overview>"
-      "    <SourceFilename "
-      "relativeToVRT=\"0\">/vsimem/ovr_target.vrt</SourceFilename>"
-      "    <SourceBand>99</SourceBand>"
-      "  </Overview>"
-      "</VRTRasterBand>";
-  tree = CPLParseXMLString(badband_xml);
+  // Out-of-range source band on valid overview dataset.
+  constexpr char kBadBandXml[] = R"xml(
+<VRTRasterBand dataType="Byte" band="1">
+  <Overview>
+    <SourceFilename relativeToVRT="0">/vsimem/vrtrasterband_test/ovr_target.vrt</SourceFilename>
+    <SourceBand>99</SourceBand>
+  </Overview>
+</VRTRasterBand>)xml";
+  CPLXMLTreeCloser badband_tree(CPLParseXMLString(kBadBandXml));
+  ASSERT_NE(nullptr, badband_tree.get());
   TestVRTRasterBand badband_band(&ds, 1, GDT_Byte);
-  EXPECT_EQ(badband_band.XMLInit(tree, nullptr, map_resources), CE_None);
-  CPLDestroyXMLNode(tree);
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(badband_band.GetOverview(0), nullptr);
-  CPLPopErrorHandler();
-
-  VSIUnlink("/vsimem/ovr_target.vrt");
+  EXPECT_EQ(CE_None,
+            badband_band.XMLInit(badband_tree.get(), nullptr, map_resources));
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, badband_band.GetOverview(0));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+  }
 }
 
 TEST_F(VrtRasterBandTest, VirtualOverviewsAndDisabledOverviews) {
   VRTDataset ds(40, 40);
-  ds.AddBand(GDT_Byte, nullptr);
+  ASSERT_EQ(CE_None, ds.AddBand(GDT_Byte, nullptr));
   VRTRasterBand* band = cpl::down_cast<VRTRasterBand*>(ds.GetRasterBand(1));
-  ASSERT_NE(band, nullptr);
+  ASSERT_NE(nullptr, band);
 
   ds.SetEnableOverviews(false);
-  EXPECT_EQ(band->GetOverviewCount(), 0);
+  EXPECT_EQ(0, band->GetOverviewCount());
 
   ds.SetEnableOverviews(true);
-  CPLSetConfigOption("VRT_VIRTUAL_OVERVIEWS", "YES");
-  int anOverviews[] = {2};
-  ds.BuildOverviews("NEAREST", 1, anOverviews, 0, nullptr, nullptr, nullptr);
-  CPLSetConfigOption("VRT_VIRTUAL_OVERVIEWS", nullptr);
+  {
+    CPLConfigOptionSetter virtual_ovr("VRT_VIRTUAL_OVERVIEWS", "YES", false);
+    int overviews[] = {2};
+    EXPECT_EQ(CE_None, ds.BuildOverviews("NEAREST", 1, overviews, 0, nullptr,
+                                         nullptr, nullptr));
+  }
 
-  EXPECT_EQ(band->GetOverviewCount(), 1);
-  EXPECT_EQ(band->GetOverview(-1), nullptr);
-  EXPECT_EQ(band->GetOverview(10), nullptr);
-  GDALRasterBand* ovr = band->GetOverview(0);
-  EXPECT_NE(ovr, nullptr);
+  EXPECT_EQ(1, band->GetOverviewCount());
+  EXPECT_EQ(nullptr, band->GetOverview(-1));
+  EXPECT_EQ(nullptr, band->GetOverview(10));
+  EXPECT_NE(nullptr, band->GetOverview(0));
 }
 
 TEST_F(VrtRasterBandTest, XMLInitFailuresAndSubclasses) {
   VRTDataset ds(20, 20);
   VRTMapSharedResources map_resources;
 
-  // Missing SourceFilename in Overview
-  const char* missing_fn =
-      "<VRTRasterBand dataType=\"Byte\" band=\"1\">"
-      "  <Overview><SourceBand>1</SourceBand></Overview>"
-      "</VRTRasterBand>";
-  CPLXMLNode* tree = CPLParseXMLString(missing_fn);
-  TestVRTRasterBand b1(&ds, 1, GDT_Byte);
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(b1.XMLInit(tree, nullptr, map_resources), CE_Failure);
-  CPLPopErrorHandler();
-  CPLDestroyXMLNode(tree);
+  // Missing SourceFilename in Overview.
+  {
+    CPLXMLTreeCloser tree(CPLParseXMLString(R"xml(
+<VRTRasterBand dataType="Byte" band="1">
+  <Overview><SourceBand>1</SourceBand></Overview>
+</VRTRasterBand>)xml"));
+    ASSERT_NE(nullptr, tree.get());
+    TestVRTRasterBand b1(&ds, 1, GDT_Byte);
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, b1.XMLInit(tree.get(), nullptr, map_resources));
+    CPLErrorReset();
+  }
 
-  // MEM driver check
-  const char* mem_fn =
-      "<VRTRasterBand dataType=\"Byte\" band=\"1\">"
-      "  <Overview>"
-      "    <SourceFilename>MEM:::123</SourceFilename>"
-      "  </Overview>"
-      "</VRTRasterBand>";
-  tree = CPLParseXMLString(mem_fn);
-  TestVRTRasterBand b2(&ds, 1, GDT_Byte);
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(b2.XMLInit(tree, "/vsimem/foo.vrt", map_resources), CE_Failure);
-  CPLPopErrorHandler();
-  CPLDestroyXMLNode(tree);
+  // MEM driver overview is rejected.
+  {
+    CPLXMLTreeCloser tree(CPLParseXMLString(R"xml(
+<VRTRasterBand dataType="Byte" band="1">
+  <Overview>
+    <SourceFilename>MEM:::123</SourceFilename>
+  </Overview>
+</VRTRasterBand>)xml"));
+    ASSERT_NE(nullptr, tree.get());
+    TestVRTRasterBand b2(&ds, 1, GDT_Byte);
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, b2.XMLInit(tree.get(), kTestDir, map_resources));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
 
-  // Relative path in SourceFilename
-  const char* rel_fn =
-      "<VRTRasterBand dataType=\"Byte\" band=\"1\">"
-      "  <Overview>"
-      "    <SourceFilename relativeToVRT=\"1\">rel.tif</SourceFilename>"
-      "  </Overview>"
-      "</VRTRasterBand>";
-  tree = CPLParseXMLString(rel_fn);
-  TestVRTRasterBand b3(&ds, 1, GDT_Byte);
-  EXPECT_EQ(b3.XMLInit(tree, "/vsimem/foo.vrt", map_resources), CE_None);
-  CPLDestroyXMLNode(tree);
+  // Relative path in SourceFilename succeeds during XMLInit (lazy open).
+  {
+    CPLXMLTreeCloser tree(CPLParseXMLString(R"xml(
+<VRTRasterBand dataType="Byte" band="1">
+  <Overview>
+    <SourceFilename relativeToVRT="1">rel.tif</SourceFilename>
+  </Overview>
+</VRTRasterBand>)xml"));
+    ASSERT_NE(nullptr, tree.get());
+    TestVRTRasterBand b3(&ds, 1, GDT_Byte);
+    EXPECT_EQ(CE_None,
+              b3.XMLInit(tree.get(), "/vsimem/vrtrasterband_test/foo.vrt",
+                         map_resources));
+  }
 
-  // Mismatching band number
-  const char* band_mismatch = "<VRTRasterBand dataType=\"Byte\" band=\"5\"/>";
-  tree = CPLParseXMLString(band_mismatch);
-  TestVRTRasterBand b4(&ds, 1, GDT_Byte);
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(b4.XMLInit(tree, nullptr, map_resources), CE_None);
-  CPLPopErrorHandler();
-  CPLDestroyXMLNode(tree);
+  // Mismatching band attribute emits a warning but returns CE_None.
+  {
+    CPLXMLTreeCloser tree(CPLParseXMLString(
+        R"xml(<VRTRasterBand dataType="Byte" band="5"/>)xml"));
+    ASSERT_NE(nullptr, tree.get());
+    TestVRTRasterBand b4(&ds, 1, GDT_Byte);
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_None, b4.XMLInit(tree.get(), nullptr, map_resources));
+    EXPECT_EQ(CE_Warning, CPLGetLastErrorType());
+  }
 
-  // MaskBand subclasses
-  const char* derived_mask =
-      "<VRTRasterBand dataType=\"Byte\" band=\"1\">"
-      "  <MaskBand>"
-      "    <VRTRasterBand dataType=\"Byte\" subClass=\"VRTDerivedRasterBand\">"
-      "      <PixelFunctionType>near</PixelFunctionType>"
-      "    </VRTRasterBand>"
-      "  </MaskBand>"
-      "</VRTRasterBand>";
-  tree = CPLParseXMLString(derived_mask);
-  TestVRTRasterBand b5(&ds, 1, GDT_Byte);
-  EXPECT_EQ(b5.XMLInit(tree, nullptr, map_resources), CE_None);
-  CPLDestroyXMLNode(tree);
+  constexpr char kDerivedMaskXml[] = R"xml(
+<VRTRasterBand dataType="Byte" band="1">
+  <MaskBand>
+    <VRTRasterBand dataType="Byte" subClass="VRTDerivedRasterBand">
+      <PixelFunctionType>near</PixelFunctionType>
+    </VRTRasterBand>
+  </MaskBand>
+</VRTRasterBand>)xml";
+  {
+    CPLXMLTreeCloser tree(CPLParseXMLString(kDerivedMaskXml));
+    ASSERT_NE(nullptr, tree.get());
+    TestVRTRasterBand b5(&ds, 1, GDT_Byte);
+    EXPECT_EQ(CE_None, b5.XMLInit(tree.get(), nullptr, map_resources));
+  }
 
-  const char* raw_mask =
-      "<VRTRasterBand dataType=\"Byte\" band=\"1\">"
-      "  <MaskBand>"
-      "    <VRTRasterBand dataType=\"Byte\" subClass=\"VRTRawRasterBand\">"
-      "      <SourceFilename relativeToVRT=\"1\">dummy.raw</SourceFilename>"
-      "    </VRTRasterBand>"
-      "  </MaskBand>"
-      "</VRTRasterBand>";
+  constexpr char kRawMaskXml[] = R"xml(
+<VRTRasterBand dataType="Byte" band="1">
+  <MaskBand>
+    <VRTRasterBand dataType="Byte" subClass="VRTRawRasterBand">
+      <SourceFilename relativeToVRT="1">dummy.raw</SourceFilename>
+    </VRTRasterBand>
+  </MaskBand>
+</VRTRasterBand>)xml";
+  VsiMemTempWrapper raw_file("/vsimem/vrtrasterband_test/dummy.raw",
+                             std::string(400, '\0'));
 
-  std::vector<GByte> raw_bytes(400, 0);
-  VSIFCloseL(VSIFileFromMemBuffer("/vsimem/dummy.raw", raw_bytes.data(),
-                                  raw_bytes.size(), FALSE));
+  // Raw raster band disabled at runtime: XMLInit fails even when file exists.
+  {
+    CPLConfigOptionSetter disable_raw("GDAL_VRT_ENABLE_RAWRASTERBAND", "NO",
+                                      false);
+    CPLXMLTreeCloser tree(CPLParseXMLString(kRawMaskXml));
+    ASSERT_NE(nullptr, tree.get());
+    TestVRTRasterBand b6_disabled(&ds, 1, GDT_Byte);
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure,
+              b6_disabled.XMLInit(tree.get(), kTestDir, map_resources));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
 
-  // Raw raster band disabled at run-time: XMLInit must fail even though the
-  // backing file exists.
-  CPLSetConfigOption("GDAL_VRT_ENABLE_RAWRASTERBAND", "NO");
-  tree = CPLParseXMLString(raw_mask);
-  TestVRTRasterBand b6_disabled(&ds, 1, GDT_Byte);
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(b6_disabled.XMLInit(tree, "/vsimem", map_resources), CE_Failure);
-  CPLPopErrorHandler();
-  CPLDestroyXMLNode(tree);
+  // Raw raster band enabled at runtime.
+  {
+    CPLConfigOptionSetter enable_raw("GDAL_VRT_ENABLE_RAWRASTERBAND", "YES",
+                                     false);
+    CPLXMLTreeCloser tree(CPLParseXMLString(kRawMaskXml));
+    ASSERT_NE(nullptr, tree.get());
+    TestVRTRasterBand b6(&ds, 1, GDT_Byte);
+    EXPECT_EQ(CE_None, b6.XMLInit(tree.get(), kTestDir, map_resources));
+  }
 
-  // Raw raster band enabled
-  CPLSetConfigOption("GDAL_VRT_ENABLE_RAWRASTERBAND", "YES");
-  tree = CPLParseXMLString(raw_mask);
-  TestVRTRasterBand b6(&ds, 1, GDT_Byte);
-  EXPECT_EQ(b6.XMLInit(tree, "/vsimem", map_resources), CE_None);
-  CPLDestroyXMLNode(tree);
-  CPLSetConfigOption("GDAL_VRT_ENABLE_RAWRASTERBAND", nullptr);
-  VSIUnlink("/vsimem/dummy.raw");
+  {
+    CPLXMLTreeCloser tree(CPLParseXMLString(R"xml(
+<VRTRasterBand dataType="Byte" band="1">
+  <MaskBand>
+    <VRTRasterBand dataType="Byte" subClass="VRTWarpedRasterBand"/>
+  </MaskBand>
+</VRTRasterBand>)xml"));
+    ASSERT_NE(nullptr, tree.get());
+    TestVRTRasterBand b7(&ds, 1, GDT_Byte);
+    EXPECT_EQ(CE_None, b7.XMLInit(tree.get(), nullptr, map_resources));
+  }
 
-  const char* warped_mask =
-      "<VRTRasterBand dataType=\"Byte\" band=\"1\">"
-      "  <MaskBand>"
-      "    <VRTRasterBand dataType=\"Byte\" subClass=\"VRTWarpedRasterBand\"/>"
-      "  </MaskBand>"
-      "</VRTRasterBand>";
-  tree = CPLParseXMLString(warped_mask);
-  TestVRTRasterBand b7(&ds, 1, GDT_Byte);
-  EXPECT_EQ(b7.XMLInit(tree, nullptr, map_resources), CE_None);
-  CPLDestroyXMLNode(tree);
+  {
+    CPLXMLTreeCloser tree(CPLParseXMLString(R"xml(
+<VRTRasterBand dataType="Byte" band="1">
+  <MaskBand>
+    <VRTRasterBand dataType="Byte" subClass="UnknownSubClass"/>
+  </MaskBand>
+</VRTRasterBand>)xml"));
+    ASSERT_NE(nullptr, tree.get());
+    TestVRTRasterBand b8(&ds, 1, GDT_Byte);
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, b8.XMLInit(tree.get(), nullptr, map_resources));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
 
-  const char* invalid_mask =
-      "<VRTRasterBand dataType=\"Byte\" band=\"1\">"
-      "  <MaskBand>"
-      "    <VRTRasterBand dataType=\"Byte\" subClass=\"UnknownSubClass\"/>"
-      "  </MaskBand>"
-      "</VRTRasterBand>";
-  tree = CPLParseXMLString(invalid_mask);
-  TestVRTRasterBand b8(&ds, 1, GDT_Byte);
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(b8.XMLInit(tree, nullptr, map_resources), CE_Failure);
-  CPLPopErrorHandler();
-  CPLDestroyXMLNode(tree);
-
-  // MaskBand when dataset mask band already exists
-  VRTDataset ds_with_mask(20, 20);
-  ds_with_mask.CreateMaskBand(GMF_PER_DATASET);
-  tree = CPLParseXMLString(derived_mask);
-  TestVRTRasterBand b9(&ds_with_mask, 1, GDT_Byte);
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(b9.XMLInit(tree, nullptr, map_resources), CE_Failure);
-  CPLPopErrorHandler();
-  CPLDestroyXMLNode(tree);
+  // Band MaskBand fails when dataset mask band already exists.
+  {
+    VRTDataset ds_with_mask(20, 20);
+    ASSERT_EQ(CE_None, ds_with_mask.CreateMaskBand(GMF_PER_DATASET));
+    CPLXMLTreeCloser tree(CPLParseXMLString(kDerivedMaskXml));
+    ASSERT_NE(nullptr, tree.get());
+    TestVRTRasterBand b9(&ds_with_mask, 1, GDT_Byte);
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, b9.XMLInit(tree.get(), nullptr, map_resources));
+    CPLErrorReset();
+  }
 }
 
 TEST_F(VrtRasterBandTest, DatasetMaskBandInteractions) {
   VRTDataset ds(20, 20);
   TestVRTRasterBand band(&ds, 1);
-  EXPECT_EQ(ds.CreateMaskBand(GMF_PER_DATASET), CE_None);
+  EXPECT_EQ(CE_None, ds.CreateMaskBand(GMF_PER_DATASET));
 
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(band.CreateMaskBand(0), CE_Failure);
-  CPLPopErrorHandler();
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(CE_Failure, band.CreateMaskBand(0));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+    CPLErrorReset();
+  }
 
-  EXPECT_NE(band.GetMaskBand(), nullptr);
-  EXPECT_EQ(band.GetMaskFlags(), GMF_PER_DATASET);
+  EXPECT_NE(nullptr, band.GetMaskBand());
+  EXPECT_EQ(GMF_PER_DATASET, band.GetMaskFlags());
 }
 
 TEST_F(VrtRasterBandTest, Int64AndUInt64NoDataAndSerialization) {
   VRTDataset ds(20, 20);
   VRTMapSharedResources map_resources;
 
-  // Int64 XMLInit
-  const char* int64_xml =
-      "<VRTRasterBand dataType=\"Int64\" band=\"1\">"
-      "  <NoDataValue>-9000000000000000000</NoDataValue>"
-      "  <HideNoDataValue>1</HideNoDataValue>"
-      "</VRTRasterBand>";
-  CPLXMLNode* tree = CPLParseXMLString(int64_xml);
+  constexpr char kInt64Xml[] = R"xml(
+<VRTRasterBand dataType="Int64" band="1">
+  <NoDataValue>-9000000000000000000</NoDataValue>
+  <HideNoDataValue>1</HideNoDataValue>
+</VRTRasterBand>)xml";
+  CPLXMLTreeCloser tree64(CPLParseXMLString(kInt64Xml));
+  ASSERT_NE(nullptr, tree64.get());
   TestVRTRasterBand int64_band(&ds, 1, GDT_Int64);
-  EXPECT_EQ(int64_band.XMLInit(tree, nullptr, map_resources), CE_None);
-  CPLDestroyXMLNode(tree);
+  EXPECT_EQ(CE_None, int64_band.XMLInit(tree64.get(), nullptr, map_resources));
 
   int success = 0;
   int64_band.GetNoDataValue(&success);
-  EXPECT_FALSE(success);  // HideNoDataValue was 1
+  EXPECT_FALSE(success);
 
   bool warned = false;
   size_t ram = 0;
-  CPLXMLNode* serialized = int64_band.SerializeToXML(nullptr, warned, ram);
-  ASSERT_NE(serialized, nullptr);
-  char* str = CPLSerializeXMLTree(serialized);
-  EXPECT_NE(strstr(str, "-9000000000000000000"), nullptr);
-  EXPECT_NE(strstr(str, "<HideNoDataValue>1</HideNoDataValue>"), nullptr);
-  CPLFree(str);
-  CPLDestroyXMLNode(serialized);
+  {
+    CPLXMLTreeCloser serialized(
+        int64_band.SerializeToXML(nullptr, warned, ram));
+    ASSERT_NE(nullptr, serialized.get());
+    std::unique_ptr<char, CplFreeDeleter> xml_str(
+        CPLSerializeXMLTree(serialized.get()));
+    ASSERT_NE(nullptr, xml_str);
+    EXPECT_THAT(xml_str.get(), HasSubstr("-9000000000000000000"));
+    EXPECT_THAT(xml_str.get(),
+                HasSubstr("<HideNoDataValue>1</HideNoDataValue>"));
+  }
 
-  // UInt64 XMLInit
-  const char* uint64_xml =
-      "<VRTRasterBand dataType=\"UInt64\" band=\"1\">"
-      "  <NoDataValue>18000000000000000000</NoDataValue>"
-      "  <HideNoDataValue>0</HideNoDataValue>"
-      "</VRTRasterBand>";
-  tree = CPLParseXMLString(uint64_xml);
+  constexpr char kUInt64Xml[] = R"xml(
+<VRTRasterBand dataType="UInt64" band="1">
+  <NoDataValue>18000000000000000000</NoDataValue>
+  <HideNoDataValue>0</HideNoDataValue>
+</VRTRasterBand>)xml";
+  CPLXMLTreeCloser treeu64(CPLParseXMLString(kUInt64Xml));
+  ASSERT_NE(nullptr, treeu64.get());
   TestVRTRasterBand uint64_band(&ds, 1, GDT_UInt64);
-  EXPECT_EQ(uint64_band.XMLInit(tree, nullptr, map_resources), CE_None);
-  CPLDestroyXMLNode(tree);
+  EXPECT_EQ(CE_None,
+            uint64_band.XMLInit(treeu64.get(), nullptr, map_resources));
 
   uint64_band.GetNoDataValue(&success);
   EXPECT_TRUE(success);
 
-  serialized = uint64_band.SerializeToXML(nullptr, warned, ram);
-  ASSERT_NE(serialized, nullptr);
-  str = CPLSerializeXMLTree(serialized);
-  EXPECT_NE(strstr(str, "18000000000000000000"), nullptr);
-  CPLFree(str);
-  CPLDestroyXMLNode(serialized);
+  {
+    CPLXMLTreeCloser serialized(
+        uint64_band.SerializeToXML(nullptr, warned, ram));
+    ASSERT_NE(nullptr, serialized.get());
+    std::unique_ptr<char, CplFreeDeleter> xml_str(
+        CPLSerializeXMLTree(serialized.get()));
+    ASSERT_NE(nullptr, xml_str);
+    EXPECT_THAT(xml_str.get(), HasSubstr("18000000000000000000"));
+  }
 
-  // Calling GetNoDataValueAsUInt64 on Float32 band
   TestVRTRasterBand f32_band(&ds, 1, GDT_Float32);
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  f32_band.GetNoDataValueAsUInt64(&success);
-  EXPECT_FALSE(success);
-  CPLPopErrorHandler();
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    f32_band.GetNoDataValueAsUInt64(&success);
+    EXPECT_FALSE(success);
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+  }
 }
 
 TEST_F(VrtRasterBandTest, HistogramsAndDefaultHistogram) {
   VRTDataset ds(20, 20);
   TestVRTRasterBand band(&ds, 1, GDT_Byte);
 
-  GUIntBig panHist[10] = {0};
-  EXPECT_EQ(
-      band.GetHistogram(0.0, 10.0, 10, panHist, FALSE, FALSE, nullptr, nullptr),
-      CE_None);
-  EXPECT_EQ(band.SetDefaultHistogram(0.0, 10.0, 10, panHist), CE_None);
+  GUIntBig hist[10] = {0};
+  EXPECT_EQ(CE_None, band.GetHistogram(0.0, 10.0, 10, hist, FALSE, FALSE,
+                                       nullptr, nullptr));
+  EXPECT_EQ(CE_None, band.SetDefaultHistogram(0.0, 10.0, 10, hist));
 
-  double min = 0, max = 0;
+  double min_val = 0.0;
+  double max_val = 0.0;
   int buckets = 0;
-  GUIntBig* ret_hist = nullptr;
-  EXPECT_EQ(band.GetDefaultHistogram(&min, &max, &buckets, &ret_hist, FALSE,
-                                     nullptr, nullptr),
-            CE_None);
-  EXPECT_EQ(buckets, 10);
-  VSIFree(ret_hist);
+  GUIntBig* ret_hist_raw = nullptr;
+  EXPECT_EQ(CE_None,
+            band.GetDefaultHistogram(&min_val, &max_val, &buckets,
+                                     &ret_hist_raw, FALSE, nullptr, nullptr));
+  std::unique_ptr<GUIntBig, decltype([](void* p) { VSIFree(p); })> ret_hist(
+      ret_hist_raw);
+  EXPECT_EQ(10, buckets);
 
   bool warned = false;
   size_t ram = 0;
-  CPLXMLNode* serialized = band.SerializeToXML(nullptr, warned, ram);
-  ASSERT_NE(serialized, nullptr);
-  char* str = CPLSerializeXMLTree(serialized);
-  EXPECT_NE(strstr(str, "Histograms"), nullptr);
-  CPLFree(str);
-  CPLDestroyXMLNode(serialized);
+  CPLXMLTreeCloser serialized(band.SerializeToXML(nullptr, warned, ram));
+  ASSERT_NE(nullptr, serialized.get());
+  std::unique_ptr<char, CplFreeDeleter> xml_str(
+      CPLSerializeXMLTree(serialized.get()));
+  ASSERT_NE(nullptr, xml_str);
+  EXPECT_THAT(xml_str.get(), HasSubstr("Histograms"));
 }
 
 TEST_F(VrtRasterBandTest, FileListWithNonExistentAndDuplicates) {
   VRTDataset ds(20, 20);
   VRTMapSharedResources map_resources;
 
-  const char* fn = "/vsimem/fl_test.bin";
-  VSIFCloseL(VSIFileFromMemBuffer(
-      fn, reinterpret_cast<GByte*>(const_cast<char*>("1")), 1, FALSE));
+  constexpr char kFile[] = "/vsimem/vrtrasterband_test/fl_test.bin";
+  VsiMemTempWrapper file(kFile, "1");
 
-  const char* xml =
-      "<VRTRasterBand dataType=\"Byte\" band=\"1\">"
-      "  <Overview>"
-      "    <SourceFilename "
-      "relativeToVRT=\"0\">/vsimem/fl_test.bin</SourceFilename>"
-      "  </Overview>"
-      "  <Overview>"
-      "    <SourceFilename "
-      "relativeToVRT=\"0\">/vsimem/does_not_exist.bin</SourceFilename>"
-      "  </Overview>"
-      "</VRTRasterBand>";
-  CPLXMLNode* tree = CPLParseXMLString(xml);
+  constexpr char kXml[] = R"xml(
+<VRTRasterBand dataType="Byte" band="1">
+  <Overview>
+    <SourceFilename relativeToVRT="0">/vsimem/vrtrasterband_test/fl_test.bin</SourceFilename>
+  </Overview>
+  <Overview>
+    <SourceFilename relativeToVRT="0">/vsimem/vrtrasterband_test/does_not_exist.bin</SourceFilename>
+  </Overview>
+</VRTRasterBand>)xml";
+  CPLXMLTreeCloser tree(CPLParseXMLString(kXml));
+  ASSERT_NE(nullptr, tree.get());
   TestVRTRasterBand band(&ds, 1, GDT_Byte);
-  EXPECT_EQ(band.XMLInit(tree, nullptr, map_resources), CE_None);
-  CPLDestroyXMLNode(tree);
+  EXPECT_EQ(CE_None, band.XMLInit(tree.get(), nullptr, map_resources));
 
   char** file_list = nullptr;
   int file_list_size = 0;
   int file_list_max = 0;
+  absl::Cleanup cleanup_files = [&file_list] { CSLDestroy(file_list); };
   CPLHashSet* hash_set =
       CPLHashSetNew(CPLHashSetHashStr, CPLHashSetEqualStr, nullptr);
+  absl::Cleanup cleanup_hash = [hash_set] { CPLHashSetDestroy(hash_set); };
 
   band.GetFileList(&file_list, &file_list_size, &file_list_max, hash_set);
-  EXPECT_EQ(file_list_size, 1);
+  EXPECT_EQ(1, file_list_size);
 
-  // Calling again hits duplicate branch
+  // Calling again exercises the duplicate-entry skip branch in CPLHashSet.
   band.GetFileList(&file_list, &file_list_size, &file_list_max, hash_set);
-  EXPECT_EQ(file_list_size, 1);
-
-  CSLDestroy(file_list);
-  CPLHashSetDestroy(hash_set);
-  VSIUnlink(fn);
+  EXPECT_EQ(1, file_list_size);
 }
 
 TEST_F(VrtRasterBandTest, CategoryNamesAndColorTableExtraChildren) {
   VRTDataset ds(20, 20);
   VRTMapSharedResources map_resources;
 
-  const char* xml =
-      "<VRTRasterBand dataType=\"Byte\" band=\"1\">"
-      "  <CategoryNames>"
-      "    <Invalid>Skip</Invalid>"
-      "    <Category>RealCat</Category>"
-      "  </CategoryNames>"
-      "  <ColorTable>"
-      "    <Invalid>Skip</Invalid>"
-      "    <Entry c1=\"1\" c2=\"2\" c3=\"3\" c4=\"255\"/>"
-      "  </ColorTable>"
-      "</VRTRasterBand>";
-  CPLXMLNode* tree = CPLParseXMLString(xml);
+  constexpr char kXml[] = R"xml(
+<VRTRasterBand dataType="Byte" band="1">
+  <CategoryNames>
+    <Invalid>Skip</Invalid>
+    <Category>RealCat</Category>
+  </CategoryNames>
+  <ColorTable>
+    <Invalid>Skip</Invalid>
+    <Entry c1="1" c2="2" c3="3" c4="255"/>
+  </ColorTable>
+</VRTRasterBand>)xml";
+  CPLXMLTreeCloser tree(CPLParseXMLString(kXml));
+  ASSERT_NE(nullptr, tree.get());
   TestVRTRasterBand band(&ds, 1, GDT_Byte);
-  EXPECT_EQ(band.XMLInit(tree, nullptr, map_resources), CE_None);
-  CPLDestroyXMLNode(tree);
+  EXPECT_EQ(CE_None, band.XMLInit(tree.get(), nullptr, map_resources));
 
   char** cats = band.GetCategoryNames();
-  ASSERT_NE(cats, nullptr);
-  EXPECT_STREQ(cats[0], "RealCat");
-  EXPECT_NE(band.GetColorTable(), nullptr);
+  ASSERT_NE(nullptr, cats);
+  EXPECT_STREQ("RealCat", cats[0]);
+  EXPECT_NE(nullptr, band.GetColorTable());
 }
 
 TEST_F(VrtRasterBandTest, NoDataRangeInfinityAndUnset) {
@@ -862,13 +902,18 @@ TEST_F(VrtRasterBandTest, NoDataRangeInfinityAndUnset) {
   TestVRTRasterBand float_band(&ds, 1, GDT_Float32);
   EXPECT_TRUE(float_band.IsNoDataValueInDataTypeRange());
 
-  float_band.SetNoDataValue(std::numeric_limits<double>::infinity());
+  EXPECT_EQ(CE_None,
+            float_band.SetNoDataValue(std::numeric_limits<double>::infinity()));
   EXPECT_TRUE(float_band.IsNoDataValueInDataTypeRange());
 
   TestVRTRasterBand byte_band(&ds, 1, GDT_Byte);
-  byte_band.SetNoDataValue(std::numeric_limits<double>::infinity());
+  EXPECT_EQ(CE_None,
+            byte_band.SetNoDataValue(std::numeric_limits<double>::infinity()));
   EXPECT_FALSE(byte_band.IsNoDataValueInDataTypeRange());
 }
 
 }  // namespace
 }  // namespace autotest2
+
+// TODO(schwehr): Cover remaining defensive OOM and PAM fallback branches in
+// VRTRasterBand::InitializeFromVRT in vrtrasterband.cpp.

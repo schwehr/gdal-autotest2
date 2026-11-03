@@ -12,12 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Tests for vrtdriver.cpp.
+// Tests the GDAL VRT driver registration, metadata, source parser registry,
+// CreateCopy behavior, and driver error paths (vrtdriver.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/frmts/vrt/vrtdriver.cpp
+//   https://gdal.org/drivers/raster/vrt.html
+//   https://github.com/OSGeo/gdal/blob/master/autotest/gcore/vrt.py
 
-#include <cstring>
 #include <memory>
+#include <span>
 
+#include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_cstringlist.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_memory.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
+#include "third_party/gdal/autotest2/cpp/util/matchers.h"
 #include "third_party/gdal/frmts/vrt/vrtdataset.h"
 #include "third_party/gdal/gcore/gdal.h"
 #include "third_party/gdal/gcore/gdal_priv.h"
@@ -31,7 +43,12 @@
 namespace autotest2 {
 namespace {
 
-int DummyProgress(double dfComplete, const char* pszMessage,
+using ::testing::Contains;
+using ::testing::ElementsAre;
+
+constexpr char kTestDir[] = "/vsimem/vrtdriver_test";
+
+int DummyProgress(double /*dfComplete*/, const char* /*pszMessage*/,
                   void* pProgressArg) {
   if (pProgressArg != nullptr) {
     *static_cast<int*>(pProgressArg) += 1;
@@ -39,159 +56,190 @@ int DummyProgress(double dfComplete, const char* pszMessage,
   return TRUE;
 }
 
-VRTSource* DummySourceParser(const CPLXMLNode* psSrc, const char* pszVRTPath,
-                             VRTMapSharedResources& oMapSharedSources) {
+VRTSource* DummySourceParser(const CPLXMLNode* /*psSrc*/,
+                             const char* /*pszVRTPath*/,
+                             VRTMapSharedResources& /*oMapSharedSources*/) {
   return new VRTSimpleSource();
+}
+
+GDALDatasetUniquePtr OpenRasterReadOnly(const char* filename,
+                                        unsigned int extra_flags = 0) {
+  return GDALDatasetUniquePtr(GDALDataset::FromHandle(
+      GDALOpenEx(filename, GDAL_OF_READONLY | GDAL_OF_RASTER | extra_flags,
+                 nullptr, nullptr, nullptr)));
 }
 
 class VrtDriverTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    GDALAllRegister();
-    poDriver_ =
-        static_cast<VRTDriver*>(GetGDALDriverManager()->GetDriverByName("VRT"));
-    ASSERT_NE(poDriver_, nullptr);
+    GDALRegister_VRT();
+    GDALRegister_MEM();
+    poDriver_ = cpl::down_cast<VRTDriver*>(
+        GetGDALDriverManager()->GetDriverByName("VRT"));
+    ASSERT_NE(nullptr, poDriver_);
   }
+
+  void TearDown() override { VSIRmdirRecursive(kTestDir); }
 
   VRTDriver* poDriver_ = nullptr;
 };
 
 TEST_F(VrtDriverTest, RegisterAgain) {
-  // Calling GDALRegister_VRT when already registered is a no-op
+  // Calling GDALRegister_VRT when already registered is a no-op.
   GDALRegister_VRT();
-  EXPECT_NE(GetGDALDriverManager()->GetDriverByName("VRT"), nullptr);
+  EXPECT_NE(nullptr, GetGDALDriverManager()->GetDriverByName("VRT"));
+}
+
+TEST_F(VrtDriverTest, IdentifyDoesNotExistAndCorrupt) {
+  GDALOpenInfo missing_info("/does_not_exist/missing.vrt", GA_ReadOnly);
+  EXPECT_EQ(GDAL_IDENTIFY_FALSE, VRTDataset::Identify(&missing_info));
+
+  WithQuietHandler quiet;
+  CPLErrorReset();
+  EXPECT_EQ(nullptr, OpenRasterReadOnly("/does_not_exist/missing.vrt",
+                                        GDAL_OF_VERBOSE_ERROR));
+  EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+
+  CPLErrorReset();
+  EXPECT_EQ(nullptr, OpenRasterReadOnly("<VRTDataset><BrokenXml",
+                                        GDAL_OF_VERBOSE_ERROR));
+  EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
 }
 
 TEST_F(VrtDriverTest, MetadataDomainListAndMetadata) {
-  char** domain_list = poDriver_->GetMetadataDomainList();
-  ASSERT_NE(domain_list, nullptr);
-  EXPECT_GE(CSLFindString(domain_list, "SourceParsers"), 0);
-  CSLDestroy(domain_list);
+  std::unique_ptr<char*, decltype([](char** p) { CSLDestroy(p); })> domain_list(
+      poDriver_->GetMetadataDomainList());
+  ASSERT_NE(nullptr, domain_list);
+  EXPECT_THAT(CslToVector(domain_list.get()), Contains("SourceParsers"));
 
-  char** source_parsers = poDriver_->GetMetadata("SourceParsers");
-  EXPECT_NE(source_parsers, nullptr);
+  EXPECT_NE(nullptr, poDriver_->GetMetadata("SourceParsers"));
+  EXPECT_NE(nullptr, poDriver_->GetMetadata(nullptr));
 
-  char** default_meta = poDriver_->GetMetadata(nullptr);
-  EXPECT_NE(default_meta, nullptr);
-
-  // SetMetadata on custom domain
-  char* custom_meta[] = {CPLStrdup("KEY=VALUE"), nullptr};
-  EXPECT_EQ(poDriver_->SetMetadata(custom_meta, "CUSTOM_DOMAIN"), CE_None);
+  // SetMetadata on custom domain and clean up before exit so global VRT
+  // driver metadata stays isolated across tests.
+  absl::Cleanup cleanup_domain = [this] {
+    poDriver_->SetMetadata(nullptr, "CUSTOM_DOMAIN");
+  };
+  CPLStringList custom_meta;
+  custom_meta.SetNameValue("KEY", "VALUE");
+  EXPECT_EQ(CE_None,
+            poDriver_->SetMetadata(custom_meta.List(), "CUSTOM_DOMAIN"));
   char** retrieved = poDriver_->GetMetadata("CUSTOM_DOMAIN");
-  ASSERT_NE(retrieved, nullptr);
-  EXPECT_STREQ(CSLFetchNameValue(retrieved, "KEY"), "VALUE");
-  CPLFree(custom_meta[0]);
+  ASSERT_NE(nullptr, retrieved);
+  EXPECT_STREQ("VALUE", CSLFetchNameValue(retrieved, "KEY"));
 }
 
 TEST_F(VrtDriverTest, AddAndParseSource) {
   VRTDriver driver;
   VRTMapSharedResources map_resources;
 
-  // ParseSource on null or non-element node
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  EXPECT_EQ(driver.ParseSource(nullptr, nullptr, map_resources), nullptr);
-  CPLXMLNode* text_node = CPLCreateXMLNode(nullptr, CXT_Text, "text");
-  EXPECT_EQ(driver.ParseSource(text_node, nullptr, map_resources), nullptr);
-  CPLDestroyXMLNode(text_node);
-  CPLPopErrorHandler();
+  // ParseSource on null or non-element node.
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    EXPECT_EQ(nullptr, driver.ParseSource(nullptr, nullptr, map_resources));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
 
-  // Add a source parser
+    CPLXMLTreeCloser text_node(CPLCreateXMLNode(nullptr, CXT_Text, "text"));
+    CPLErrorReset();
+    EXPECT_EQ(nullptr,
+              driver.ParseSource(text_node.get(), nullptr, map_resources));
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+  }
+
+  // Register a custom source parser.
   driver.AddSourceParser("MyCustomSource", DummySourceParser);
 
-  // Parse matching node
-  CPLXMLNode* src_node =
-      CPLCreateXMLNode(nullptr, CXT_Element, "MyCustomSource");
-  VRTSource* source = driver.ParseSource(src_node, nullptr, map_resources);
-  EXPECT_NE(source, nullptr);
-  delete source;
+  // Parse matching node.
+  CPLXMLTreeCloser src_node(
+      CPLCreateXMLNode(nullptr, CXT_Element, "MyCustomSource"));
+  auto source = std::unique_ptr<VRTSource>(
+      driver.ParseSource(src_node.get(), nullptr, map_resources));
+  EXPECT_NE(nullptr, source);
 
-  // Parse non-matching node
-  CPLXMLNode* other_node =
-      CPLCreateXMLNode(nullptr, CXT_Element, "UnknownSource");
-  EXPECT_EQ(driver.ParseSource(other_node, nullptr, map_resources), nullptr);
+  // Parse non-matching node.
+  CPLXMLTreeCloser other_node(
+      CPLCreateXMLNode(nullptr, CXT_Element, "UnknownSource"));
+  EXPECT_EQ(nullptr,
+            driver.ParseSource(other_node.get(), nullptr, map_resources));
 
-  // Test the fallback path when m_oMapSourceParser is empty:
-  // SetMetadata with "SourceParsers" clears m_oMapSourceParser but sets
-  // papszSourceParsers. Duplicate first because SetMetadata destroys
-  // papszSourceParsers before duplicating the input list.
+  // Fallback path when m_oMapSourceParser is empty: SetMetadata with
+  // "SourceParsers" clears m_oMapSourceParser but populates
+  // papszSourceParsers. Duplicate first because SetMetadata destroys the old
+  // list before duplicating the input.
   CPLStringList parsers_meta(CSLDuplicate(driver.GetMetadata("SourceParsers")));
   driver.SetMetadata(parsers_meta.List(), "SourceParsers");
 
-  // Now m_oMapSourceParser is empty, but papszSourceParsers has
-  // "MyCustomSource"
-  source = driver.ParseSource(src_node, nullptr, map_resources);
-  EXPECT_NE(source, nullptr);
-  delete source;
+  source.reset(driver.ParseSource(src_node.get(), nullptr, map_resources));
+  EXPECT_NE(nullptr, source);
+  EXPECT_EQ(nullptr,
+            driver.ParseSource(other_node.get(), nullptr, map_resources));
 
-  EXPECT_EQ(driver.ParseSource(other_node, nullptr, map_resources), nullptr);
-
-  // With corrupt pointer string in papszSourceParsers
-  char* corrupt_meta[] = {CPLStrdup("MyCustomSource="), nullptr};
-  driver.SetMetadata(corrupt_meta, "SourceParsers");
-  EXPECT_EQ(driver.ParseSource(src_node, nullptr, map_resources), nullptr);
-  CPLFree(corrupt_meta[0]);
-
-  CPLDestroyXMLNode(src_node);
-  CPLDestroyXMLNode(other_node);
+  // Corrupt pointer string in papszSourceParsers.
+  CPLStringList corrupt_meta;
+  corrupt_meta.SetNameValue("MyCustomSource", "");
+  driver.SetMetadata(corrupt_meta.List(), "SourceParsers");
+  EXPECT_EQ(nullptr,
+            driver.ParseSource(src_node.get(), nullptr, map_resources));
 }
 
 TEST_F(VrtDriverTest, CreateCopyFromVrtDataset) {
-  const char* vrt_xml =
-      "<VRTDataset rasterXSize=\"10\" rasterYSize=\"10\">"
-      "  <VRTRasterBand dataType=\"Byte\" band=\"1\">"
-      "    <ColorInterp>Gray</ColorInterp>"
-      "  </VRTRasterBand>"
-      "</VRTDataset>";
+  constexpr char kVrtXml[] = R"vrt(
+<VRTDataset rasterXSize="10" rasterYSize="10">
+  <VRTRasterBand dataType="Byte" band="1">
+    <ColorInterp>Gray</ColorInterp>
+  </VRTRasterBand>
+</VRTDataset>)vrt";
 
-  GDALDataset* src_vrt =
-      static_cast<GDALDataset*>(GDALOpen(vrt_xml, GA_ReadOnly));
-  ASSERT_NE(src_vrt, nullptr);
+  GDALDatasetUniquePtr src_vrt = OpenRasterReadOnly(kVrtXml);
+  ASSERT_NE(nullptr, src_vrt);
 
-  // CreateCopy to file in vsimem
-  const char* dst_file = "/vsimem/copied.vrt";
-  GDALDataset* copy_ds = poDriver_->CreateCopy(dst_file, src_vrt, FALSE,
-                                               nullptr, nullptr, nullptr);
-  ASSERT_NE(copy_ds, nullptr);
-  EXPECT_EQ(copy_ds->GetRasterXSize(), 10);
-  EXPECT_EQ(copy_ds->GetRasterYSize(), 10);
-  GDALClose(copy_ds);
-  VSIUnlink(dst_file);
+  // CreateCopy to file in /vsimem/.
+  constexpr char kDstFile[] = "/vsimem/vrtdriver_test/copied.vrt";
+  {
+    GDALDatasetUniquePtr copy_ds(poDriver_->CreateCopy(
+        kDstFile, src_vrt.get(), FALSE, nullptr, nullptr, nullptr));
+    ASSERT_NE(nullptr, copy_ds);
+    EXPECT_EQ(10, copy_ds->GetRasterXSize());
+    EXPECT_EQ(10, copy_ds->GetRasterYSize());
+  }
+  EXPECT_EQ(0, VSIUnlink(kDstFile));
 
-  // CreateCopy with empty filename (in-memory)
-  GDALDataset* copy_mem =
-      poDriver_->CreateCopy("", src_vrt, FALSE, nullptr, nullptr, nullptr);
-  ASSERT_NE(copy_mem, nullptr);
-  EXPECT_EQ(copy_mem->GetRasterXSize(), 10);
-  GDALClose(copy_mem);
+  // CreateCopy with empty filename (in-memory).
+  {
+    GDALDatasetUniquePtr copy_mem(poDriver_->CreateCopy(
+        "", src_vrt.get(), FALSE, nullptr, nullptr, nullptr));
+    ASSERT_NE(nullptr, copy_mem);
+    EXPECT_EQ(10, copy_mem->GetRasterXSize());
+  }
 
-  // CreateCopy failure when file cannot be created
-  CPLPushErrorHandler(CPLQuietErrorHandler);
-  GDALDataset* bad_copy =
-      poDriver_->CreateCopy("/does_not_exist/dir/sub/file.vrt", src_vrt, FALSE,
-                            nullptr, nullptr, nullptr);
-  EXPECT_EQ(bad_copy, nullptr);
-  CPLPopErrorHandler();
-
-  GDALClose(src_vrt);
+  // CreateCopy failure when directory cannot be created.
+  {
+    WithQuietHandler quiet;
+    CPLErrorReset();
+    GDALDatasetUniquePtr bad_copy(
+        poDriver_->CreateCopy("/does_not_exist/dir/sub/file.vrt", src_vrt.get(),
+                              FALSE, nullptr, nullptr, nullptr));
+    EXPECT_EQ(nullptr, bad_copy);
+    EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+  }
 }
 
 TEST_F(VrtDriverTest, CreateCopyFromRegularDataset) {
   GDALDriver* mem_driver = GetGDALDriverManager()->GetDriverByName("MEM");
-  ASSERT_NE(mem_driver, nullptr);
+  ASSERT_NE(nullptr, mem_driver);
 
-  GDALDataset* src_ds = mem_driver->Create("", 20, 20, 2, GDT_Byte, nullptr);
-  ASSERT_NE(src_ds, nullptr);
+  GDALDatasetUniquePtr src_ds(
+      mem_driver->Create("", 20, 20, 2, GDT_Byte, nullptr));
+  ASSERT_NE(nullptr, src_ds);
 
-  // GeoTransform
   const GDALGeoTransform gt(100.0, 1.0, 0.0, 200.0, 0.0, -1.0);
-  src_ds->SetGeoTransform(gt);
+  EXPECT_EQ(CE_None, src_ds->SetGeoTransform(gt));
 
-  // SpatialReference
   OGRSpatialReference srs;
-  srs.SetWellKnownGeogCS("WGS84");
-  src_ds->SetSpatialRef(&srs);
+  ASSERT_EQ(OGRERR_NONE, srs.SetWellKnownGeogCS("WGS84"));
+  EXPECT_EQ(CE_None, src_ds->SetSpatialRef(&srs));
 
-  // Metadata: default, special domains, custom domain, reserved domains
   src_ds->SetMetadataItem("SRC_KEY", "SRC_VAL");
   src_ds->SetMetadataItem("RPC_KEY", "RPC_VAL", "RPC");
   src_ds->SetMetadataItem("IMD_KEY", "IMD_VAL", "IMD");
@@ -200,128 +248,115 @@ TEST_F(VrtDriverTest, CreateCopyFromRegularDataset) {
   src_ds->SetMetadataItem("INTERLEAVE", "PIXEL", "IMAGE_STRUCTURE");
   src_ds->SetMetadataItem("COMPRESSION", "DEFLATE", "IMAGE_STRUCTURE");
 
-  // Band metadata
   GDALRasterBand* band1 = src_ds->GetRasterBand(1);
-  ASSERT_NE(band1, nullptr);
+  ASSERT_NE(nullptr, band1);
   band1->SetMetadataItem("COMPRESSION", "DEFLATE", "IMAGE_STRUCTURE");
-  band1->SetNoDataValue(0.0);
+  EXPECT_EQ(CE_None, band1->SetNoDataValue(0.0));
 
-  // GCPs
-  GDAL_GCP gcps[1];
-  gcps[0].pszId = CPLStrdup("1");
-  gcps[0].pszInfo = CPLStrdup("");
-  gcps[0].dfGCPPixel = 0.5;
-  gcps[0].dfGCPLine = 0.5;
-  gcps[0].dfGCPX = 10.0;
-  gcps[0].dfGCPY = 20.0;
-  gcps[0].dfGCPZ = 0.0;
-  src_ds->SetGCPs(1, gcps, &srs);
-  CPLFree(gcps[0].pszId);
-  CPLFree(gcps[0].pszInfo);
+  char gcp_id[] = "1";
+  char gcp_info[] = "";
+  GDAL_GCP gcps[1] = {{gcp_id, gcp_info, 0.5, 0.5, 10.0, 20.0, 0.0}};
+  EXPECT_EQ(CE_None, src_ds->SetGCPs(1, gcps, &srs));
+  EXPECT_EQ(CE_None, band1->CreateMaskBand(0));
 
-  // Per-band mask
-  EXPECT_EQ(band1->CreateMaskBand(0), CE_None);
+  // CreateCopy with COPY_SRC_MDD=YES and custom block size.
+  {
+    int progress_calls = 0;
+    constexpr char kDstFile[] = "/vsimem/vrtdriver_test/raster_copy.vrt";
+    CPLStringList options;
+    options.SetNameValue("COPY_SRC_MDD", "YES");
+    options.SetNameValue("BLOCKXSIZE", "8");
+    options.SetNameValue("BLOCKYSIZE", "8");
+    GDALDatasetUniquePtr vrt_copy(
+        poDriver_->CreateCopy(kDstFile, src_ds.get(), FALSE, options.List(),
+                              DummyProgress, &progress_calls));
+    ASSERT_NE(nullptr, vrt_copy);
+    EXPECT_GT(progress_calls, 0);
 
-  // CreateCopy with various options
-  int progress_calls = 0;
-  const char* dst_file = "/vsimem/raster_copy.vrt";
-  const char* options[] = {"COPY_SRC_MDD=YES", "BLOCKXSIZE=8", "BLOCKYSIZE=8",
-                           nullptr};
-  GDALDataset* vrt_copy = poDriver_->CreateCopy(dst_file, src_ds, FALSE,
-                                                const_cast<char**>(options),
-                                                DummyProgress, &progress_calls);
-  ASSERT_NE(vrt_copy, nullptr);
-  EXPECT_GT(progress_calls, 0);
+    EXPECT_EQ(20, vrt_copy->GetRasterXSize());
+    EXPECT_EQ(20, vrt_copy->GetRasterYSize());
+    EXPECT_EQ(2, vrt_copy->GetRasterCount());
 
-  EXPECT_EQ(vrt_copy->GetRasterXSize(), 20);
-  EXPECT_EQ(vrt_copy->GetRasterYSize(), 20);
-  EXPECT_EQ(vrt_copy->GetRasterCount(), 2);
+    GDALGeoTransform copy_gt;
+    EXPECT_EQ(CE_None, vrt_copy->GetGeoTransform(copy_gt));
+    EXPECT_THAT((std::span<const double, 6>(copy_gt.data(), 6)),
+                ElementsAre(100.0, 1.0, 0.0, 200.0, 0.0, -1.0));
+    ASSERT_NE(nullptr, vrt_copy->GetSpatialRef());
+    EXPECT_THAT(*vrt_copy->GetSpatialRef(), IsSameAs(srs));
 
-  GDALGeoTransform copy_gt;
-  EXPECT_EQ(vrt_copy->GetGeoTransform(copy_gt), CE_None);
-  EXPECT_DOUBLE_EQ(copy_gt[0], 100.0);
+    EXPECT_STREQ("SRC_VAL", vrt_copy->GetMetadataItem("SRC_KEY"));
+    EXPECT_STREQ("RPC_VAL", vrt_copy->GetMetadataItem("RPC_KEY", "RPC"));
+    EXPECT_STREQ("CUSTOM_VAL",
+                 vrt_copy->GetMetadataItem("CUSTOM_KEY", "MY_DOMAIN"));
+    EXPECT_STREQ("PIXEL",
+                 vrt_copy->GetMetadataItem("INTERLEAVE", "IMAGE_STRUCTURE"));
+    EXPECT_EQ(1, vrt_copy->GetGCPCount());
+  }
 
-  EXPECT_STREQ(vrt_copy->GetMetadataItem("SRC_KEY"), "SRC_VAL");
-  EXPECT_STREQ(vrt_copy->GetMetadataItem("RPC_KEY", "RPC"), "RPC_VAL");
-  EXPECT_STREQ(vrt_copy->GetMetadataItem("CUSTOM_KEY", "MY_DOMAIN"),
-               "CUSTOM_VAL");
-  EXPECT_STREQ(vrt_copy->GetMetadataItem("INTERLEAVE", "IMAGE_STRUCTURE"),
-               "PIXEL");
+  // COPY_SRC_MDD=NO suppresses custom metadata domains.
+  {
+    CPLStringList no_mdd_opts;
+    no_mdd_opts.SetNameValue("COPY_SRC_MDD", "NO");
+    GDALDatasetUniquePtr vrt_copy(
+        poDriver_->CreateCopy("/vsimem/vrtdriver_test/no_mdd.vrt", src_ds.get(),
+                              FALSE, no_mdd_opts.List(), nullptr, nullptr));
+    ASSERT_NE(nullptr, vrt_copy);
+    EXPECT_EQ(nullptr, vrt_copy->GetMetadataItem("CUSTOM_KEY", "MY_DOMAIN"));
+  }
 
-  EXPECT_EQ(vrt_copy->GetGCPCount(), 1);
-
-  GDALClose(vrt_copy);
-  VSIUnlink(dst_file);
-
-  // Test with COPY_SRC_MDD=NO
-  const char* no_mdd_opts[] = {"COPY_SRC_MDD=NO", nullptr};
-  vrt_copy =
-      poDriver_->CreateCopy("/vsimem/no_mdd.vrt", src_ds, FALSE,
-                            const_cast<char**>(no_mdd_opts), nullptr, nullptr);
-  ASSERT_NE(vrt_copy, nullptr);
-  EXPECT_EQ(vrt_copy->GetMetadataItem("CUSTOM_KEY", "MY_DOMAIN"), nullptr);
-  GDALClose(vrt_copy);
-  VSIUnlink("/vsimem/no_mdd.vrt");
-
-  // Test with SRC_MDD options
-  const char* src_mdd_opts[] = {"SRC_MDD=RPC", "SRC_MDD=_DEFAULT_", nullptr};
-  vrt_copy =
-      poDriver_->CreateCopy("/vsimem/src_mdd.vrt", src_ds, FALSE,
-                            const_cast<char**>(src_mdd_opts), nullptr, nullptr);
-  ASSERT_NE(vrt_copy, nullptr);
-  EXPECT_STREQ(vrt_copy->GetMetadataItem("RPC_KEY", "RPC"), "RPC_VAL");
-  EXPECT_STREQ(vrt_copy->GetMetadataItem("SRC_KEY"), "SRC_VAL");
-  EXPECT_EQ(vrt_copy->GetMetadataItem("CUSTOM_KEY", "MY_DOMAIN"), nullptr);
-  GDALClose(vrt_copy);
-  VSIUnlink("/vsimem/src_mdd.vrt");
-
-  GDALClose(src_ds);
+  // SRC_MDD selects specific domains.
+  {
+    CPLStringList src_mdd_opts;
+    src_mdd_opts.AddString("SRC_MDD=RPC");
+    src_mdd_opts.AddString("SRC_MDD=_DEFAULT_");
+    GDALDatasetUniquePtr vrt_copy(poDriver_->CreateCopy(
+        "/vsimem/vrtdriver_test/src_mdd.vrt", src_ds.get(), FALSE,
+        src_mdd_opts.List(), nullptr, nullptr));
+    ASSERT_NE(nullptr, vrt_copy);
+    EXPECT_STREQ("RPC_VAL", vrt_copy->GetMetadataItem("RPC_KEY", "RPC"));
+    EXPECT_STREQ("SRC_VAL", vrt_copy->GetMetadataItem("SRC_KEY"));
+    EXPECT_EQ(nullptr, vrt_copy->GetMetadataItem("CUSTOM_KEY", "MY_DOMAIN"));
+  }
 }
 
 TEST_F(VrtDriverTest, CreateCopyDatasetMaskBand) {
   GDALDriver* mem_driver = GetGDALDriverManager()->GetDriverByName("MEM");
-  ASSERT_NE(mem_driver, nullptr);
+  ASSERT_NE(nullptr, mem_driver);
 
-  GDALDataset* src_ds = mem_driver->Create("", 10, 10, 1, GDT_Byte, nullptr);
-  ASSERT_NE(src_ds, nullptr);
+  GDALDatasetUniquePtr src_ds(
+      mem_driver->Create("", 10, 10, 1, GDT_Byte, nullptr));
+  ASSERT_NE(nullptr, src_ds);
+  EXPECT_EQ(CE_None, src_ds->CreateMaskBand(GMF_PER_DATASET));
 
-  // Dataset-level mask band
-  EXPECT_EQ(src_ds->CreateMaskBand(GMF_PER_DATASET), CE_None);
-
-  const char* dst_file = "/vsimem/ds_mask.vrt";
-  GDALDataset* vrt_copy =
-      poDriver_->CreateCopy(dst_file, src_ds, FALSE, nullptr, nullptr, nullptr);
-  ASSERT_NE(vrt_copy, nullptr);
+  GDALDatasetUniquePtr vrt_copy(
+      poDriver_->CreateCopy("/vsimem/vrtdriver_test/ds_mask.vrt", src_ds.get(),
+                            FALSE, nullptr, nullptr, nullptr));
+  ASSERT_NE(nullptr, vrt_copy);
 
   GDALRasterBand* band = vrt_copy->GetRasterBand(1);
-  ASSERT_NE(band, nullptr);
-  EXPECT_TRUE(band->GetMaskFlags() & GMF_PER_DATASET);
-
-  GDALClose(vrt_copy);
-  VSIUnlink(dst_file);
-  GDALClose(src_ds);
+  ASSERT_NE(nullptr, band);
+  EXPECT_NE(0, band->GetMaskFlags() & GMF_PER_DATASET);
 }
 
 TEST_F(VrtDriverTest, CreateCopyMultiDimensional) {
   GDALDriver* mem_driver = GetGDALDriverManager()->GetDriverByName("MEM");
-  ASSERT_NE(mem_driver, nullptr);
+  ASSERT_NE(nullptr, mem_driver);
 
-  auto src_ds = std::unique_ptr<GDALDataset>(
+  GDALDatasetUniquePtr src_ds(
       mem_driver->CreateMultiDimensional("", nullptr, nullptr));
-  ASSERT_NE(src_ds, nullptr);
-  auto root_group = src_ds->GetRootGroup();
-  ASSERT_NE(root_group, nullptr);
+  ASSERT_NE(nullptr, src_ds);
+  ASSERT_NE(nullptr, src_ds->GetRootGroup());
 
-  const char* dst_file = "/vsimem/multi_dst.vrt";
   int progress_count = 0;
-  GDALDataset* copy_ds = poDriver_->CreateCopy(
-      dst_file, src_ds.get(), FALSE, nullptr, DummyProgress, &progress_count);
-  ASSERT_NE(copy_ds, nullptr);
+  GDALDatasetUniquePtr copy_ds(poDriver_->CreateCopy(
+      "/vsimem/vrtdriver_test/multi_dst.vrt", src_ds.get(), FALSE, nullptr,
+      DummyProgress, &progress_count));
+  ASSERT_NE(nullptr, copy_ds);
   EXPECT_GT(progress_count, 0);
-
-  GDALClose(copy_ds);
-  VSIUnlink(dst_file);
 }
 
 }  // namespace
 }  // namespace autotest2
+
+// TODO(schwehr): Cover remaining defensive error paths in VRTDelete and
+// VRTRename in vrtdriver.cpp.
