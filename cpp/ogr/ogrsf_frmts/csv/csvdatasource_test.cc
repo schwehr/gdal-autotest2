@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,22 +16,20 @@
 #include <string>
 #include <vector>
 
-#include "gunit.h"
+#include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
 #include "third_party/absl/memory/memory.h"
-#include "autotest2/cpp/util/cpl_cstringlist.h"
-#include "autotest2/cpp/util/error_handler.h"
-#include "autotest2/cpp/util/vsimem.h"
-#include "gcore/gdal.h"
-#include "gcore/gdal_priv.h"
-#include "ogr/ogr_api.h"
-#include "ogr/ogr_core.h"
-#include "ogr/ogr_feature.h"
-#include "ogr/ogr_geometry.h"
-#include "ogr/ogrsf_frmts/csv/ogr_csv.h"
-#include "ogr/ogrsf_frmts/ogrsf_frmts.h"
-#include "port/cpl_port.h"
-#include "port/cpl_string.h"
-#include "util/gtl/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_cstringlist.h"
+#include "third_party/gdal/autotest2/cpp/util/vsimem.h"
+#include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_priv.h"
+#include "third_party/gdal/ogr/ogr_core.h"
+#include "third_party/gdal/ogr/ogr_feature.h"
+#include "third_party/gdal/ogr/ogr_geometry.h"
+#include "third_party/gdal/ogr/ogrsf_frmts/csv/ogr_csv.h"
+#include "third_party/gdal/ogr/ogrsf_frmts/ogrsf_frmts.h"
+#include "third_party/gdal/port/cpl_port.h"
+#include "third_party/gdal/port/cpl_string.h"
 
 namespace autotest2 {
 namespace {
@@ -40,12 +38,12 @@ TEST(CsvDatasourceTest, MultiGeomNoOptions) {
   // Test reloading saved multi-geometry (RFC41) from CSV driver.
   const char kCsv[] = "WKT,id,_WKTgeom2\n\"POINT (1 2)\",1,\"POINT (3 4)\"\n";
   const char kFilename[] = "/vsimem/a.csv";
-  const string data(kCsv, CPL_ARRAYSIZE(kCsv));
+  const std::string data(kCsv, CPL_ARRAYSIZE(kCsv));
   autotest2::VsiMemTempWrapper wrapper(kFilename, data);
   auto open_info =
-      gtl::MakeUnique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
-  auto dataset = absl::MakeUnique<OGRCSVDataSource>();
-  EXPECT_TRUE(dataset->Open(kFilename, FALSE, FALSE, nullptr));
+      std::make_unique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
+  auto dataset = std::make_unique<OGRCSVDataSource>();
+  EXPECT_TRUE(dataset->Open(kFilename, FALSE, FALSE, nullptr, false));
   ASSERT_EQ(1, dataset->GetLayerCount());
   OGRLayer *layer = dataset->GetLayer(0);
   ASSERT_NE(nullptr, layer);
@@ -88,16 +86,17 @@ TEST(CsvDatasourceTest, MultiGeom) {
   // Sets KEEP_GEOM_COLUMNS=NO
   const char kCsv[] = "WKT,id,_WKTgeom2\n\"POINT (1 2)\",1,\"POINT (3 4)\"\n";
   const char kFilename[] = "/vsimem/a.csv";
-  const string data(kCsv, CPL_ARRAYSIZE(kCsv));
+  const std::string data(kCsv, CPL_ARRAYSIZE(kCsv));
   autotest2::VsiMemTempWrapper wrapper(kFilename, data);
   auto open_info =
-      gtl::MakeUnique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
-  auto dataset = absl::MakeUnique<OGRCSVDataSource>();
+      std::make_unique<GDALOpenInfo>(kFilename, GDAL_OF_READONLY, nullptr);
+  auto dataset = std::make_unique<OGRCSVDataSource>();
 
   // Do not keep non-geometry fields that go with the geometry columns.
-  auto options = VectorToCsl(std::vector<string>({"KEEP_GEOM_COLUMNS=NO"}));
-  auto csl_cleaner = gtl::MakeCleanup([options] { CSLDestroy(options); });
-  EXPECT_TRUE(dataset->Open(kFilename, FALSE, FALSE, options));
+  auto options =
+      VectorToCsl(std::vector<std::string>({"KEEP_GEOM_COLUMNS=NO"}));
+  auto csl_cleaner = absl::MakeCleanup([options] { CSLDestroy(options); });
+  EXPECT_TRUE(dataset->Open(kFilename, FALSE, FALSE, options, false));
 
   ASSERT_EQ(1, dataset->GetLayerCount());
   OGRLayer *layer = dataset->GetLayer(0);
@@ -130,8 +129,6 @@ TEST(CsvDatasourceTest, MultiGeom) {
     EXPECT_TRUE(point.Equals(geom));
   }
 }
-
-// TODO(schwehr): Explore using VRT files to control the CSV driver.
 
 }  // namespace
 }  // namespace autotest2
