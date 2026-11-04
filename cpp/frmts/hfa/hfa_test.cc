@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,7 +15,7 @@
 // Tests HFA Erdas Imagine raster driver.
 //
 // See also:
-//   http://www.gdal.org/frmt_hfa.html
+//   https://gdal.org/drivers/raster/hfa.html
 //   https://github.com/OSGeo/gdal/blob/master/autotest/gcore/hfa_read.py
 //   https://github.com/OSGeo/gdal/blob/master/autotest/gcore/hfa_rfc40.py
 //   https://github.com/OSGeo/gdal/blob/master/autotest/gcore/hfa_srs.py
@@ -27,19 +27,15 @@
 #include <memory>
 #include <string>
 
-#include "commandlineflags_declare.h"
-#include "gmock.h"
-#include "googletest.h"
-#include "gunit.h"
-#include "third_party/absl/flags/flag.h"
-#include "autotest2/cpp/util/matchers.h"
-#include "gcore/gdal.h"
-#include "gcore/gdal_frmts.h"
-#include "gcore/gdal_priv.h"
-#include "ogr/ogr_core.h"
-#include "ogr/ogr_spatialref.h"
-#include "port/cpl_conv.h"
-#include "port/cpl_error.h"
+#include "testing/base/public/gmock.h"
+#include "testing/base/public/gunit.h"
+#include "third_party/gdal/autotest2/cpp/util/matchers.h"
+#include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_frmts.h"
+#include "third_party/gdal/gcore/gdal_priv.h"
+#include "third_party/gdal/ogr/ogr_core.h"
+#include "third_party/gdal/ogr/ogr_spatialref.h"
+#include "third_party/gdal/port/cpl_error.h"
 
 using std::unique_ptr;
 
@@ -55,8 +51,8 @@ class HfaTest : public ::testing::Test {
 };
 
 TEST_F(HfaTest, BasicGdalOpenEx) {
-  const std::string filepath = absl::GetFlag(FLAGS_test_srcdir) +
-                               std::string(kTestData) + "utmsmall.img";
+  const std::string filepath =
+      ::testing::SrcDir() + std::string(kTestData) + "utmsmall.img";
   unique_ptr<GDALDataset> src(static_cast<GDALDataset *>(
       GDALOpenEx(filepath.c_str(), GDAL_OF_READONLY | GDAL_OF_RASTER, nullptr,
                  nullptr, nullptr)));
@@ -73,7 +69,7 @@ TEST_F(HfaTest, BasicGdalOpenEx) {
       << "Failed to load epsg: " << epsg;
   EXPECT_THAT(src_srs, IsSameAs(expected_srs))
       << "Failed for EPSG: " << epsg << "\n"
-      << "See http://spatialreference.org/ref/epsg/" << epsg;
+      << "See https://spatialreference.org/ref/epsg/" << epsg << "/";
 }
 
 }  // namespace
