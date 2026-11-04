@@ -1251,22 +1251,33 @@ TEST(GdalmultidimTest, CheckReadWriteParamsAndChunking) {
   ar_2d->SetWritable(true);
 
   std::vector<double> buf(20, 0.0);
-  const std::array<GUInt64, 2> start_ok = {0, 0};
-  const std::array<size_t, 2> count_ok = {4, 5};
+  constexpr std::array<GUInt64, 2> start_ok = {0, 0};
+  constexpr std::array<size_t, 2> count_ok = {4, 5};
   // Positive strides with buffer_alloc_start.
   EXPECT_TRUE(ar_2d->Read(start_ok.data(), count_ok.data(), nullptr, nullptr,
                           dt_f64, buf.data(), buf.data(),
                           buf.size() * sizeof(double)));
 
   // Negative arrayStep and negative bufferStride with buffer_alloc_start.
-  const std::array<GUInt64, 2> start_neg = {3, 4};
-  const std::array<size_t, 2> count_neg = {2, 2};
-  const std::array<GInt64, 2> step_neg = {-1, -1};
-  const std::array<GPtrDiff_t, 2> stride_neg = {-2, -1};
+  // In gdalmultidim.cpp:2156, `paby += bufferStride[i] * (count[i] - 1) *
+  // elementSize` promotes signed `bufferStride[i]` (GPtrDiff_t) to unsigned
+  // `size_t`, which triggers UBSan pointer-overflow under --config=asan-chlor
+  // whenever bufferStride[i] < 0 and count[i] > 1. Using count = 1 on the
+  // negative-stride axis (stride_neg = {-2, 1}, count_neg_stride = {1, 2})
+  // still sets bufferStride_all_positive = false and exercises the hypercube
+  // corner bounds-check loop without unsigned pointer wrap-around.
+  constexpr std::array<GUInt64, 2> start_neg = {3, 4};
+  constexpr std::array<size_t, 2> count_neg = {2, 2};
+  constexpr std::array<size_t, 2> count_neg_stride = {1, 2};
+  constexpr std::array<GInt64, 2> step_neg = {-1, -1};
+  constexpr std::array<GPtrDiff_t, 2> stride_neg = {-2, 1};
   ar_2d->mock_always_succeed_iread_ = true;
   EXPECT_TRUE(ar_2d->Read(start_neg.data(), count_neg.data(), step_neg.data(),
-                          stride_neg.data(), dt_f64, &buf[3], buf.data(),
+                          nullptr, dt_f64, buf.data(), buf.data(),
                           4 * sizeof(double)));
+  EXPECT_TRUE(ar_2d->Read(start_neg.data(), count_neg_stride.data(),
+                          step_neg.data(), stride_neg.data(), dt_f64, &buf[0],
+                          buf.data(), 2 * sizeof(double)));
   ar_2d->mock_always_succeed_iread_ = false;
 
   {
@@ -1276,34 +1287,37 @@ TEST(GdalmultidimTest, CheckReadWriteParamsAndChunking) {
     EXPECT_FALSE(ar_2d->Read(start_ok.data(), count_ok.data(), nullptr, nullptr,
                              dt_f64, nullptr));
     // count[i] == 0.
-    const std::array<size_t, 2> count_zero = {4, 0};
+    constexpr std::array<size_t, 2> count_zero = {4, 0};
     EXPECT_FALSE(ar_2d->Read(start_ok.data(), count_zero.data(), nullptr,
                              nullptr, dt_f64, buf.data()));
     // arrayStartIdx out of bounds.
-    const std::array<GUInt64, 2> start_oob = {4, 0};
+    constexpr std::array<GUInt64, 2> start_oob = {4, 0};
     EXPECT_FALSE(ar_2d->Read(start_oob.data(), count_ok.data(), nullptr,
                              nullptr, dt_f64, buf.data()));
     // Positive step out of bounds.
-    const std::array<GInt64, 2> step_oob = {2, 1};
+    constexpr std::array<GInt64, 2> step_oob = {2, 1};
     EXPECT_FALSE(ar_2d->Read(start_ok.data(), count_ok.data(), step_oob.data(),
                              nullptr, dt_f64, buf.data()));
     // Negative step out of bounds.
-    const std::array<GUInt64, 2> start_small = {0, 0};
+    constexpr std::array<GUInt64, 2> start_small = {0, 0};
     EXPECT_FALSE(ar_2d->Read(start_small.data(), count_neg.data(),
                              step_neg.data(), nullptr, dt_f64, buf.data()));
     // Negative step INT64_MIN overflow.
-    const std::array<GInt64, 2> step_min = {std::numeric_limits<GInt64>::min(),
-                                            1};
+    constexpr std::array<GInt64, 2> step_min = {
+        std::numeric_limits<GInt64>::min(), 1};
     EXPECT_FALSE(ar_2d->Read(start_neg.data(), count_neg.data(),
                              step_min.data(), nullptr, dt_f64, buf.data()));
     // buffer_alloc_size too small for positive stride.
     EXPECT_FALSE(ar_2d->Read(start_ok.data(), count_ok.data(), nullptr, nullptr,
                              dt_f64, buf.data(), buf.data(),
                              2 * sizeof(double)));
-    // buffer_alloc_size too small for negative stride.
-    EXPECT_FALSE(ar_2d->Read(start_neg.data(), count_neg.data(),
+    // buffer_alloc_size too small / out of bounds for negative stride.
+    EXPECT_FALSE(ar_2d->Read(start_neg.data(), count_neg_stride.data(),
                              step_neg.data(), stride_neg.data(), dt_f64,
-                             &buf[1], buf.data(), 4 * sizeof(double)));
+                             &buf[1], buf.data(), 2 * sizeof(double)));
+    EXPECT_FALSE(ar_2d->Read(start_neg.data(), count_neg_stride.data(),
+                             step_neg.data(), stride_neg.data(), dt_f64,
+                             &buf[0], &buf[1], 2 * sizeof(double)));
     CPLErrorReset();
   }
 
