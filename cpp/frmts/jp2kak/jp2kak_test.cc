@@ -31,18 +31,18 @@
 #include <string>
 #include <string_view>
 
-#include "gmock.h"
-#include "gunit.h"
-#include "autotest2/cpp/util/error_handler.h"
-#include "autotest2/cpp/util/matchers.h"
-#include "gcore/gdal.h"
-#include "gcore/gdal_frmts.h"
-#include "gcore/gdal_priv.h"
-#include "ogr/ogr_core.h"
-#include "ogr/ogr_spatialref.h"
-#include "port/cpl_error.h"
-#include "port/cpl_port.h"
-#include "port/cpl_vsi.h"
+#include "testing/base/public/gmock.h"
+#include "testing/base/public/gunit.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
+#include "third_party/gdal/autotest2/cpp/util/matchers.h"
+#include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_frmts.h"
+#include "third_party/gdal/gcore/gdal_priv.h"
+#include "third_party/gdal/ogr/ogr_core.h"
+#include "third_party/gdal/ogr/ogr_spatialref.h"
+#include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/port/cpl_port.h"
+#include "third_party/gdal/port/cpl_vsi.h"
 
 namespace autotest2 {
 namespace {
@@ -50,7 +50,7 @@ namespace {
 const std::filesystem::path kTestDataPath(
     "google3/third_party/gdal/autotest2/cpp/frmts/jp2kak/testdata/");
 
-std::filesystem::path GetTestFilePath(std::string_view filename) {
+std::filesystem::path GetTestFilePath(const std::string_view filename) {
   return std::filesystem::path(::testing::SrcDir()) / kTestDataPath / filename;
 }
 
@@ -118,7 +118,7 @@ TEST_F(Jp2kakTest, Basics) {
 }
 
 // Verify that creating a new jp2 file is not supported by this driver.
-TEST(Jp2kakdatasetTest, CreateFails) {
+TEST_F(Jp2kakTest, CreateFails) {
   const char kFilename[] = "/vsimem/create_fails.jp2";
   GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("JP2KAK");
   ASSERT_NE(driver, nullptr);
