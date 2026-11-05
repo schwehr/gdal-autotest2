@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,30 +15,32 @@
 // Tests ESRI Shapefile OGR driver.
 //
 // See also:
-//   http://www.gdal.org/drv_shapefile.html
-//   https://trac.osgeo.org/gdal/browser/trunk/autotest/ogr/ogr_shapefile.py
+//   https://gdal.org/drivers/vector/shapefile.html
+//   https://github.com/OSGeo/gdal/blob/master/autotest/ogr/ogr_shape.py
 
 #include <stddef.h>
+
+#include <filesystem>  // NOLINT
+#include <functional>
 #include <memory>
 #include <string>
-#include <vector>
+#include <string_view>
 
-#include "file/base/path.h"
-#include "gmock.h"
-#include "googletest.h"
-#include "gunit.h"
-#include "autotest2/cpp/util/cpl_cstringlist.h"
-#include "autotest2/cpp/util/cpl_memory.h"
-#include "gcore/gdal.h"
-#include "gcore/gdal_priv.h"
-#include "ogr/ogr_api.h"
-#include "ogr/ogr_core.h"
-#include "ogr/ogr_feature.h"
-#include "ogr/ogr_geometry.h"
-#include "ogr/ogrsf_frmts/ogrsf_frmts.h"
-#include "port/cpl_error.h"
-#include "port/cpl_string.h"
-#include "port/cpl_vsi.h"
+#include "testing/base/public/gmock.h"
+#include "testing/base/public/gunit.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_cstringlist.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_memory.h"
+#include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_fwd.h"
+#include "third_party/gdal/gcore/gdal_priv.h"
+#include "third_party/gdal/ogr/ogr_api.h"
+#include "third_party/gdal/ogr/ogr_core.h"
+#include "third_party/gdal/ogr/ogr_feature.h"
+#include "third_party/gdal/ogr/ogr_geometry.h"
+#include "third_party/gdal/ogr/ogrsf_frmts/ogrsf_frmts.h"
+#include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/port/cpl_string.h"
+#include "third_party/gdal/port/cpl_vsi.h"
 
 using std::unique_ptr;
 
@@ -47,22 +49,21 @@ namespace {
 
 const char kDriverName[] = "ESRI Shapefile";
 
-const char kTestData[] = "autotest2/cpp/ogr/"
-    "ogrsf_frmts/shape/testdata/";
+const std::filesystem::path kTestDataPath(
+    "google3/third_party/gdal/autotest2/cpp/ogr/ogrsf_frmts/shape/testdata");
+
+std::filesystem::path GetTestFilePath(const std::string_view filename) {
+  return std::filesystem::path(::testing::SrcDir()) / kTestDataPath / filename;
+}
 
 class ShapeTest : public ::testing::Test {
  protected:
-  static void SetUpTestCase() {
-    RegisterOGRShape();
-  }
-  static void TearDownTestCase() {
-    OGRCleanupAll();
-  }
+  static void SetUpTestSuite() { RegisterOGRShape(); }
+  static void TearDownTestSuite() { OGRCleanupAll(); }
 };
 
 TEST_F(ShapeTest, Point) {
-  const string filepath = file::JoinPath(
-      FLAGS_test_srcdir, kTestData, "point/point.shp");
+  const auto filepath = GetTestFilePath("point/point.shp");
 
   unique_ptr<GDALDataset> src(
       static_cast<GDALDataset *>(GDALOpenEx(
@@ -104,7 +105,7 @@ TEST_F(ShapeTest, WritePoint) {
   GDALDriver *driver = drv_manager->GetDriverByName(kDriverName);
   ASSERT_NE(nullptr, driver) << "Invalid driver: " << kDriverName;
 
-  const string dst_path = "/vsimem/shapetestwrite";
+  const std::string dst_path = "/vsimem/shapetestwrite";
   const double x = 1.2;
   const double y = 3.4;
 
