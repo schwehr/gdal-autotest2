@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -34,26 +34,22 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 //
-// https://trac.osgeo.org/gdal/browser/trunk/autotest/osr/osr_xml.py
-
-#include "ogr/ogr_spatialref.h"
+// https://github.com/OSGeo/gdal/blob/master/autotest/osr/osr_xml.py
 
 #include <string>
 
-#include "gmock.h"
-#include "gunit.h"
-#include "autotest2/cpp/util/cpl_cstringlist.h"
-#include "autotest2/cpp/util/error_handler.h"
-#include "ogr/ogr_core.h"
-#include "port/cpl_conv.h"
-#include "port/cpl_csv.h"
-#include "port/cpl_error.h"
-#include "port/cpl_string.h"
-#include "port/cpl_vsi.h"
+#include "testing/base/public/gmock.h"
+#include "testing/base/public/gunit.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
+#include "third_party/gdal/autotest2/cpp/util/matchers.h"
+#include "third_party/gdal/ogr/ogr_core.h"
+#include "third_party/gdal/ogr/ogr_spatialref.h"
+#include "third_party/gdal/ogr/ogr_srs_api.h"
+#include "third_party/gdal/port/cpl_conv.h"
+#include "third_party/gdal/port/cpl_string.h"
 
 namespace autotest2 {
 namespace {
-
 
 TEST(SrsXmlTest, EmptyString) {
   OGRSpatialReference srs;
@@ -135,11 +131,11 @@ TEST(SrsXmlTest, Wgs84) {
 
   OGRSpatialReference wgs84;
   wgs84.importFromEPSG(4326);
-  EXPECT_TRUE(wgs84.IsSame(&srs));
+  EXPECT_THAT(wgs84, IsSameAs(srs));
 
-  char *wkt = nullptr;
+  char* wkt = nullptr;
   srs.exportToWkt(&wkt);
-  EXPECT_THAT(string(wkt), testing::HasSubstr("4326"));
+  EXPECT_THAT(std::string(wkt), testing::HasSubstr("4326"));
   CPLFree(wkt);
 }
 
@@ -275,16 +271,15 @@ TEST(SrsXmlTest, Epsg32748UtmZone48S_Wgs84) {
   OGRSpatialReference srs;
   EXPECT_EQ(OGRERR_NONE, srs.importFromXML(kEpsg32748));
 
-  // TODO(schwehr): Why does it not validate?
-  EXPECT_FALSE(srs.Validate());
+  EXPECT_EQ(OGRERR_UNSUPPORTED_SRS, srs.Validate());
 
   OGRSpatialReference srs32748;
   srs32748.importFromEPSG(32748);
-  EXPECT_TRUE(srs32748.IsSame(&srs));
+  EXPECT_THAT(srs32748, IsSameAs(srs));
 
-  char *wkt = nullptr;
+  char* wkt = nullptr;
   srs.exportToWkt(&wkt);
-  EXPECT_THAT(string(wkt), testing::HasSubstr("32748"));
+  EXPECT_THAT(std::string(wkt), testing::HasSubstr("32748"));
   CPLFree(wkt);
 }
 
@@ -364,13 +359,263 @@ TEST(SrsXmlTest, Epsg4168) {
 
   OGRSpatialReference srs4168;
   srs4168.importFromEPSG(4168);
-  // TODO(schwehr): Why?
-  EXPECT_FALSE(srs4168.IsSame(&srs));
+  EXPECT_THAT(srs4168, IsSameAs(srs));
 
-  char *wkt = nullptr;
+  char* wkt = nullptr;
   srs.exportToWkt(&wkt);
-  EXPECT_THAT(string(wkt), testing::HasSubstr("4168"));
+  EXPECT_THAT(std::string(wkt), testing::HasSubstr("4168"));
   CPLFree(wkt);
+  OSRCleanup();
+}
+
+TEST(SrsXmlTest, ExportToXmlGeographic) {
+  OGRSpatialReference srs;
+  ASSERT_EQ(OGRERR_NONE, srs.importFromEPSG(4326));
+
+  char* xml = nullptr;
+  EXPECT_EQ(OGRERR_NONE, srs.exportToXML(&xml, nullptr));
+  ASSERT_NE(xml, nullptr);
+  EXPECT_THAT(xml, testing::HasSubstr("GeographicCRS"));
+  EXPECT_THAT(xml, testing::HasSubstr("WGS 84"));
+
+  // Roundtrip
+  OGRSpatialReference srsRoundtrip;
+  EXPECT_EQ(OGRERR_NONE, srsRoundtrip.importFromXML(xml));
+  EXPECT_THAT(srs, IsSameAs(srsRoundtrip));
+  CPLFree(xml);
+
+  // C API export and import
+  char* xmlC = nullptr;
+  EXPECT_EQ(OGRERR_NONE, OSRExportToXML(OGRSpatialReference::ToHandle(&srs),
+                                        &xmlC, nullptr));
+  ASSERT_NE(xmlC, nullptr);
+  OGRSpatialReference srsC;
+  EXPECT_EQ(OGRERR_NONE,
+            OSRImportFromXML(OGRSpatialReference::ToHandle(&srsC), xmlC));
+  EXPECT_THAT(srs, IsSameAs(srsC));
+  CPLFree(xmlC);
+  OSRCleanup();
+}
+
+TEST(SrsXmlTest, ExportToXmlProjectedTM) {
+  OGRSpatialReference srs;
+  ASSERT_EQ(OGRERR_NONE, srs.importFromEPSG(32611));
+
+  char* xml = nullptr;
+  EXPECT_EQ(OGRERR_NONE, srs.exportToXML(&xml, nullptr));
+  ASSERT_NE(xml, nullptr);
+  EXPECT_THAT(xml, testing::HasSubstr("ProjectedCRS"));
+  EXPECT_THAT(xml, testing::HasSubstr("Conversion"));
+
+  OGRSpatialReference srsRoundtrip;
+  EXPECT_EQ(OGRERR_NONE, srsRoundtrip.importFromXML(xml));
+  EXPECT_THAT(srs, IsSameAs(srsRoundtrip));
+  CPLFree(xml);
+  OSRCleanup();
+}
+
+TEST(SrsXmlTest, ExportToXmlProjectedLCC) {
+  OGRSpatialReference srs;
+  srs.SetWellKnownGeogCS("WGS84");
+  srs.SetLCC1SP(10.0, 20.0, 0.99, 500000.0, 1000000.0);
+
+  char* xml = nullptr;
+  EXPECT_EQ(OGRERR_NONE, srs.exportToXML(&xml, nullptr));
+  ASSERT_NE(xml, nullptr);
+  EXPECT_THAT(xml, testing::HasSubstr("ProjectedCRS"));
+  EXPECT_THAT(xml, testing::HasSubstr("9801"));
+  CPLFree(xml);
+  OSRCleanup();
+}
+
+TEST(SrsXmlTest, ExportToXmlErrorCases) {
+  char* xml = nullptr;
+  EXPECT_EQ(OGRERR_FAILURE, OSRExportToXML(nullptr, &xml, nullptr));
+
+  // Local CS is unsupported for GML export
+  OGRSpatialReference srsLocal;
+  srsLocal.SetLocalCS("MyLocalCS");
+  EXPECT_EQ(OGRERR_UNSUPPORTED_SRS, srsLocal.exportToXML(&xml, nullptr));
+
+  // Unsupported projection method (e.g. Mercator)
+  OGRSpatialReference srsMerc;
+  srsMerc.SetWellKnownGeogCS("WGS84");
+  srsMerc.SetMercator(0.0, 0.0, 1.0, 0.0, 0.0);
+  {
+    WithQuietHandler q;
+    EXPECT_EQ(OGRERR_FAILURE, srsMerc.exportToXML(&xml, nullptr));
+  }
+
+  // Projected CS missing PROJECTION node
+  OGRSpatialReference srsTM;
+  ASSERT_EQ(OGRERR_NONE, srsTM.importFromEPSG(32611));
+  srsTM.GetAttrNode("PROJCS")->StripNodes("PROJECTION");
+  {
+    WithQuietHandler q;
+    EXPECT_NE(OGRERR_NONE, srsTM.exportToXML(&xml, nullptr));
+  }
+
+  // Geographic CS missing DATUM node
+  OGRSpatialReference srsGCS;
+  ASSERT_EQ(OGRERR_NONE, srsGCS.importFromEPSG(4326));
+  srsGCS.GetAttrNode("GEOGCS")->StripNodes("DATUM");
+  EXPECT_NE(OGRERR_NONE, srsGCS.exportToXML(&xml, nullptr));
+
+  OSRCleanup();
+}
+
+TEST(SrsXmlTest, ImportFromXmlErrorCasesAndVariants) {
+  WithQuietHandler q;
+  EXPECT_EQ(OGRERR_FAILURE, OSRImportFromXML(nullptr, "<xml/>"));
+
+  OGRSpatialReference srs;
+  EXPECT_EQ(OGRERR_FAILURE,
+            OSRImportFromXML(OGRSpatialReference::ToHandle(&srs), nullptr));
+  EXPECT_EQ(OGRERR_CORRUPT_DATA, srs.importFromXML("<open><unclosed>"));
+  EXPECT_EQ(OGRERR_UNSUPPORTED_SRS, srs.importFromXML("<gml:UnsupportedCRS/>"));
+
+  // GeographicCRS without datum but with EPSG code in srsID
+  constexpr char kEpsgOnlyGcs[] = R"gml(
+    <gml:GeographicCRS>
+      <gml:srsName>WGS 84</gml:srsName>
+      <gml:srsID>
+        <gml:name codeSpace="urn:ogc:def:crs:EPSG::">4326</gml:name>
+      </gml:srsID>
+    </gml:GeographicCRS>
+  )gml";
+  EXPECT_EQ(OGRERR_NONE, srs.importFromXML(kEpsgOnlyGcs));
+  EXPECT_TRUE(srs.IsGeographic());
+  EXPECT_STREQ(srs.GetAuthorityCode("GEOGCS"), "4326");
+
+  // GeographicCRS with missing inverseFlattening -> corrupt data
+  constexpr char kMissingInvFlattening[] = R"gml(
+    <gml:GeographicCRS>
+      <gml:srsName>BadEllips</gml:srsName>
+      <gml:usesGeodeticDatum>
+        <gml:GeodeticDatum>
+          <gml:datumName>D</gml:datumName>
+          <gml:usesEllipsoid>
+            <gml:Ellipsoid>
+              <gml:ellipsoidName>E</gml:ellipsoidName>
+              <gml:semiMajorAxis>6378137</gml:semiMajorAxis>
+            </gml:Ellipsoid>
+          </gml:usesEllipsoid>
+        </gml:GeodeticDatum>
+      </gml:usesGeodeticDatum>
+    </gml:GeographicCRS>
+  )gml";
+  EXPECT_EQ(OGRERR_CORRUPT_DATA, srs.importFromXML(kMissingInvFlattening));
+
+  // GeographicCRS without prime meridian defaults to Greenwich 0.0
+  constexpr char kNoPrimeMeridian[] = R"gml(
+    <gml:GeographicCRS>
+      <gml:srsName>NoPM</gml:srsName>
+      <gml:usesGeodeticDatum>
+        <gml:GeodeticDatum>
+          <gml:datumName>D</gml:datumName>
+          <gml:usesEllipsoid>
+            <gml:Ellipsoid>
+              <gml:ellipsoidName>E</gml:ellipsoidName>
+              <gml:semiMajorAxis>6378137</gml:semiMajorAxis>
+              <gml:secondDefiningParameter>
+                <gml:inverseFlattening>298.257223563</gml:inverseFlattening>
+              </gml:secondDefiningParameter>
+            </gml:Ellipsoid>
+          </gml:usesEllipsoid>
+        </gml:GeodeticDatum>
+      </gml:usesGeodeticDatum>
+    </gml:GeographicCRS>
+  )gml";
+  EXPECT_EQ(OGRERR_NONE, srs.importFromXML(kNoPrimeMeridian));
+  EXPECT_DOUBLE_EQ(srs.GetPrimeMeridian(), 0.0);
+
+  // ProjectedCRS without definedByConversion but with EPSG code in srsID
+  constexpr char kEpsgOnlyPcs[] = R"gml(
+    <gml:ProjectedCRS>
+      <gml:srsName>UTM 11N</gml:srsName>
+      <gml:srsID>
+        <gml:name codeSpace="urn:ogc:def:crs:EPSG::">32611</gml:name>
+      </gml:srsID>
+    </gml:ProjectedCRS>
+  )gml";
+  EXPECT_EQ(OGRERR_NONE, srs.importFromXML(kEpsgOnlyPcs));
+  EXPECT_TRUE(srs.IsProjected());
+  EXPECT_STREQ(srs.GetAuthorityCode("PROJCS"), "32611");
+
+  // ProjectedCRS without definedByConversion and no EPSG code -> corrupt
+  constexpr char kNoConvNoEpsg[] = R"gml(
+    <gml:ProjectedCRS>
+      <gml:srsName>NoConv</gml:srsName>
+    </gml:ProjectedCRS>
+  )gml";
+  EXPECT_EQ(OGRERR_CORRUPT_DATA, srs.importFromXML(kNoConvNoEpsg));
+
+  // ProjectedCRS with unrecognized conversion method -> corrupt
+  constexpr char kBadMethod[] = R"gml(
+    <gml:ProjectedCRS>
+      <gml:srsName>BadMethod</gml:srsName>
+      <gml:definedByConversion>
+        <gml:Conversion>
+          <gml:usesMethod xlink:href="urn:ogc:def:method:EPSG::9999"/>
+        </gml:Conversion>
+      </gml:definedByConversion>
+    </gml:ProjectedCRS>
+  )gml";
+  EXPECT_EQ(OGRERR_CORRUPT_DATA, srs.importFromXML(kBadMethod));
+
+  // ProjectedCRS with href attribute (no xlink:), method code as text node,
+  // and parameter without value child
+  constexpr char kHrefMethodTextNode[] = R"gml(
+    <gml:ProjectedCRS>
+      <gml:srsName>CustomTM</gml:srsName>
+      <gml:definedByConversion>
+        <gml:Conversion>
+          <gml:usesMethod href="urn:ogc:def:method:EPSG::">9807</gml:usesMethod>
+          <gml:usesValue>
+            <gml:valueOfParameter xlink:href="urn:ogc:def:parameter:EPSG::8801"/>
+          </gml:usesValue>
+        </gml:Conversion>
+      </gml:definedByConversion>
+    </gml:ProjectedCRS>
+  )gml";
+  EXPECT_EQ(OGRERR_NONE, srs.importFromXML(kHrefMethodTextNode));
+
+  // ProjectedCRS with corrupt baseCRS.GeographicCRS
+  constexpr char kBadBaseCRS[] = R"gml(
+    <gml:ProjectedCRS>
+      <gml:srsName>BadBase</gml:srsName>
+      <gml:baseCRS>
+        <gml:GeographicCRS>
+          <gml:usesGeodeticDatum>
+            <gml:GeodeticDatum>
+              <gml:usesEllipsoid>
+                <gml:Ellipsoid>
+                  <gml:semiMajorAxis>6378137</gml:semiMajorAxis>
+                </gml:Ellipsoid>
+              </gml:usesEllipsoid>
+            </gml:GeodeticDatum>
+          </gml:usesGeodeticDatum>
+        </gml:GeographicCRS>
+      </gml:baseCRS>
+      <gml:definedByConversion>
+        <gml:Conversion>
+          <gml:usesMethod xlink:href="urn:ogc:def:method:EPSG::9807"/>
+        </gml:Conversion>
+      </gml:definedByConversion>
+    </gml:ProjectedCRS>
+  )gml";
+  EXPECT_EQ(OGRERR_CORRUPT_DATA, srs.importFromXML(kBadBaseCRS));
+
+  // Malformed URN variations in srsID
+  for (const char* urn : {"not_a_urn", "urn:ogc:def:crs",
+                          "urn:ogc:def:crs:EPSG", "urn:ogc:def:crs:EPSG:"}) {
+    std::string malformed = CPLSPrintf(
+        R"gml(<gml:GeographicCRS><gml:srsName>M</gml:srsName><gml:srsID><gml:name codeSpace="%s">4326</gml:name></gml:srsID></gml:GeographicCRS>)gml",
+        urn);
+    EXPECT_NE(OGRERR_NONE, srs.importFromXML(malformed.c_str()));
+  }
+
+  OSRCleanup();
 }
 
 }  // namespace

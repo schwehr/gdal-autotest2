@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,20 +15,17 @@
 // Test OGRFeature.
 
 // clang-format off
-#include "port/cpl_port.h"
-#include "ogr/ogr_api.h"
-#include "ogr/ogr_feature.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/port/cpl_port.h"
+#include "third_party/gdal/ogr/ogr_api.h"
+#include "third_party/gdal/ogr/ogr_feature.h"
 // clang-format on
 
 #include <memory>  // NOLINT(build/include_order)
 
-#include "gunit.h"
-#include "third_party/absl/memory/memory.h"
-#include "autotest2/cpp/util/ogr/ogrfeaturedefn.h"
-#include "autotest2/cpp/util/error_handler.h"
-#include "ogr/ogr_core.h"
-#include "util/gtl/cleanup.h"
-#include "util/task/statusor.h"
+#include "testing/base/public/gunit.h"
+#include "third_party/gdal/autotest2/cpp/util/ogr/ogrfeaturedefn.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 
 namespace autotest2 {
 namespace {
@@ -42,7 +39,7 @@ class CApiFeatureTest : public ::testing::Test {
 TEST_F(CApiFeatureTest, CreateDestroy) {
   OGRFeatureDefnBuilder builder("schema");
   auto fd = builder.Build();
-  auto fd_cleaner = gtl::MakeCleanup([fd] { fd->Release(); });
+  auto fd_cleaner = absl::MakeCleanup([fd] { fd->Release(); });
   OGRFeatureH f = OGR_F_Create(fd);
   ASSERT_NE(nullptr, f);
 

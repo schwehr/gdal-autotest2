@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,9 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <unordered_map>  // for unordered_map
-#include "gunit.h"
-#include "ogr/ogr_geo_utils.h"
+#include "third_party/gdal/ogr/ogr_geo_utils.h"
+
+#include <cmath>
+#include <unordered_map>
+
+#include "testing/base/public/gunit.h"
+
+namespace autotest2 {
 namespace {
 
 class OgrGeoUtilsTest : public ::testing::Test {
@@ -22,7 +27,8 @@ class OgrGeoUtilsTest : public ::testing::Test {
   ~OgrGeoUtilsTest() override = default;
 
   void SetUp() override {
-    const double kNan = 0;
+    const double kNan = 0;  // With cl/156686517. Was NaN previously.
+    // kNan = std::nan("unused");  // Fixed by cl/156686517
     expected_track_[0][0][0][0] = kNan;
     expected_track_[0][0][0][45] = 90;
     expected_track_[0][0][0][90] = 90;
@@ -3469,50 +3475,141 @@ class OgrGeoUtilsTest : public ::testing::Test {
     expected_track_[315][315][315][315] = kNan;
   }
 
-  void TearDown() override {
-  }
+  void TearDown() override {}
 
-  std::unordered_map<double,
-      std::unordered_map<double,
-          std::unordered_map<double,
-              std::unordered_map<double, double>>>>
+  std::unordered_map<
+      double,
+      std::unordered_map<
+          double,
+          std::unordered_map<double, std::unordered_map<double, double>>>>
       expected_track_;
 };
 
 TEST_F(OgrGeoUtilsTest, OGR_GreatCircle_InitialHeading) {
   // This test verifies the behavior of OGR_GreatCircle_InitialHeading,
   // especially the corner cases of combinations of angles: 0, 45, 90, ... 360.
-  constexpr double kAnglesDeg[] = { 0, 45, 90, 135, 180, 225, 270, 315 };
+  constexpr double kAnglesDeg[] = {0, 45, 90, 135, 180, 225, 270, 315};
   for (const double LatA_deg : kAnglesDeg) {
     for (const double LonA_deg : kAnglesDeg) {
-       for (const double LatB_deg : kAnglesDeg) {
-         for (const double LonB_deg : kAnglesDeg) {
-           const double expected =
-               expected_track_
-                   [LatA_deg][LonA_deg][LatB_deg][LonB_deg];
-           const double actual =
-               OGR_GreatCircle_InitialHeading(LatA_deg, LonA_deg,
-                                              LatB_deg, LonB_deg);
-           if (std::isnan(expected)) {
-             EXPECT_TRUE(std::isnan(actual))
-                 << "expected_track_"
-                 << "[" << LatA_deg << "][" << LonA_deg << "]"
-                 << "[" << LatB_deg << "][" << LonB_deg << "]"
-                 << " = " << actual << ";";
-             continue;
-           }
-           EXPECT_NEAR(expected, actual, 1E-10)
-                 << "expected_track_"
-                 << "[" << LatA_deg << "][" << LonA_deg << "]"
-                 << "[" << LatB_deg << "][" << LonB_deg << "]"
-                 << " = " << actual << ";";
-         }
-       }
+      for (const double LatB_deg : kAnglesDeg) {
+        for (const double LonB_deg : kAnglesDeg) {
+          const double expected =
+              expected_track_[LatA_deg][LonA_deg][LatB_deg][LonB_deg];
+          const double actual = OGR_GreatCircle_InitialHeading(
+              LatA_deg, LonA_deg, LatB_deg, LonB_deg);
+          if (std::isnan(expected)) {
+            EXPECT_TRUE(std::isnan(actual))
+                << "expected_track_"
+                << "[" << LatA_deg << "][" << LonA_deg << "]"
+                << "[" << LatB_deg << "][" << LonB_deg << "]"
+                << " = " << actual << ";";
+            continue;
+          }
+          EXPECT_NEAR(expected, actual, 1E-10)
+              << "expected_track_"
+              << "[" << LatA_deg << "][" << LonA_deg << "]"
+              << "[" << LatB_deg << "][" << LonB_deg << "]"
+              << " = " << actual << ";";
+        }
+      }
     }
   }
 }
 
+TEST(OgrGeoUtilsExtraTest, GreatCircleDistance) {
+  constexpr double kRadius = 6378137.0;
+  // Distance to self
+  EXPECT_DOUBLE_EQ(0.0, OGR_GreatCircle_Distance(0.0, 0.0, 0.0, 0.0, kRadius));
+
+  // Antipodal points
+  EXPECT_NEAR(M_PI * kRadius,
+              OGR_GreatCircle_Distance(0.0, 0.0, 0.0, 180.0, kRadius), 1e-4);
+
+  // Poles (tests OGR_Safe_acos clamping)
+  EXPECT_NEAR(0.0, OGR_GreatCircle_Distance(90.0, 0.0, 90.0, 0.0, kRadius),
+              1e-4);
+  EXPECT_NEAR(M_PI * kRadius,
+              OGR_GreatCircle_Distance(90.0, 0.0, -90.0, 0.0, kRadius), 1e-4);
+
+  // Quarter circle along equator
+  EXPECT_NEAR(M_PI * 0.5 * kRadius,
+              OGR_GreatCircle_Distance(0.0, 0.0, 0.0, 90.0, kRadius), 1e-4);
+}
+
+TEST(OgrGeoUtilsExtraTest, GreatCircleInitialHeadingCornerCases) {
+  // denom == 0 branch: LatA = 45, LatB = -45, LonA = 0, LonB = 180
+  EXPECT_DOUBLE_EQ(0.0,
+                   OGR_GreatCircle_InitialHeading(45.0, 0.0, -45.0, 180.0));
+
+  // denom < 0 and track < 0 branch
+  EXPECT_GT(OGR_GreatCircle_InitialHeading(45.0, 10.0, 50.0, 0.0), 0.0);
+}
+
+TEST(OgrGeoUtilsExtraTest, GreatCircleExtendPosition) {
+  constexpr double kRadius = 6378137.0;
+  double lat_out = 0.0;
+  double lon_out = 0.0;
+
+  // dfDistance == 0.0
+  EXPECT_EQ(1, OGR_GreatCircle_ExtendPosition(10.0, 20.0, 0.0, 90.0, kRadius,
+                                              &lat_out, &lon_out));
+  EXPECT_DOUBLE_EQ(10.0, lat_out);
+  EXPECT_DOUBLE_EQ(20.0, lon_out);
+
+  // fabs(dfLatA_deg) >= 90.0
+  EXPECT_EQ(0, OGR_GreatCircle_ExtendPosition(90.0, 0.0, 1000.0, 0.0, kRadius,
+                                              &lat_out, &lon_out));
+  EXPECT_EQ(0, OGR_GreatCircle_ExtendPosition(-90.0, 0.0, 1000.0, 0.0, kRadius,
+                                              &lat_out, &lon_out));
+
+  // sin_Heading == 0, heading 0 (north)
+  EXPECT_EQ(1, OGR_GreatCircle_ExtendPosition(0.0, 10.0, 1000.0, 0.0, kRadius,
+                                              &lat_out, &lon_out));
+  EXPECT_DOUBLE_EQ(10.0, lon_out);
+  EXPECT_GT(lat_out, 0.0);
+
+  // sin_Heading == 0, heading 180 (south)
+  EXPECT_EQ(1, OGR_GreatCircle_ExtendPosition(10.0, 10.0, 1000.0, 180.0,
+                                              kRadius, &lat_out, &lon_out));
+  EXPECT_DOUBLE_EQ(10.0, lon_out);
+  EXPECT_LT(lat_out, 10.0);
+
+  // LatA == 0, heading 90 (east along equator)
+  EXPECT_EQ(1, OGR_GreatCircle_ExtendPosition(0.0, 10.0, 1000.0, 90.0, kRadius,
+                                              &lat_out, &lon_out));
+  EXPECT_DOUBLE_EQ(0.0, lat_out);
+  EXPECT_GT(lon_out, 10.0);
+
+  // LatA == 0, heading 270 (west along equator)
+  EXPECT_EQ(1, OGR_GreatCircle_ExtendPosition(0.0, 10.0, 1000.0, 270.0, kRadius,
+                                              &lat_out, &lon_out));
+  EXPECT_DOUBLE_EQ(0.0, lat_out);
+  EXPECT_LT(lon_out, 10.0);
+
+  // General heading > 0 (east)
+  EXPECT_EQ(1, OGR_GreatCircle_ExtendPosition(45.0, 10.0, 1000.0, 45.0, kRadius,
+                                              &lat_out, &lon_out));
+  EXPECT_GT(lat_out, 45.0);
+  EXPECT_GT(lon_out, 10.0);
+
+  // General heading < 0 (west)
+  EXPECT_EQ(1, OGR_GreatCircle_ExtendPosition(45.0, 10.0, 1000.0, -45.0,
+                                              kRadius, &lat_out, &lon_out));
+  EXPECT_GT(lat_out, 45.0);
+  EXPECT_LT(lon_out, 10.0);
+
+  // Longitude wrap > 180
+  EXPECT_EQ(1, OGR_GreatCircle_ExtendPosition(45.0, 179.9, 50000.0, 45.0,
+                                              kRadius, &lat_out, &lon_out));
+  EXPECT_LE(lon_out, 180.0);
+  EXPECT_GE(lon_out, -180.0);
+
+  // Longitude wrap <= -180
+  EXPECT_EQ(1, OGR_GreatCircle_ExtendPosition(45.0, -179.9, 50000.0, -45.0,
+                                              kRadius, &lat_out, &lon_out));
+  EXPECT_LE(lon_out, 180.0);
+  EXPECT_GE(lon_out, -180.0);
+}
 
 }  // namespace
-
-
+}  // namespace autotest2

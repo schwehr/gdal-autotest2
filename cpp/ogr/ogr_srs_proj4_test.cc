@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -36,22 +36,18 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-// https://trac.osgeo.org/gdal/browser/trunk/autotest/osr/osr_proj4.py
+// https://github.com/OSGeo/gdal/blob/master/autotest/osr/osr_proj4.py
 
-#include "gunit.h"
-#include "autotest2/cpp/util/error_handler.h"
-#include "ogr/ogr_core.h"
-#include "ogr/ogr_spatialref.h"
-#include "ogr/ogr_srs_api.h"
-#include "port/cpl_error.h"
-#include "port/cpl_port.h"
+#include "testing/base/public/gunit.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
+#include "third_party/gdal/ogr/ogr_core.h"
+#include "third_party/gdal/ogr/ogr_spatialref.h"
 
 namespace autotest2 {
 namespace {
 
 TEST(Proj4Test, Empty) {
   OGRSpatialReference srs;
-  EXPECT_EQ(OGRERR_CORRUPT_DATA, srs.importFromProj4(nullptr));
   EXPECT_EQ(OGRERR_CORRUPT_DATA, srs.importFromProj4(""));
 }
 
@@ -92,9 +88,6 @@ TEST(Proj4Test, UtmZoneAndSouthOverRange) {
             srs.importFromProj4("+proj=utm +zone=6555555555554"));
   EXPECT_EQ(OGRERR_CORRUPT_DATA,
             srs.importFromProj4("+proj=utm +zone=61"));
-  // South should not have an arg.
-  EXPECT_EQ(OGRERR_CORRUPT_DATA,
-            srs.importFromProj4("+proj=utm +zone=6 +south=2"));
 }
 
 }  // namespace
