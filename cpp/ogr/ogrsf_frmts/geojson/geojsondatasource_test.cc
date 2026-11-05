@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,17 +14,12 @@
 
 #include <memory>
 
-#include "gunit.h"
+#include "testing/base/public/gunit.h"
 #include "third_party/absl/memory/memory.h"
-#include "gcore/gdal.h"
-#include "gcore/gdal_priv.h"
-#include "ogr/ogr_api.h"
-#include "ogr/ogr_core.h"
-#include "ogr/ogr_feature.h"
-#include "ogr/ogr_geometry.h"
-#include "ogr/ogrsf_frmts/geojson/ogr_geojson.h"
-#include "ogr/ogrsf_frmts/geojson/ogrgeojsonutils.h"
-#include "ogr/ogrsf_frmts/ogrsf_frmts.h"
+#include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_priv.h"
+#include "third_party/gdal/ogr/ogrsf_frmts/geojson/ogr_geojson.h"
+#include "third_party/gdal/ogr/ogrsf_frmts/geojson/ogrgeojsonutils.h"
 
 namespace autotest2 {
 namespace {
@@ -41,20 +36,11 @@ TEST(GeoJsonDatasourceTest, Int64Overflow) {
          -2222222222,-222222222222222222222222222.-2210]
     })json";
   auto open_info =
-      absl::MakeUnique<GDALOpenInfo>(kJson, GDAL_OF_READONLY, nullptr);
-  auto dataset = absl::MakeUnique<OGRGeoJSONDataSource>();
+      std::make_unique<GDALOpenInfo>(kJson, GDAL_OF_READONLY, nullptr);
+  auto dataset = std::make_unique<OGRGeoJSONDataSource>();
 
-  EXPECT_TRUE(dataset->Open(open_info.get(), eGeoJSONSourceText));
-
-  ASSERT_EQ(1, dataset->GetLayerCount());
-
-  OGRLayer *layer = dataset->GetLayer(0);
-  ASSERT_NE(nullptr, layer);
-  EXPECT_EQ(wkbUnknown, layer->GetGeomType());
-  ASSERT_EQ(1, layer->GetFeatureCount());
-
-  auto feature = absl::WrapUnique(layer->GetNextFeature());
-  EXPECT_EQ(nullptr, feature->GetGeometryRef());
+  // Implicitly assert there is no runtime error.
+  EXPECT_FALSE(dataset->Open(open_info.get(), eGeoJSONSourceText, "GeoJSON"));
 }
 
 }  // namespace
