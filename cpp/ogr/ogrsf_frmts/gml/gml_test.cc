@@ -1,12 +1,10 @@
-// Test GML OGR driver.
-//
 // Copyright 2016 Google Inc. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,43 +12,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Test the Geographic Markup Language (GML) GDAL/OGR vector driver.
+// Test GML OGR driver.
 //
 // See also:
-//   http://www.gdal.org/drv_gml.html
-//   https://trac.osgeo.org/gdal/browser/trunk/autotest/ogr/ogr_gml_geom.py
-//   https://trac.osgeo.org/gdal/browser/trunk/autotest/ogr/ogr_gml_read.py
+//   https://gdal.org/drivers/vector/gml.html
+//   https://github.com/OSGeo/gdal/blob/master/autotest/ogr/ogr_gml_geom.py
+//   https://github.com/OSGeo/gdal/blob/master/autotest/ogr/ogr_gml_read.py
 
 #include <memory>
 #include <string>
 
-#include "gunit.h"
-#include "gcore/gdal.h"
-#include "gcore/gdal_priv.h"
-#include "ogr/ogr_api.h"
-#include "ogr/ogr_feature.h"
-#include "ogr/ogr_geometry.h"
-#include "ogr/ogrsf_frmts/ogrsf_frmts.h"
-#include "port/cpl_error.h"
-#include "port/cpl_vsi.h"
-
-using std::unique_ptr;
+#include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/ogr/ogr_feature.h"
+#include "third_party/gdal/ogr/ogr_geometry.h"
+#include "third_party/gdal/ogr/ogrsf_frmts/ogrsf_frmts.h"
+#include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/port/cpl_vsi.h"
 
 namespace autotest2 {
 namespace {
+
+using std::unique_ptr;
 
 class GmlTest : public ::testing::Test {
   void SetUp() override {
     RegisterOGRGML();
   }
-
-  void TearDown() override {
-    OGRCleanupAll();
-  }
 };
 
 TEST_F(GmlTest, EmptyTest) {
-  string gml =
+  CPLErrorReset();
+  std::string gml =
       R"gml(<?xml version="1.0" encoding="utf-8" ?>
 <ogr:FeatureCollection
      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -69,6 +63,9 @@ TEST_F(GmlTest, EmptyTest) {
     ASSERT_EQ(0, VSIFFlushL(file));
     ASSERT_EQ(0, VSIFCloseL(file));
   }
+  absl::Cleanup unlink_file = [&filepath] {
+    EXPECT_EQ(0, VSIUnlink(filepath));
+  };
 
   unique_ptr<GDALDataset> src(
       static_cast<GDALDataset *>(GDALOpenEx(
@@ -78,15 +75,15 @@ TEST_F(GmlTest, EmptyTest) {
 
   EXPECT_EQ(CPLE_None, CPLGetLastErrorNo());
   EXPECT_STREQ("", CPLGetLastErrorMsg());
-  EXPECT_EQ(CPLE_None, CPLGetLastErrorType());
+  EXPECT_EQ(CE_None, CPLGetLastErrorType());
 
   EXPECT_STREQ(filepath, src->GetDescription());
   EXPECT_EQ(0, src->GetLayerCount());
-  ASSERT_EQ(0, VSIUnlink(filepath));
 }
 
 TEST_F(GmlTest, PointTest) {
-  string gml =
+  CPLErrorReset();
+  std::string gml =
       R"gml(<?xml version="1.0" encoding="utf-8" ?>
 <ogr:FeatureCollection
      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -113,6 +110,9 @@ TEST_F(GmlTest, PointTest) {
     ASSERT_EQ(0, VSIFFlushL(file));
     ASSERT_EQ(0, VSIFCloseL(file));
   }
+  absl::Cleanup unlink_file = [&filepath] {
+    EXPECT_EQ(0, VSIUnlink(filepath));
+  };
 
   unique_ptr<GDALDataset> src(
       static_cast<GDALDataset *>(GDALOpenEx(
@@ -124,6 +124,7 @@ TEST_F(GmlTest, PointTest) {
 
   EXPECT_EQ(1, src->GetLayerCount());
   OGRLayer *layer = src->GetLayer(0);
+  ASSERT_NE(nullptr, layer);
 
   unique_ptr<OGRFeature> feature(layer->GetNextFeature());
   ASSERT_NE(nullptr, feature);
@@ -131,10 +132,9 @@ TEST_F(GmlTest, PointTest) {
   OGRGeometry *geometry = feature->GetGeometryRef();
   ASSERT_NE(nullptr, geometry);
   auto point = dynamic_cast<OGRPoint *>(geometry);
+  ASSERT_NE(nullptr, point);
   EXPECT_NEAR(100.0, point->getX(), 0.00001);
   EXPECT_NEAR(0.0, point->getY(), 0.00001);
-
-  ASSERT_EQ(0, VSIUnlink(filepath));
 }
 
 }  // namespace
