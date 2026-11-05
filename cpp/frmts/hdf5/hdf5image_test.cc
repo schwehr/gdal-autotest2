@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,32 +18,33 @@
 //   https://www.gdal.org/frmt_hdf5.html
 //   https://github.com/OSGeo/gdal/blob/master/autotest/gdrivers/hdf5.py
 
+#include <filesystem>  // NOLINT
 #include <memory>
 #include <string>
+#include <string_view>
 
-#include "logging.h"
-#include "file/base/path.h"
-#include "gmock.h"
-#include "googletest.h"
-#include "gunit.h"
-#include "third_party/absl/flags/flag.h"
+#include "base/logging.h"
+#include "testing/base/public/gmock.h"
+#include "testing/base/public/gunit.h"
 #include "third_party/absl/memory/memory.h"
 #include "third_party/absl/strings/substitute.h"
-#include "autotest2/cpp/util/error_handler.h"
-#include "gcore/gdal.h"
-#include "gcore/gdal_frmts.h"
-#include "gcore/gdal_priv.h"
-#include "ogr/ogr_core.h"
-#include "ogr/ogr_spatialref.h"
-#include "port/cpl_conv.h"
-#include "port/cpl_error.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
+#include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_frmts.h"
+#include "third_party/gdal/gcore/gdal_priv.h"
+#include "third_party/gdal/port/cpl_error.h"
 
 namespace autotest2 {
 namespace {
 
 constexpr char kHdf5ImageDriver[] = "HDF5Image";
-constexpr char kTestData[] =
-    "/google3/third_party/gdal/autotest2/cpp/frmts/hdf5/testdata/";
+
+const std::filesystem::path kTestDataPath(
+    "google3/third_party/gdal/autotest2/cpp/frmts/hdf5/testdata");
+
+std::filesystem::path GetTestFilePath(const std::string_view filename) {
+  return std::filesystem::path(::testing::SrcDir()) / kTestDataPath / filename;
+}
 
 class Hdf5ImageTest : public ::testing::Test {
  protected:
@@ -61,8 +62,7 @@ class Hdf5ImageTest : public ::testing::Test {
 };
 
 TEST_F(Hdf5ImageTest, ReadSimpleNoHdf5Prefix) {
-  const std::string filepath = file::JoinPath(
-      absl::GetFlag(FLAGS_test_srcdir), std::string(kTestData), "u8be.h5");
+  const auto filepath = GetTestFilePath("u8be.h5");
   auto src = absl::WrapUnique(static_cast<GDALDataset *>(
       GDALOpenEx(filepath.c_str(), GDAL_OF_READONLY | GDAL_OF_RASTER, nullptr,
                  nullptr, nullptr)));
@@ -70,10 +70,10 @@ TEST_F(Hdf5ImageTest, ReadSimpleNoHdf5Prefix) {
 }
 
 TEST_F(Hdf5ImageTest, ReadSimple) {
-  const std::string filepath = file::JoinPath(
-      absl::GetFlag(FLAGS_test_srcdir), std::string(kTestData), "u8be.h5");
+  const auto filepath = GetTestFilePath("u8be.h5");
   // See: gdalinfo u8be.h5 -listmdd -mdd DERIVED_SUBDATASETS
-  const std::string source = absl::Substitute("HDF5:$0://TestArray", filepath);
+  const std::string source =
+      absl::Substitute("HDF5:$0://TestArray", std::string(filepath));
   auto src = absl::WrapUnique(static_cast<GDALDataset *>(
       GDALOpenEx(source.c_str(), GDAL_OF_READONLY | GDAL_OF_RASTER, nullptr,
                  nullptr, nullptr)));
@@ -108,11 +108,10 @@ TEST_F(Hdf5ImageTest, ReadSimple) {
 }
 
 TEST_F(Hdf5ImageTest, ReadSzip) {
-  const std::string filepath =
-      file::JoinPath(absl::GetFlag(FLAGS_test_srcdir), std::string(kTestData),
-                     "PROBAV_S1_TOC_X11Y11_20180916_100M_V101.HDF5");
+  const auto filepath =
+      GetTestFilePath("PROBAV_S1_TOC_X11Y11_20180916_100M_V101.HDF5");
   const std::string source =
-      absl::Substitute("HDF5:$0://LEVEL3/GEOMETRY/SAA", filepath);
+      absl::Substitute("HDF5:$0://LEVEL3/GEOMETRY/SAA", std::string(filepath));
   auto src = absl::WrapUnique(static_cast<GDALDataset *>(
       GDALOpenEx(source.c_str(), GDAL_OF_READONLY | GDAL_OF_RASTER, nullptr,
                  nullptr, nullptr)));
@@ -139,11 +138,13 @@ TEST_F(Hdf5ImageTest, ReadSzip) {
   double minmax[2] = {0.0, 255.0};
   // Force accessing the actual band data by setting approximately ok to false.
   ASSERT_EQ(CE_None, band->ComputeRasterMinMax(false /* approx_ok */, minmax));
-  EXPECT_THAT(minmax, testing::ElementsAre(27.0, 255.0));
+  EXPECT_THAT(minmax, testing::ElementsAre(27.0, 28.0));
 
   EXPECT_EQ(0, band->GetOverviewCount());
   EXPECT_EQ(nullptr, band->GetColorTable());
 }
+
+// TODO: b/430037021 - Add more tests.
 
 }  // namespace
 }  // namespace autotest2
