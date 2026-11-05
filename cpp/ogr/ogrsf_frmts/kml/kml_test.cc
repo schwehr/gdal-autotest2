@@ -30,7 +30,7 @@
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/autotest2/cpp/util/vsimem.h"
 #include "third_party/gdal/gcore/gdal.h"
-#include "third_party/gdal/gcore/gdal_priv.h"
+#include "third_party/gdal/gcore/gdal_dataset.h"
 #include "third_party/gdal/ogr/ogr_core.h"
 #include "third_party/gdal/ogr/ogr_feature.h"
 #include "third_party/gdal/ogr/ogr_geometry.h"
@@ -38,8 +38,9 @@
 #include "third_party/gdal/ogr/ogrsf_frmts/kml/kmlutility.h"
 #include "third_party/gdal/ogr/ogrsf_frmts/kml/kmlvector.h"
 #include "third_party/gdal/ogr/ogrsf_frmts/ogrsf_frmts.h"
+#include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
-#include "third_party/gdal/port/cpl_vsi.h"
+#include "third_party/gdal/port/cpl_port.h"
 
 namespace autotest2 {
 namespace {
@@ -280,6 +281,7 @@ TEST(KmlCoreTest, CheckValidityVariations) {
     EXPECT_FALSE(k_ml.isValid());
     EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
     EXPECT_THAT(CPLGetLastErrorMsg(), HasSubstr("parsing aborted"));
+    CPLErrorReset();
   }
 }
 
@@ -376,6 +378,7 @@ TEST(KmlCoreTest, ParseVariationsAndErrorHandling) {
     EXPECT_FALSE(k_ml_parse.parse());
     EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
     EXPECT_THAT(CPLGetLastErrorMsg(), HasSubstr("parsing aborted"));
+    CPLErrorReset();
   }
 }
 
@@ -405,7 +408,7 @@ TEST(KmlCoreTest, DescriptionHtmlAndCoordinatesSplitting) {
         <description>Text first <i id="1">italic</i> tail</description>
         <Point>
           <coordinates>
-             
+
           </coordinates>
         </Point>
       </Placemark>
@@ -416,15 +419,70 @@ TEST(KmlCoreTest, DescriptionHtmlAndCoordinatesSplitting) {
   constexpr char kPath[] = "/vsimem/kml_core_test/complex.kml";
   VsiMemTempWrapper f(kPath, kComplexKml);
   KMLVector kml;
-  EXPECT_TRUE(kml.open(kPath));
-  EXPECT_TRUE(kml.parse());
-  EXPECT_EQ(1, kml.classifyNodes());
+  ASSERT_TRUE(kml.open(kPath));
+  ASSERT_TRUE(kml.parse());
+  ASSERT_EQ(TRUE, kml.classifyNodes());
   EXPECT_FALSE(kml.hasOnlyEmpty());
   kml.findLayers(nullptr, 0);
-  EXPECT_EQ(1, kml.getNumLayers());
-  EXPECT_TRUE(kml.selectLayer(0));
+  ASSERT_EQ(1, kml.getNumLayers());
+  ASSERT_TRUE(kml.selectLayer(0));
+
+  // 1. Layer metadata: <Folder><name> has two indented non-empty lines, which
+  // KML::endElement (kml.cpp:435-474) strips of leading whitespace and joins
+  // with '\n'. Coordinate splitting into 3-tuple tokens classified the layer as
+  // 2.5D Point.
   EXPECT_EQ("Multi-line\nFolder Name", kml.getCurrentName());
+  EXPECT_EQ(OGRKML::Point, kml.getCurrentType());
+  EXPECT_EQ(TRUE, kml.is25D());
   EXPECT_EQ(2, kml.getNumFeatures());
+
+  int last_asked = -1;
+  int last_count = -1;
+
+  // 2. Feature 0:
+  // - <name> has leading/trailing newlines and spaces, trimmed to single line.
+  // - <description> starts with an HTML tag (numContent() == 0 -> addContent in
+  //   KML::startElement; kml.cpp:272-273).
+  // - <coordinates> contains two whitespace-separated tuples. KML::endElement
+  //   splits them into distinct tokens (kml.cpp:383-421). KMLNode::getGeometry
+  //   (kmlnode.cpp:505-516) consumes the first valid parsed coordinate
+  //   (-122.08, 37.42, 10.0) for Point and ignores the second tuple.
+  std::unique_ptr<OGRKML::Feature> feat0(
+      kml.getFeature(0, last_asked, last_count));
+  ASSERT_NE(nullptr, feat0);
+  EXPECT_EQ(0, last_asked);
+  EXPECT_EQ(1, last_count);
+  EXPECT_EQ("SingleLineName", feat0->sName);
+  EXPECT_EQ(
+      "<b class=\"heading\">HTML</b> first tag and "
+      "<a href=\"http://example.com\" target=\"_blank\">link</a>",
+      feat0->sDescription);
+  EXPECT_EQ(OGRKML::Point, feat0->eType);
+  ASSERT_NE(nullptr, feat0->poGeom);
+  ASSERT_EQ(wkbPoint25D, feat0->poGeom->getGeometryType());
+  OGRPoint* pt0 = feat0->poGeom->toPoint();
+  EXPECT_DOUBLE_EQ(-122.08, pt0->getX());
+  EXPECT_DOUBLE_EQ(37.42, pt0->getY());
+  EXPECT_DOUBLE_EQ(10.0, pt0->getZ());
+
+  // 3. Feature 1:
+  // - <description> starts with text before an HTML tag (numContent() == 0 in
+  //   dataHandler, then numContent() > 0 -> appendContent in KML::startElement;
+  //   kml.cpp:274-275).
+  // - Whitespace-only <coordinates> is rejected by ParseCoordinate
+  //   (kmlnode.cpp:75-79), falling back to an empty 2D OGRPoint
+  //   (kmlnode.cpp:521).
+  std::unique_ptr<OGRKML::Feature> feat1(
+      kml.getFeature(1, last_asked, last_count));
+  ASSERT_NE(nullptr, feat1);
+  EXPECT_EQ(1, last_asked);
+  EXPECT_EQ(2, last_count);
+  EXPECT_EQ("EmptyCoords", feat1->sName);
+  EXPECT_EQ("Text first <i id=\"1\">italic</i> tail", feat1->sDescription);
+  EXPECT_EQ(OGRKML::Point, feat1->eType);
+  ASSERT_NE(nullptr, feat1->poGeom);
+  EXPECT_EQ(wkbPoint, feat1->poGeom->getGeometryType());
+  EXPECT_TRUE(feat1->poGeom->IsEmpty());
 }
 
 TEST(KmlCoreTest, LayerSelectionAndUnregisterLayers) {

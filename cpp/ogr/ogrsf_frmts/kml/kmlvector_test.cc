@@ -19,13 +19,11 @@
 
 #include "third_party/gdal/ogr/ogrsf_frmts/kml/kmlvector.h"
 
-#include <memory>
 #include <string>
 
 #include "testing/base/public/gunit.h"
 #include "third_party/gdal/autotest2/cpp/util/vsimem.h"
 #include "third_party/gdal/ogr/ogrsf_frmts/kml/kmlnode.h"
-#include "third_party/gdal/ogr/ogrsf_frmts/kml/kmlutility.h"
 #include "third_party/gdal/port/cpl_conv.h"
 
 namespace autotest2 {

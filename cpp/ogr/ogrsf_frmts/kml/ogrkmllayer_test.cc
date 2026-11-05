@@ -29,10 +29,11 @@
 #include "third_party/gdal/ogr/ogr_feature.h"
 #include "third_party/gdal/ogr/ogr_geometry.h"
 #include "third_party/gdal/ogr/ogr_spatialref.h"
+#include "third_party/gdal/ogr/ogr_srs_api.h"
 #include "third_party/gdal/ogr/ogrsf_frmts/kml/ogr_kml.h"
 #include "third_party/gdal/ogr/ogrsf_frmts/ogrsf_frmts.h"
-#include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_string.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 
@@ -259,7 +260,11 @@ TEST(OgrKmlLayerTest, ICreateFeatureBranches) {
     feat4.SetGeometry(&tri);
     {
       WithQuietHandler quiet_handler;
-      layer1->ICreateFeature(&feat4);
+      CPLErrorReset();
+      EXPECT_EQ(OGRERR_NONE, layer1->ICreateFeature(&feat4));
+      EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+      EXPECT_THAT(CPLGetLastErrorMsg(),
+                  HasSubstr("Export of geometry to KML failed"));
       CPLErrorReset();
     }
 

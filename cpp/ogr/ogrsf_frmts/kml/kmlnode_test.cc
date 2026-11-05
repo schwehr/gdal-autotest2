@@ -19,15 +19,12 @@
 
 #include "third_party/gdal/ogr/ogrsf_frmts/kml/kmlnode.h"
 
-#include <cstddef>
 #include <memory>
 #include <string>
 #include <string_view>
-#include <vector>
 
 #include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
-#include "third_party/gdal/autotest2/cpp/util/cpl_memory.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/ogr/ogr_core.h"
 #include "third_party/gdal/ogr/ogr_geometry.h"
@@ -35,6 +32,7 @@
 #include "third_party/gdal/ogr/ogrsf_frmts/kml/kmlutility.h"
 #include "third_party/gdal/ogr/ogrsf_frmts/kml/kmlvector.h"
 #include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/port/cpl_port.h"
 
 namespace autotest2 {
 namespace {
@@ -153,6 +151,7 @@ TEST(KmlNodeTest, ClassifyAndRecursionLimit) {
     EXPECT_EQ(FALSE, node.classify(&kml, 32));
     EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
     EXPECT_THAT(CPLGetLastErrorMsg(), HasSubstr("Too many recursion levels"));
+    CPLErrorReset();
   }
 
   // 1. Point

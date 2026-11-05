@@ -18,7 +18,6 @@
 //   https://github.com/OSGeo/gdal/blob/master/ogr/ogrsf_frmts/kml/ogrkmldatasource.cpp
 
 #include <filesystem>  // NOLINT
-#include <memory>
 #include <string>
 
 #include "testing/base/public/gmock.h"
@@ -29,11 +28,11 @@
 #include "third_party/gdal/ogr/ogr_core.h"
 #include "third_party/gdal/ogr/ogr_feature.h"
 #include "third_party/gdal/ogr/ogr_geometry.h"
-#include "third_party/gdal/ogr/ogr_spatialref.h"
 #include "third_party/gdal/ogr/ogrsf_frmts/kml/ogr_kml.h"
 #include "third_party/gdal/ogr/ogrsf_frmts/ogrsf_frmts.h"
 #include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_string.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 

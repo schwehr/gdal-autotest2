@@ -21,19 +21,17 @@
 #include <memory>
 #include <string>
 
-#include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
 #include "third_party/absl/cleanup/cleanup.h"
-#include "third_party/gdal/autotest2/cpp/util/cpl_memory.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/autotest2/cpp/util/vsimem.h"
 #include "third_party/gdal/gcore/gdal.h"
-#include "third_party/gdal/gcore/gdal_priv.h"
-#include "third_party/gdal/ogr/ogr_core.h"
-#include "third_party/gdal/ogr/ogrsf_frmts/kml/ogr_kml.h"
+#include "third_party/gdal/gcore/gdal_dataset.h"
+#include "third_party/gdal/gcore/gdal_driver.h"
+#include "third_party/gdal/gcore/gdal_drivermanager.h"
 #include "third_party/gdal/ogr/ogrsf_frmts/ogrsf_frmts.h"
-#include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 
 namespace autotest2 {
