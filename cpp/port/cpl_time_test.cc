@@ -1,8 +1,4 @@
-// Tests for UNIX to-from struct tm functions.
-//
-//   https://github.com/OSGeo/gdal/blob/master/port/cpl_time.cpp
-//
-// Copyright 2014 Google Inc. All Rights Reserved.
+// Copyright 2014 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// See also:
+// Tests for UNIX to-from struct tm functions:
+//   https://github.com/OSGeo/gdal/blob/master/port/cpl_time.cpp
 //
+// See also:
 //   https://tools.ietf.org/html/rfc822
 //   https://tools.ietf.org/html/rfc2445
 //   https://tools.ietf.org/html/rfc3339
@@ -27,112 +25,111 @@
 #include <time.h>
 
 #include "testing/base/public/gunit.h"
-#include "third_party/absl/log/check.h"
-#include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/port/cpl_port.h"
+
+namespace autotest2 {
+namespace {
 
 // Tests Unix to struct time and back.
 TEST(TimeTest, Time) {
-  struct tm time;
-  struct tm* time_result;
-
-  // Start of the unix epoch.
-  GIntBig test_seconds = 0;
-  time_result = CPLUnixTimeToYMDHMS(test_seconds, &time);
-  ASSERT_EQ(&time, time_result);
-  ASSERT_EQ(0, time.tm_sec);
-  ASSERT_EQ(0, time.tm_min);
-  ASSERT_EQ(0, time.tm_hour);
-  ASSERT_EQ(1, time.tm_mday);
-  ASSERT_EQ(0, time.tm_mon);
-  ASSERT_EQ(70, time.tm_year);
-  ASSERT_EQ(4, time.tm_wday);
-  ASSERT_EQ(0, time.tm_yday);
-  ASSERT_EQ(0, time.tm_isdst);  // Always 0.
-  ASSERT_EQ(test_seconds, CPLYMDHMSToUnixTime(&time));
-
-  // One second before the unix epoch.
-  test_seconds = -1;
-  time_result = CPLUnixTimeToYMDHMS(test_seconds, &time);
-  ASSERT_EQ(&time, time_result);
-  ASSERT_EQ(59, time.tm_sec);
-  ASSERT_EQ(59, time.tm_min);
-  ASSERT_EQ(23, time.tm_hour);
-  ASSERT_EQ(31, time.tm_mday);
-  ASSERT_EQ(11, time.tm_mon);
-  ASSERT_EQ(69, time.tm_year);
-  ASSERT_EQ(3, time.tm_wday);
-  ASSERT_EQ(364, time.tm_yday);
-  ASSERT_EQ(0, time.tm_isdst);  // Always 0.
-  ASSERT_EQ(test_seconds, CPLYMDHMSToUnixTime(&time));
-
-  // Middle of summer for daylight savings time.
-  test_seconds = 1405018019;
-  time_result = CPLUnixTimeToYMDHMS(test_seconds, &time);
-  ASSERT_EQ(59, time.tm_sec);
-  ASSERT_EQ(46, time.tm_min);
-  ASSERT_EQ(18, time.tm_hour);
-  ASSERT_EQ(10, time.tm_mday);
-  ASSERT_EQ(6, time.tm_mon);
-  ASSERT_EQ(114, time.tm_year);
-  ASSERT_EQ(4, time.tm_wday);
-  ASSERT_EQ(190, time.tm_yday);
-  ASSERT_EQ(0, time.tm_isdst);  // Always 0.
-  ASSERT_EQ(test_seconds, CPLYMDHMSToUnixTime(&time));
-
-  // Leap day.
-  test_seconds = 1204243247;
-  time_result = CPLUnixTimeToYMDHMS(test_seconds, &time);
-  ASSERT_EQ(47, time.tm_sec);
-  ASSERT_EQ(0, time.tm_min);
-  ASSERT_EQ(0, time.tm_hour);
-  ASSERT_EQ(29, time.tm_mday);
-  ASSERT_EQ(1, time.tm_mon);
-  ASSERT_EQ(108, time.tm_year);
-  ASSERT_EQ(5, time.tm_wday);
-  ASSERT_EQ(59, time.tm_yday);
-  ASSERT_EQ(0, time.tm_isdst);  // Always 0.
-  ASSERT_EQ(test_seconds, CPLYMDHMSToUnixTime(&time));
-
-  // Far future.
-  test_seconds = 5000000000;
-  time_result = CPLUnixTimeToYMDHMS(test_seconds, &time);
-  ASSERT_EQ(20, time.tm_sec);
-  ASSERT_EQ(53, time.tm_min);
-  ASSERT_EQ(8, time.tm_hour);
-  ASSERT_EQ(11, time.tm_mday);
-  ASSERT_EQ(5, time.tm_mon);
-  ASSERT_EQ(228, time.tm_year);
-  ASSERT_EQ(5, time.tm_wday);
-  ASSERT_EQ(162, time.tm_yday);
-  ASSERT_EQ(0, time.tm_isdst);  // Always 0.
-  ASSERT_EQ(test_seconds, CPLYMDHMSToUnixTime(&time));
-
-  // 1900.
-  test_seconds = -2208988800;
-  time_result = CPLUnixTimeToYMDHMS(test_seconds, &time);
-  ASSERT_EQ(0, time.tm_sec);
-  ASSERT_EQ(0, time.tm_min);
-  ASSERT_EQ(0, time.tm_hour);
-  ASSERT_EQ(1, time.tm_mday);
-  ASSERT_EQ(0, time.tm_mon);
-  ASSERT_EQ(0, time.tm_year);
-  ASSERT_EQ(1, time.tm_wday);
-  ASSERT_EQ(0, time.tm_yday);
-  ASSERT_EQ(0, time.tm_isdst);  // Always 0.
-  ASSERT_EQ(test_seconds, CPLYMDHMSToUnixTime(&time));
+  struct TimeCase {
+    GIntBig unix_seconds;
+    int sec;
+    int min;
+    int hour;
+    int mday;
+    int mon;
+    int year;
+    int wday;
+    int yday;
+  };
+  constexpr TimeCase kCases[] = {
+      // Start of the unix epoch.
+      {.unix_seconds = 0,
+       .sec = 0,
+       .min = 0,
+       .hour = 0,
+       .mday = 1,
+       .mon = 0,
+       .year = 70,
+       .wday = 4,
+       .yday = 0},
+      // One second before the unix epoch.
+      {.unix_seconds = -1,
+       .sec = 59,
+       .min = 59,
+       .hour = 23,
+       .mday = 31,
+       .mon = 11,
+       .year = 69,
+       .wday = 3,
+       .yday = 364},
+      // Middle of summer for daylight savings time.
+      {.unix_seconds = 1405018019,
+       .sec = 59,
+       .min = 46,
+       .hour = 18,
+       .mday = 10,
+       .mon = 6,
+       .year = 114,
+       .wday = 4,
+       .yday = 190},
+      // Leap day.
+      {.unix_seconds = 1204243247,
+       .sec = 47,
+       .min = 0,
+       .hour = 0,
+       .mday = 29,
+       .mon = 1,
+       .year = 108,
+       .wday = 5,
+       .yday = 59},
+      // Far future.
+      {.unix_seconds = 5000000000LL,
+       .sec = 20,
+       .min = 53,
+       .hour = 8,
+       .mday = 11,
+       .mon = 5,
+       .year = 228,
+       .wday = 5,
+       .yday = 162},
+      // 1900.
+      {.unix_seconds = -2208988800LL,
+       .sec = 0,
+       .min = 0,
+       .hour = 0,
+       .mday = 1,
+       .mon = 0,
+       .year = 0,
+       .wday = 1,
+       .yday = 0},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.unix_seconds);
+    struct tm time = {};
+    ASSERT_EQ(&time, CPLUnixTimeToYMDHMS(tc.unix_seconds, &time));
+    EXPECT_EQ(tc.sec, time.tm_sec);
+    EXPECT_EQ(tc.min, time.tm_min);
+    EXPECT_EQ(tc.hour, time.tm_hour);
+    EXPECT_EQ(tc.mday, time.tm_mday);
+    EXPECT_EQ(tc.mon, time.tm_mon);
+    EXPECT_EQ(tc.year, time.tm_year);
+    EXPECT_EQ(tc.wday, time.tm_wday);
+    EXPECT_EQ(tc.yday, time.tm_yday);
+    EXPECT_EQ(0, time.tm_isdst);  // Always 0.
+    EXPECT_EQ(tc.unix_seconds, CPLYMDHMSToUnixTime(&time));
+  }
 }
 
 // Tests round trip of random values.
 TEST(TimeTest, FuzzRandomTime) {
-  struct tm time;
-  struct tm* time_result;
-
-  // Start of the unix epoch.
+  struct tm time = {};
   for (int count = 0; count < 10000; ++count) {
     const GIntBig test_seconds =
         static_cast<GIntBig>(random() % 10000000000 - 5000000000);
-    time_result = CPLUnixTimeToYMDHMS(test_seconds, &time);
+    ASSERT_EQ(&time, CPLUnixTimeToYMDHMS(test_seconds, &time));
     ASSERT_EQ(test_seconds, CPLYMDHMSToUnixTime(&time));
   }
 }
@@ -148,10 +145,10 @@ constexpr int kUndefined = -9999;
 class Rfc822Test : public ::testing::Test {
  protected:
   bool Check(const char* rfc822datetime) {
-    int result =
+    const int result =
         CPLParseRFC822DateTime(rfc822datetime, &year_, &month_, &day_, &hour_,
                                &minute_, &second_, &tzflag_, &weekday_);
-    CHECK(result == FALSE || result == TRUE);
+    EXPECT_TRUE(result == FALSE || result == TRUE);
     return CPL_TO_BOOL(result);
   }
 
@@ -189,70 +186,83 @@ TEST_F(Rfc822Test, BasicFails) {
   EXPECT_EQ(kUndefined, day_);
 }
 
-TEST_F(Rfc822Test, Basic) {
-  EXPECT_TRUE(Check("28 Dec 2007 05:24:17"));
-  EXPECT_EQ(2007, year_);
-  EXPECT_EQ(12, month_);
-  EXPECT_EQ(28, day_);
-  EXPECT_EQ(5, hour_);
-  EXPECT_EQ(24, minute_);
-  EXPECT_EQ(17, second_);
-  EXPECT_EQ(0, tzflag_);
-  EXPECT_EQ(0, weekday_);
-}
-
-TEST_F(Rfc822Test, NoSeconds) {
-  EXPECT_TRUE(Check("28 Dec 2007 05:24"));
-  EXPECT_EQ(2007, year_);
-  EXPECT_EQ(12, month_);
-  EXPECT_EQ(28, day_);
-  EXPECT_EQ(5, hour_);
-  EXPECT_EQ(24, minute_);
-  EXPECT_EQ(-1, second_);
-  EXPECT_EQ(0, tzflag_);
-  EXPECT_EQ(0, weekday_);
-}
-
-TEST_F(Rfc822Test, NoDayOrTimeZone) {
-  EXPECT_TRUE(Check("28 Dec 2007 05:24:17"));
-  EXPECT_EQ(2007, year_);
-  EXPECT_EQ(12, month_);
-  EXPECT_EQ(28, day_);
-  EXPECT_EQ(5, hour_);
-  EXPECT_EQ(24, minute_);
-  EXPECT_EQ(17, second_);
-  EXPECT_EQ(0, tzflag_);
-  EXPECT_EQ(0, weekday_);
-}
-
-TEST_F(Rfc822Test, SmallYear) {
-  EXPECT_TRUE(Check("28 Dec 1 05:24:17"));
-  EXPECT_EQ(2001, year_);
-  EXPECT_TRUE(Check("28 Dec 301 05:24:17"));
-  EXPECT_EQ(301, year_);
-}
-
-TEST_F(Rfc822Test, DayAndTimeZone) {
-  EXPECT_TRUE(Check("Fri 28 Dec 2007 05:24:17 GMT"));
-  EXPECT_EQ(2007, year_);
-  EXPECT_EQ(12, month_);
-  EXPECT_EQ(28, day_);
-  EXPECT_EQ(5, hour_);
-  EXPECT_EQ(24, minute_);
-  EXPECT_EQ(17, second_);
-  EXPECT_EQ(100, tzflag_);
-  EXPECT_EQ(5, weekday_);
+TEST_F(Rfc822Test, ValidCases) {
+  struct Rfc822Case {
+    const char* input;
+    int year;
+    int month;
+    int day;
+    int hour;
+    int minute;
+    int second;
+    int tzflag;
+    int weekday;
+  };
+  constexpr Rfc822Case kCases[] = {
+      {.input = "28 Dec 2007 05:24:17",
+       .year = 2007,
+       .month = 12,
+       .day = 28,
+       .hour = 5,
+       .minute = 24,
+       .second = 17,
+       .tzflag = 0,
+       .weekday = 0},
+      {.input = "28 Dec 2007 05:24",
+       .year = 2007,
+       .month = 12,
+       .day = 28,
+       .hour = 5,
+       .minute = 24,
+       .second = -1,
+       .tzflag = 0,
+       .weekday = 0},
+      {.input = "28 Dec 1 05:24:17",
+       .year = 2001,
+       .month = 12,
+       .day = 28,
+       .hour = 5,
+       .minute = 24,
+       .second = 17,
+       .tzflag = 0,
+       .weekday = 0},
+      {.input = "28 Dec 301 05:24:17",
+       .year = 301,
+       .month = 12,
+       .day = 28,
+       .hour = 5,
+       .minute = 24,
+       .second = 17,
+       .tzflag = 0,
+       .weekday = 0},
+      {.input = "Fri 28 Dec 2007 05:24:17 GMT",
+       .year = 2007,
+       .month = 12,
+       .day = 28,
+       .hour = 5,
+       .minute = 24,
+       .second = 17,
+       .tzflag = 100,
+       .weekday = 5},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.input);
+    EXPECT_TRUE(Check(tc.input));
+    EXPECT_EQ(tc.year, year_);
+    EXPECT_EQ(tc.month, month_);
+    EXPECT_EQ(tc.day, day_);
+    EXPECT_EQ(tc.hour, hour_);
+    EXPECT_EQ(tc.minute, minute_);
+    EXPECT_EQ(tc.second, second_);
+    EXPECT_EQ(tc.tzflag, tzflag_);
+    EXPECT_EQ(tc.weekday, weekday_);
+  }
 }
 
 TEST(TimeTest, OutOfRangeAndInvalidMonth) {
   struct tm time = {};
   {
-    // RAII guard so the error handler stack stays balanced even if an
-    // assertion below aborts the test body.
-    struct QuietErrors {
-      QuietErrors() { CPLPushErrorHandler(CPLQuietErrorHandler); }
-      ~QuietErrors() { CPLPopErrorHandler(); }
-    } quiet;
+    WithQuietHandler quiet;
     constexpr GIntBig kWayPastLimit = 10000LL * 86400LL * 366LL + 100LL;
     EXPECT_EQ(&time, CPLUnixTimeToYMDHMS(kWayPastLimit, &time));
     EXPECT_EQ(0, time.tm_year);
@@ -305,3 +315,6 @@ TEST_F(Rfc822Test, AdditionalBranches) {
 
   EXPECT_FALSE(Check("28 Dec 2007 05:24:17 BOGUSTZ"));
 }
+
+}  // namespace
+}  // namespace autotest2

@@ -21,13 +21,15 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_memory.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/autotest2/cpp/util/vsimem.h"
-#include "third_party/gdal/port/cpl_conv.h"
-#include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_string.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 #include "third_party/gdal/port/cpl_vsi_virtual.h"
@@ -152,7 +154,7 @@ TEST(CplVsilAbstractArchiveTest, GetContentAndStrippedFilenames) {
   EXPECT_EQ(nullptr,
             handler.GetContentOfArchive("/vsimem/does_not_exist.fzip"));
 
-  autotest2::VsiMemTempWrapper archive("/vsimem/test1.fzip", "dummy content");
+  VsiMemTempWrapper archive("/vsimem/test1.fzip", "dummy content");
 
   // Null reader.
   handler.SetReturnNullReader(true);
@@ -196,7 +198,7 @@ TEST(CplVsilAbstractArchiveTest, GetContentAndStrippedFilenames) {
 TEST(CplVsilAbstractArchiveTest, SplitFilenameVariants) {
   FakeArchiveFSHandler handler;
   handler.SetEntries({{"dir/a.txt", 5, 100}});
-  autotest2::VsiMemTempWrapper archive("/vsimem/split.fzip", "data");
+  VsiMemTempWrapper archive("/vsimem/split.fzip", "data");
 
   CPLString file_in_archive;
 
@@ -209,21 +211,19 @@ TEST(CplVsilAbstractArchiveTest, SplitFilenameVariants) {
                                            file_in_archive, true, false));
 
   // Extended syntax with bCheckMainFileExists = false.
-  char* res = handler.SplitFilename(
+  std::unique_ptr<char, CplFreeDeleter> res(handler.SplitFilename(
       "/vsifake/{/vsimem/nonexistent_ok.fzip}/a/../b/foo/c/../d/",
-      file_in_archive, false, false);
+      file_in_archive, false, false));
   ASSERT_NE(nullptr, res);
-  EXPECT_STREQ("/vsimem/nonexistent_ok.fzip", res);
+  EXPECT_STREQ("/vsimem/nonexistent_ok.fzip", res.get());
   EXPECT_EQ("b/foo/d", file_in_archive);
-  CPLFree(res);
 
   // Extended syntax with empty file_in_archive.
-  res = handler.SplitFilename("/vsifake/{/vsimem/split.fzip}", file_in_archive,
-                              true, true);
+  res.reset(handler.SplitFilename("/vsifake/{/vsimem/split.fzip}",
+                                  file_in_archive, true, true));
   ASSERT_NE(nullptr, res);
-  EXPECT_STREQ("/vsimem/split.fzip", res);
+  EXPECT_STREQ("/vsimem/split.fzip", res.get());
   EXPECT_EQ("", file_in_archive);
-  CPLFree(res);
 
   // Extended syntax with invalid char after '}'.
   EXPECT_EQ(nullptr, handler.SplitFilename("/vsifake/{/vsimem/split.fzip}bad",
@@ -241,38 +241,34 @@ TEST(CplVsilAbstractArchiveTest, SplitFilenameVariants) {
   ASSERT_NE(nullptr, handler.GetContentOfArchive("/vsimem/split.fzip"));
 
   // Extended syntax hitting oFileList cache.
-  res = handler.SplitFilename("/vsifake/{/vsimem/split.fzip}/dir/a.txt\\",
-                              file_in_archive, true, false);
+  res.reset(handler.SplitFilename("/vsifake/{/vsimem/split.fzip}/dir/a.txt\\",
+                                  file_in_archive, true, false));
   ASSERT_NE(nullptr, res);
-  EXPECT_STREQ("/vsimem/split.fzip", res);
+  EXPECT_STREQ("/vsimem/split.fzip", res.get());
   EXPECT_EQ("dir/a.txt", file_in_archive);
-  CPLFree(res);
 
   // Non-extended syntax: natural chaining "/vsifake/vsimem/..." vs
   // "//vsimem/..."
-  res = handler.SplitFilename("/vsifake/vsimem/split.fzip/dir/a.txt/",
-                              file_in_archive, true, false);
+  res.reset(handler.SplitFilename("/vsifake/vsimem/split.fzip/dir/a.txt/",
+                                  file_in_archive, true, false));
   ASSERT_NE(nullptr, res);
-  EXPECT_STREQ("/vsimem/split.fzip", res);
+  EXPECT_STREQ("/vsimem/split.fzip", res.get());
   EXPECT_EQ("dir/a.txt", file_in_archive);
-  CPLFree(res);
 
   // Non-extended syntax without in-archive file and uncached file.
-  autotest2::VsiMemTempWrapper archive2("/vsimem/split2.ftar", "data");
-  res = handler.SplitFilename("/vsifake//vsimem/split2.ftar", file_in_archive,
-                              true, false);
+  VsiMemTempWrapper archive2("/vsimem/split2.ftar", "data");
+  res.reset(handler.SplitFilename("/vsifake//vsimem/split2.ftar",
+                                  file_in_archive, true, false));
   ASSERT_NE(nullptr, res);
-  EXPECT_STREQ("/vsimem/split2.ftar", res);
+  EXPECT_STREQ("/vsimem/split2.ftar", res.get());
   EXPECT_EQ("", file_in_archive);
-  CPLFree(res);
 
   // Non-extended syntax with bCheckMainFileExists = false.
-  res = handler.SplitFilename("/vsifake//vsimem/no_such.fzip/x",
-                              file_in_archive, false, false);
+  res.reset(handler.SplitFilename("/vsifake//vsimem/no_such.fzip/x",
+                                  file_in_archive, false, false));
   ASSERT_NE(nullptr, res);
-  EXPECT_STREQ("/vsimem/no_such.fzip", res);
+  EXPECT_STREQ("/vsimem/no_such.fzip", res.get());
   EXPECT_EQ("x", file_in_archive);
-  CPLFree(res);
 
   // Exceed nAttempts == 5 threshold with non-existent repeated extensions.
   EXPECT_EQ(nullptr,
@@ -282,6 +278,9 @@ TEST(CplVsilAbstractArchiveTest, SplitFilenameVariants) {
 
   // Exceed recursion depth (*pnCounter == 3) by installing handler temporarily.
   VSIFileManager::InstallHandler("/vsifake", &handler);
+  absl::Cleanup remove_handler = [] {
+    VSIFileManager::RemoveHandler("/vsifake");
+  };
   {
     WithQuietHandler quiet;
     EXPECT_EQ(
@@ -291,12 +290,11 @@ TEST(CplVsilAbstractArchiveTest, SplitFilenameVariants) {
             "d4.fzip/a.txt",
             file_in_archive, true, false));
   }
-  VSIFileManager::RemoveHandler("/vsifake");
 }
 
 TEST(CplVsilAbstractArchiveTest, OpenArchiveFileVariants) {
   FakeArchiveFSHandler handler;
-  autotest2::VsiMemTempWrapper archive("/vsimem/open.fzip", "data");
+  VsiMemTempWrapper archive("/vsimem/open.fzip", "data");
 
   // Null reader.
   handler.SetReturnNullReader(true);
@@ -328,7 +326,7 @@ TEST(CplVsilAbstractArchiveTest, OpenArchiveFileVariants) {
   }
 
   // Uncached optimization: first entry matches fileInArchiveName!
-  autotest2::VsiMemTempWrapper archive_first("/vsimem/first.fzip", "data");
+  VsiMemTempWrapper archive_first("/vsimem/first.fzip", "data");
   handler.SetEntries({{"dir_first/", 0, 100}, {"second.txt", 20, 200}});
   // First entry is a directory -> returns nullptr.
   EXPECT_EQ(nullptr,
@@ -357,7 +355,7 @@ TEST(CplVsilAbstractArchiveTest, OpenArchiveFileVariants) {
 
 TEST(CplVsilAbstractArchiveTest, StatReadDirIsLocalIsArchive) {
   FakeArchiveFSHandler handler;
-  autotest2::VsiMemTempWrapper archive("/vsimem/stat.fzip", "data");
+  VsiMemTempWrapper archive("/vsimem/stat.fzip", "data");
 
   VSIStatBufL stat_buf;
   // Invalid filename.
@@ -393,7 +391,7 @@ TEST(CplVsilAbstractArchiveTest, StatReadDirIsLocalIsArchive) {
   EXPECT_EQ(nullptr, handler.ReadDirEx("/vsifake", 0));
 
   // ReadDirEx when GetContentOfArchive returns nullptr.
-  autotest2::VsiMemTempWrapper bad_archive("/vsimem/bad.fzip", "data");
+  VsiMemTempWrapper bad_archive("/vsimem/bad.fzip", "data");
   handler.SetFailFirst(true);
   EXPECT_EQ(nullptr, handler.ReadDirEx("/vsifake//vsimem/bad.fzip", 0));
   handler.SetFailFirst(false);

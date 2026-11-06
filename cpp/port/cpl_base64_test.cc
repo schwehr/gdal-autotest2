@@ -16,26 +16,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <memory>
 #include <string>
 
 #include "testing/base/public/gunit.h"
-#include "third_party/gdal/port/cpl_conv.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_memory.h"
 #include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_string.h"
 
+namespace autotest2 {
 namespace {
 
 TEST(CplBase64Test, Base64RoundTrip) {
   const std::string src("azAZ09~+`=");
-  char* dst = CPLBase64Encode(src.length(),
-                              reinterpret_cast<const GByte*>(src.c_str()));
-  ASSERT_STREQ("YXpBWjA5fitgPQ==", dst);
+  std::unique_ptr<char, CplFreeDeleter> dst(CPLBase64Encode(
+      src.length(), reinterpret_cast<const GByte*>(src.c_str())));
+  ASSERT_STREQ("YXpBWjA5fitgPQ==", dst.get());
 
-  const int result = CPLBase64DecodeInPlace(reinterpret_cast<GByte*>(dst));
+  const int result =
+      CPLBase64DecodeInPlace(reinterpret_cast<GByte*>(dst.get()));
   ASSERT_EQ(10, result);
-  dst[result] = '\0';
-  ASSERT_STREQ(dst, src.c_str());
-  CPLFree(dst);
+  dst.get()[result] = '\0';
+  ASSERT_STREQ(dst.get(), src.c_str());
 }
 
 TEST(CplBase64Test, Base64CornerCases) {
@@ -77,3 +79,4 @@ TEST(CplBase64Test, Base64CornerCases) {
 }
 
 }  // namespace
+}  // namespace autotest2

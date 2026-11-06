@@ -28,8 +28,8 @@
 
 #include "testing/base/public/gunit.h"
 #include "third_party/absl/cleanup/cleanup.h"
-#include "third_party/absl/strings/str_cat.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
+#include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 
 namespace autotest2 {
@@ -37,11 +37,14 @@ namespace {
 
 TEST(CplVsisimpleTest, LegacyStdioFileFunctionsAndVSIStat) {
   const std::string filepath =
-      absl::StrCat(::testing::TempDir(), "/vsisimple_stdio_test.txt");
+      std::string(::testing::TempDir()) + "/vsisimple_stdio_test.txt";
   absl::Cleanup cleanup = [&filepath] { VSIUnlink(filepath.c_str()); };
 
   FILE* fp = VSIFOpen(filepath.c_str(), "w+");
   ASSERT_NE(nullptr, fp);
+  absl::Cleanup close_fp = [&fp] {
+    if (fp != nullptr) EXPECT_EQ(0, VSIFClose(fp));
+  };
 
   EXPECT_EQ(0, VSIFTell(fp));
   EXPECT_EQ(5, VSIFWrite("hello", 1, 5, fp));
@@ -72,6 +75,7 @@ TEST(CplVsisimpleTest, LegacyStdioFileFunctionsAndVSIStat) {
   EXPECT_NE(0, VSIFEof(fp));
 
   EXPECT_EQ(0, VSIFClose(fp));
+  fp = nullptr;
 
   VSIStatBuf stat_buf;
   memset(&stat_buf, 0, sizeof(stat_buf));

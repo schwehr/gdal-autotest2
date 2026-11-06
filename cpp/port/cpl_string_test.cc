@@ -1,9 +1,4 @@
-// Tests for GDAL's C String List (CSL) API.
-// Yes, there is also a cplstring.cc tested in cplstring_test.cc.
-//
-//   https://github.com/OSGeo/gdal/blob/master/port/cpl_string.h
-//
-// Copyright 2014 Google Inc. All Rights Reserved.
+// Copyright 2014 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,34 +11,40 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-// WARNING: The CSL API uses realloc.  Function calls that might
+//
+// Tests for GDAL's C String List (CSL) API.
+// Yes, there is also a cplstring.cc tested in cplstring_test.cc.
+//
+//   https://github.com/OSGeo/gdal/blob/master/port/cpl_string.h
+//
+// WARNING: The CSL API uses realloc. Function calls that might
 // modify the string list return a new pointer to the list that
-// callers must use.  It is the callers responsibility to free the CSL.
+// callers must use. It is the callers responsibility to free the CSL.
 
 #include "third_party/gdal/port/cpl_string.h"
 
+#include <array>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <functional>
 #include <memory>
+#include <span>
 #include <string>
+#include <string_view>
 
 #include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_cstringlist.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_memory.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
 #include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 
-using std::unique_ptr;
-
 namespace autotest2 {
 namespace {
-
-typedef unique_ptr<char*, std::function<void(char**)>> StringListPtr;
 
 constexpr int CSLT_NOFLAGS = 0x0000;  // TODO(schwehr): Move to cpl_string.h.
 
@@ -163,84 +164,88 @@ TEST(CslStringTest, MergeSameKeyMultiple) {
 }
 
 TEST(CslStringTest, SaveAndLoad2) {
-  char** string_list = CSLAddString(nullptr, "abc");
-  string_list = CSLAddString(string_list, "1234567890");
-  char buf[] = "/tmp/gdal_cpl_string_XXXXXX";
-  const char* filename = mktemp(buf);
-  ASSERT_NE(nullptr, filename);
-  EXPECT_EQ(2, CSLSave(string_list, filename));
-  CSLDestroy(string_list);
-  string_list = nullptr;
+  static constexpr char kFilename[] =
+      "/vsimem/gdal_cpl_string_save_and_load2.txt";
+  absl::Cleanup remove_file = [] { VSIUnlink(kFilename); };
 
-  const int unlimited_lines = -1;
-  const int unlimited_columns = -1;
+  {
+    char** raw = CSLAddString(nullptr, "abc");
+    StringListPtr to_save(CSLAddString(raw, "1234567890"), CSLDestroy);
+    EXPECT_EQ(2, CSLSave(to_save.get(), kFilename));
+  }
+
+  constexpr int kUnlimitedLines = -1;
+  constexpr int kUnlimitedColumns = -1;
   char** no_options = nullptr;  // GDAL always ignores the options.
-  string_list =
-      CSLLoad2(filename, unlimited_lines, unlimited_columns, no_options);
-  EXPECT_EQ(2, CSLCount(string_list));
-  EXPECT_STREQ("abc", string_list[0]);
-  EXPECT_STREQ("1234567890", string_list[1]);
-  CSLDestroy(string_list);
-  string_list = nullptr;
+  {
+    StringListPtr string_list(
+        CSLLoad2(kFilename, kUnlimitedLines, kUnlimitedColumns, no_options),
+        CSLDestroy);
+    ASSERT_EQ(2, CSLCount(string_list.get()));
+    EXPECT_STREQ("abc", string_list.get()[0]);
+    EXPECT_STREQ("1234567890", string_list.get()[1]);
+  }
 
   // Request only 1 line be read.
-  const int read_only_one_line = 1;
-  string_list =
-      CSLLoad2(filename, read_only_one_line, unlimited_columns, no_options);
-  EXPECT_EQ(1, CSLCount(string_list));
-  EXPECT_STREQ("abc", string_list[0]);
-  CSLDestroy(string_list);
-  string_list = nullptr;
+  constexpr int kReadOnlyOneLine = 1;
+  {
+    StringListPtr string_list(
+        CSLLoad2(kFilename, kReadOnlyOneLine, kUnlimitedColumns, no_options),
+        CSLDestroy);
+    ASSERT_EQ(1, CSLCount(string_list.get()));
+    EXPECT_STREQ("abc", string_list.get()[0]);
+  }
 
   // Request only 1 line be read with 4 characters max.
   // Max columns includes the newline.
-  const int max_columns_4 = 4;
-  string_list =
-      CSLLoad2(filename, read_only_one_line, max_columns_4, no_options);
-  EXPECT_EQ(1, CSLCount(string_list));
-  EXPECT_STREQ("abc", string_list[0]);
-  CSLDestroy(string_list);
-  string_list = nullptr;
+  constexpr int kMaxColumns4 = 4;
+  {
+    StringListPtr string_list(
+        CSLLoad2(kFilename, kReadOnlyOneLine, kMaxColumns4, no_options),
+        CSLDestroy);
+    ASSERT_EQ(1, CSLCount(string_list.get()));
+    EXPECT_STREQ("abc", string_list.get()[0]);
+  }
 
   // Giving more lines than exist in the file is not an error.
-  const int read_up_to_10_lines = 10;
-  string_list =
-      CSLLoad2(filename, read_up_to_10_lines, unlimited_columns, no_options);
-  EXPECT_EQ(2, CSLCount(string_list));
-  CSLDestroy(string_list);
-  string_list = nullptr;
+  constexpr int kReadUpTo10Lines = 10;
+  {
+    StringListPtr string_list(
+        CSLLoad2(kFilename, kReadUpTo10Lines, kUnlimitedColumns, no_options),
+        CSLDestroy);
+    EXPECT_EQ(2, CSLCount(string_list.get()));
+  }
 
-  // Request no more than 3 character per column be read.
+  // Request no more than 3 characters per column be read.
   // If any line before the number of lines is up exceeds the max columns, the
   // whole load fails and returns nothing. The file has more than 3 characters
   // in the first line (3 characters and the new line), so it returns nullptr.
-  const int max_columns_3 = 3;
-  string_list =
-      CSLLoad2(filename, read_only_one_line, max_columns_3, no_options);
-  EXPECT_EQ(nullptr, string_list);
+  constexpr int kMaxColumns3 = 3;
+  EXPECT_EQ(nullptr,
+            CSLLoad2(kFilename, kReadOnlyOneLine, kMaxColumns3, no_options));
 }
 
 TEST(CslStringTest, SaveAndLoad) {
-  char** string_list = CSLAddString(nullptr, "abc");
-  // Put in some new lines to show that the writer will not count them in its
-  // return, but the reader will return those as separate lines.
-  string_list = CSLAddString(string_list, "1234567890\n\r\n");
-  char buf[] = "/tmp/gdal_cpl_string_XXXXXX";
-  const char* filename = mktemp(buf);
-  ASSERT_NE(nullptr, filename);
-  EXPECT_EQ(2, CSLSave(string_list, filename));
-  CSLDestroy(string_list);
-  string_list = nullptr;
+  static constexpr char kFilename[] =
+      "/vsimem/gdal_cpl_string_save_and_load.txt";
+  absl::Cleanup remove_file = [] { VSIUnlink(kFilename); };
+
+  {
+    char** raw = CSLAddString(nullptr, "abc");
+    // Put in some new lines to show that the writer will not count them in its
+    // return, but the reader will return those as separate lines.
+    StringListPtr to_save(CSLAddString(raw, "1234567890\n\r\n"), CSLDestroy);
+    EXPECT_EQ(2, CSLSave(to_save.get(), kFilename));
+  }
 
   // CSLLoad is just CSLLoad2 with unlimited lines and columns.
-  string_list = CSLLoad(filename);
+  StringListPtr string_list(CSLLoad(kFilename), CSLDestroy);
   // Get 4 rather than 2 because of the newlines snuck in above.
-  EXPECT_EQ(4, CSLCount(string_list));
-  EXPECT_STREQ("abc", string_list[0]);
-  EXPECT_STREQ("1234567890", string_list[1]);
-  EXPECT_STREQ("", string_list[2]);
-  EXPECT_STREQ("", string_list[3]);
-  CSLDestroy(string_list);
+  ASSERT_EQ(4, CSLCount(string_list.get()));
+  EXPECT_STREQ("abc", string_list.get()[0]);
+  EXPECT_STREQ("1234567890", string_list.get()[1]);
+  EXPECT_STREQ("", string_list.get()[2]);
+  EXPECT_STREQ("", string_list.get()[3]);
 }
 
 // TODO(schwehr): And test the rest of the functions in csl_string.cpp.
@@ -395,8 +400,7 @@ TEST(CslStringTest, TestCSLPartialFindString) {
 }
 
 TEST(CslStringTest, TestCSLTokenizeString) {
-  unique_ptr<char*, std::function<void(char**)>> result(
-      CSLTokenizeString(nullptr), CSLDestroy);
+  StringListPtr result(CSLTokenizeString(nullptr), CSLDestroy);
   ASSERT_NE(nullptr, result);
   EXPECT_EQ(nullptr, result.get()[0]);
 
@@ -427,8 +431,8 @@ TEST(CslStringTest, TestCSLTokenizeString) {
 //   CSLTokenizeStringComplex - Deprecated.  Will not test.
 
 TEST(CslStringTest, TestCSLTokenizeString2) {
-  unique_ptr<char*, std::function<void(char**)>> result(
-      CSLTokenizeString2(nullptr, nullptr, CSLT_NOFLAGS), CSLDestroy);
+  StringListPtr result(CSLTokenizeString2(nullptr, nullptr, CSLT_NOFLAGS),
+                       CSLDestroy);
   ASSERT_NE(nullptr, result);
   EXPECT_EQ(nullptr, result.get()[0]);
 
@@ -584,58 +588,22 @@ TEST(CslStringTest, TestCSLTokenizeString2) {
   EXPECT_STREQ("", result.get()[2]);
 
   // CSLT_PRESERVEESCAPES does not appear to work.
-  result.reset(CSLTokenizeString2("\b", " ", CSLT_NOFLAGS));
-  ASSERT_EQ(1, CSLCount(result.get()));
-  EXPECT_STREQ("\b", result.get()[0]);
+  constexpr const char* kEscapeInputs[] = {"\b",  "\\",   "\\\\",
+                                           "\\b", "\\\"", "\""};
+  for (const char* input : kEscapeInputs) {
+    result.reset(CSLTokenizeString2(input, " ", CSLT_NOFLAGS));
+    ASSERT_EQ(1, CSLCount(result.get()));
+    EXPECT_STREQ(input, result.get()[0]);
 
-  result.reset(CSLTokenizeString2("\b", " ", CSLT_PRESERVEESCAPES));
-  ASSERT_EQ(1, CSLCount(result.get()));
-  EXPECT_STREQ("\b", result.get()[0]);
-
-  result.reset(CSLTokenizeString2("\\", " ", CSLT_NOFLAGS));
-  ASSERT_EQ(1, CSLCount(result.get()));
-  EXPECT_STREQ("\\", result.get()[0]);
-
-  result.reset(CSLTokenizeString2("\\", " ", CSLT_PRESERVEESCAPES));
-  ASSERT_EQ(1, CSLCount(result.get()));
-  EXPECT_STREQ("\\", result.get()[0]);
-
-  result.reset(CSLTokenizeString2("\\\\", " ", CSLT_NOFLAGS));
-  ASSERT_EQ(1, CSLCount(result.get()));
-  EXPECT_STREQ("\\\\", result.get()[0]);
-
-  result.reset(CSLTokenizeString2("\\\\", " ", CSLT_PRESERVEESCAPES));
-  ASSERT_EQ(1, CSLCount(result.get()));
-  EXPECT_STREQ("\\\\", result.get()[0]);
-
-  result.reset(CSLTokenizeString2("\\b", " ", CSLT_NOFLAGS));
-  ASSERT_EQ(1, CSLCount(result.get()));
-  EXPECT_STREQ("\\b", result.get()[0]);
-
-  result.reset(CSLTokenizeString2("\\b", " ", CSLT_PRESERVEESCAPES));
-  ASSERT_EQ(1, CSLCount(result.get()));
-  EXPECT_STREQ("\\b", result.get()[0]);
-
-  result.reset(CSLTokenizeString2("\\\"", " ", CSLT_NOFLAGS));
-  ASSERT_EQ(1, CSLCount(result.get()));
-  EXPECT_STREQ("\\\"", result.get()[0]);
-
-  result.reset(CSLTokenizeString2("\\\"", " ", CSLT_PRESERVEESCAPES));
-  ASSERT_EQ(1, CSLCount(result.get()));
-  EXPECT_STREQ("\\\"", result.get()[0]);
-
-  result.reset(CSLTokenizeString2("\"", " ", CSLT_NOFLAGS));
-  ASSERT_EQ(1, CSLCount(result.get()));
-  EXPECT_STREQ("\"", result.get()[0]);
-
-  result.reset(CSLTokenizeString2("\"", " ", CSLT_PRESERVEESCAPES));
-  ASSERT_EQ(1, CSLCount(result.get()));
-  EXPECT_STREQ("\"", result.get()[0]);
+    result.reset(CSLTokenizeString2(input, " ", CSLT_PRESERVEESCAPES));
+    ASSERT_EQ(1, CSLCount(result.get()));
+    EXPECT_STREQ(input, result.get()[0]);
+  }
 }
 
 TEST(CslStringTest, TestCSLTokenizeString2_b63363493) {
-  unique_ptr<char*, std::function<void(char**)>> result(
-      CSLTokenizeString2("(:)", ",:()", CSLT_NOFLAGS), CSLDestroy);
+  StringListPtr result(CSLTokenizeString2("(:)", ",:()", CSLT_NOFLAGS),
+                       CSLDestroy);
   ASSERT_NE(nullptr, result);
   EXPECT_EQ(nullptr, result.get()[0]);
 }
@@ -754,59 +722,53 @@ TEST(CplSscanfTest, ReportsErrorForUnexpectedFormatSpecifier) {
 
 TEST(CslStringTest, TestBoolean) {
   // nullptr not allowed.
-
-  EXPECT_FALSE(CSLTestBoolean("NO"));
-  EXPECT_FALSE(CSLTestBoolean("FALSE"));
-  EXPECT_FALSE(CSLTestBoolean("OFF"));
-  EXPECT_FALSE(CSLTestBoolean("0"));
-
-  // Anything else will be true.
-  EXPECT_TRUE(CSLTestBoolean(""));
-  EXPECT_TRUE(CSLTestBoolean("YES"));
-  EXPECT_TRUE(CSLTestBoolean("TRUE"));
-  EXPECT_TRUE(CSLTestBoolean("ON"));
-  EXPECT_TRUE(CSLTestBoolean("1"));
-  EXPECT_TRUE(CSLTestBoolean("xyzzy"));
+  struct TestCase {
+    const char* input;
+    bool expected;
+  };
+  constexpr TestCase kCases[] = {
+      {.input = "NO", .expected = false},
+      {.input = "FALSE", .expected = false},
+      {.input = "OFF", .expected = false},
+      {.input = "0", .expected = false},
+      // Anything else will be true.
+      {.input = "", .expected = true},
+      {.input = "YES", .expected = true},
+      {.input = "TRUE", .expected = true},
+      {.input = "ON", .expected = true},
+      {.input = "1", .expected = true},
+      {.input = "xyzzy", .expected = true},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.input);
+    EXPECT_EQ(tc.expected, static_cast<bool>(CSLTestBoolean(tc.input)));
+  }
 }
 
-// TODO(schwehr): And test the rest of the functions in csl_string.cpp.
-//   CSLFetchBoolean
-//   CSLFetchNameValueDef
-//   CSLFetchNameValue
-//   CSLFindName
-//   CPLParseNameValue
-//   CSLFetchNameValueMultiple
-//   CSLAddNameValue
-//   CSLSetNameValue
-//   CSLSetNameValueSeparator
-
 TEST(CplStringTest, EscapingBackslash) {
-  char* result = CPLEscapeString(nullptr, 0, CPLES_BackslashQuotable);
-  EXPECT_STREQ("", result);
-  CPLFree(result);
+  std::unique_ptr<char, CplFreeDeleter> result(
+      CPLEscapeString(nullptr, 0, CPLES_BackslashQuotable));
+  EXPECT_STREQ("", result.get());
 
   // CPLUnescapeString cannot handle nullptr with 0.
 
   char nul[1] = {'\0'};
-  result = CPLEscapeString(nul, 1, CPLES_BackslashQuotable);
-  EXPECT_STREQ("\\0", result);
-  CPLFree(result);
+  result.reset(CPLEscapeString(nul, 1, CPLES_BackslashQuotable));
+  EXPECT_STREQ("\\0", result.get());
 
   int length = 0;
-  result = CPLUnescapeString("", &length, CPLES_BackslashQuotable);
+  result.reset(CPLUnescapeString("", &length, CPLES_BackslashQuotable));
   EXPECT_EQ(0, length);  // NUL not included.
-  EXPECT_STREQ("", result);
-  CPLFree(result);
+  EXPECT_STREQ("", result.get());
 
   char lots[] = "\n\"\\";
-  result = CPLEscapeString(lots, -1, CPLES_BackslashQuotable);
-  EXPECT_STREQ("\\n\\\"\\\\", result);
-  CPLFree(result);
+  result.reset(CPLEscapeString(lots, -1, CPLES_BackslashQuotable));
+  EXPECT_STREQ("\\n\\\"\\\\", result.get());
 
-  result = CPLUnescapeString("\\n\\\"\\\\", &length, CPLES_BackslashQuotable);
+  result.reset(
+      CPLUnescapeString("\\n\\\"\\\\", &length, CPLES_BackslashQuotable));
   EXPECT_EQ(3, length);  // NUL not included.
-  EXPECT_STREQ(lots, result);
-  CPLFree(result);
+  EXPECT_STREQ(lots, result.get());
 
   char no_escape[256];
   for (int i = 0; i < 256; ++i) {
@@ -817,125 +779,102 @@ TEST(CplStringTest, EscapingBackslash) {
   no_escape[34] = 'z';  // "
   no_escape[92] = 'z';  // backslash
 
-  result = CPLEscapeString(no_escape, 256, CPLES_BackslashQuotable);
+  result.reset(CPLEscapeString(no_escape, 256, CPLES_BackslashQuotable));
   for (int i = 0; i < 256; ++i) {
-    EXPECT_EQ(no_escape[i], result[i]);
+    EXPECT_EQ(no_escape[i], result.get()[i]);
   }
-  CPLFree(result);
 
   no_escape[255] = '\0';
-  result = CPLUnescapeString(no_escape, &length, CPLES_BackslashQuotable);
+  result.reset(CPLUnescapeString(no_escape, &length, CPLES_BackslashQuotable));
   EXPECT_LE(255, length);
   for (int i = 0; i < 256; ++i) {
-    EXPECT_EQ(no_escape[i], result[i]);
+    EXPECT_EQ(no_escape[i], result.get()[i]);
   }
-  CPLFree(result);
 }
 
 TEST(CplStringTest, EscapeXml) {
   // Warning: The forward and reverse escaping are not symmetric.
-
-  char* result = CPLEscapeString(nullptr, 0, CPLES_XML);
-  EXPECT_STREQ("", result);
-  CPLFree(result);
+  std::unique_ptr<char, CplFreeDeleter> result(
+      CPLEscapeString(nullptr, 0, CPLES_XML));
+  EXPECT_STREQ("", result.get());
 
   // CPLUnescapeString cannot handle nullptr with 0.
 
-  result = CPLEscapeString("<>&\"", -1, CPLES_XML);
-  EXPECT_STREQ("&lt;&gt;&amp;&quot;", result);
-  CPLFree(result);
+  result.reset(CPLEscapeString("<>&\"", -1, CPLES_XML));
+  EXPECT_STREQ("&lt;&gt;&amp;&quot;", result.get());
 
   int length = 0;
-  result = CPLUnescapeString("&lt;&gt;&amp;&quot;&apos;", &length, CPLES_XML);
+  result.reset(
+      CPLUnescapeString("&lt;&gt;&amp;&quot;&apos;", &length, CPLES_XML));
   EXPECT_EQ(5, length);  // NUL not included.
-  EXPECT_STREQ("<>&\"'", result);
-  CPLFree(result);
-
-  // TODO(schwehr): Explore more of the XML escaping and unescaping.
+  EXPECT_STREQ("<>&\"'", result.get());
 }
 
 TEST(CplStringTest, EscapeUrl) {
-  char* result = CPLEscapeString(nullptr, 0, CPLES_URL);
-  EXPECT_STREQ("", result);
-  CPLFree(result);
+  std::unique_ptr<char, CplFreeDeleter> result(
+      CPLEscapeString(nullptr, 0, CPLES_URL));
+  EXPECT_STREQ("", result.get());
 
   // CPLUnescapeString cannot handle nullptr with 0.
 
-  result = CPLEscapeString("", -1, CPLES_URL);
-  EXPECT_STREQ("", result);
-  CPLFree(result);
+  struct TestCase {
+    const char* raw;
+    const char* escaped;
+    const char* unescape_input;
+    int expected_len;
+  };
+  constexpr TestCase kCases[] = {
+      {.raw = "", .escaped = "", .unescape_input = "", .expected_len = 0},
+      {.raw = "azAZ190._",
+       .escaped = "azAZ190._",
+       .unescape_input = "azAZ190._",
+       .expected_len = 9},
+      {.raw = "<>?,/;':\"",
+       .escaped = "%3C%3E%3F,%2F%3B'%3A%22",
+       .unescape_input = "%3C%3E%3F%2C%2F%3B%27%3A%22",
+       .expected_len = 9},
+      {.raw = "`~!@#$%^&*()+",
+       .escaped = "%60%7E!%40%23$%25%5E%26*()+",
+       .unescape_input = "%60%7E%21%40%23%24%25%5E%26%2A%28%29%2B",
+       .expected_len = 13},
+      {.raw = " -=[]{}\\|\n\r\t",
+       .escaped = "%20-%3D%5B%5D%7B%7D%5C%7C%0A%0D%09",
+       .unescape_input = "%20%2D%3D%5B%5D%7B%7D%5C%7C%0A%0D%09",
+       .expected_len = 12},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.raw);
+    result.reset(CPLEscapeString(tc.raw, -1, CPLES_URL));
+    EXPECT_STREQ(tc.escaped, result.get());
 
-  int length = 0;
-  result = CPLUnescapeString("", &length, CPLES_URL);
-  EXPECT_EQ(0, length);
-  EXPECT_STREQ("", result);
-  CPLFree(result);
-
-  result = CPLEscapeString("azAZ190._", -1, CPLES_URL);
-  EXPECT_STREQ("azAZ190._", result);
-  CPLFree(result);
-
-  result = CPLUnescapeString("azAZ190._", &length, CPLES_URL);
-  EXPECT_EQ(9, length);  // NUL not included.
-  EXPECT_STREQ("azAZ190._", result);
-  CPLFree(result);
-
-  // Randomly try things that need encoding.
-  result = CPLEscapeString("<>?,/;':\"", -1, CPLES_URL);
-  EXPECT_STREQ("%3C%3E%3F,%2F%3B'%3A%22", result);
-  CPLFree(result);
-
-  result = CPLUnescapeString("%3C%3E%3F%2C%2F%3B%27%3A%22", &length, CPLES_URL);
-  EXPECT_EQ(9, length);  // NUL not included.
-  EXPECT_STREQ("<>?,/;':\"", result);
-  CPLFree(result);
-
-  result = CPLEscapeString("`~!@#$%^&*()+", -1, CPLES_URL);
-  EXPECT_STREQ("%60%7E!%40%23$%25%5E%26*()+", result);
-  CPLFree(result);
-
-  result = CPLUnescapeString("%60%7E%21%40%23%24%25%5E%26%2A%28%29%2B", &length,
-                             CPLES_URL);
-  EXPECT_EQ(13, length);  // NUL not included.
-  EXPECT_STREQ("`~!@#$%^&*()+", result);
-  CPLFree(result);
-
-  result = CPLEscapeString(" -=[]{}\\|\n\r\t", -1, CPLES_URL);
-  EXPECT_STREQ("%20-%3D%5B%5D%7B%7D%5C%7C%0A%0D%09", result);
-  CPLFree(result);
-
-  result = CPLUnescapeString("%20%2D%3D%5B%5D%7B%7D%5C%7C%0A%0D%09", &length,
-                             CPLES_URL);
-  EXPECT_EQ(12, length);  // NUL not included.
-  EXPECT_STREQ(" -=[]{}\\|\n\r\t", result);
-  CPLFree(result);
+    int length = 0;
+    result.reset(CPLUnescapeString(tc.unescape_input, &length, CPLES_URL));
+    EXPECT_EQ(tc.expected_len, length);  // NUL not included.
+    EXPECT_STREQ(tc.raw, result.get());
+  }
 }
 
 TEST(CplStringTest, EscapeSql) {
-  char* result = CPLEscapeString(nullptr, 0, CPLES_SQL);
-  EXPECT_STREQ("", result);
-  CPLFree(result);
+  std::unique_ptr<char, CplFreeDeleter> result(
+      CPLEscapeString(nullptr, 0, CPLES_SQL));
+  EXPECT_STREQ("", result.get());
 
   // CPLUnescapeString cannot handle nullptr even with 0.
 
-  result = CPLEscapeString("", -1, CPLES_SQL);
-  EXPECT_STREQ("", result);
-  CPLFree(result);
+  result.reset(CPLEscapeString("", -1, CPLES_SQL));
+  EXPECT_STREQ("", result.get());
 
   int length = 0;
-  result = CPLUnescapeString("", &length, CPLES_SQL);
+  result.reset(CPLUnescapeString("", &length, CPLES_SQL));
   EXPECT_EQ(0, length);
-  EXPECT_STREQ("", result);
-  CPLFree(result);
+  EXPECT_STREQ("", result.get());
 
-  result = CPLEscapeString("'; DROP TABLE ?;'", -1, CPLES_SQL);
-  EXPECT_STREQ("''; DROP TABLE ?;''", result);
-  CPLFree(result);
+  result.reset(CPLEscapeString("'; DROP TABLE ?;'", -1, CPLES_SQL));
+  EXPECT_STREQ("''; DROP TABLE ?;''", result.get());
 
-  result = CPLUnescapeString("''; DROP TABLE ?;''", &length, CPLES_SQL);
+  result.reset(CPLUnescapeString("''; DROP TABLE ?;''", &length, CPLES_SQL));
   EXPECT_EQ(17, length);
-  EXPECT_STREQ("'; DROP TABLE ?;'", result);
-  CPLFree(result);
+  EXPECT_STREQ("'; DROP TABLE ?;'", result.get());
 
   char no_escape[256];
   for (int i = 0; i < 256; ++i) {
@@ -945,109 +884,79 @@ TEST(CplStringTest, EscapeSql) {
   no_escape['\''] = 'z';
   no_escape[255] = '\0';
 
-  result = CPLEscapeString(no_escape, 256, CPLES_SQL);
+  result.reset(CPLEscapeString(no_escape, 256, CPLES_SQL));
   for (int i = 0; i < 256; ++i) {
-    EXPECT_EQ(no_escape[i], result[i]);
+    EXPECT_EQ(no_escape[i], result.get()[i]);
   }
-  CPLFree(result);
 
-  result = CPLUnescapeString(no_escape, &length, CPLES_SQL);
+  result.reset(CPLUnescapeString(no_escape, &length, CPLES_SQL));
   EXPECT_LE(255, length);
-  // TODO(schwehr):  What is in 256 to 262?
   for (int i = 0; i < 256; ++i) {
-    EXPECT_EQ(no_escape[i], result[i]);
+    EXPECT_EQ(no_escape[i], result.get()[i]);
   }
-  CPLFree(result);
 }
 
 TEST(CplStringTest, EscapeCsv) {
   // nullptr crashes this mode unlike the others.
-
   // CPLUnescapeString does not support CPLES_CSV.
-
-  char* result = CPLEscapeString("", -1, CPLES_CSV);
-  EXPECT_STREQ("", result);
-  CPLFree(result);
-
-  result = CPLEscapeString("1", -1, CPLES_CSV);
-  EXPECT_STREQ("1", result);
-  CPLFree(result);
-
-  result = CPLEscapeString(",", -1, CPLES_CSV);
-  EXPECT_STREQ("\",\"", result);
-  CPLFree(result);
-
-  result = CPLEscapeString("\"", -1, CPLES_CSV);
-  EXPECT_STREQ("\"\"\"\"", result);
-  CPLFree(result);
-
-  result = CPLEscapeString(";", -1, CPLES_CSV);
-  EXPECT_STREQ("\";\"", result);
-  CPLFree(result);
-
-  result = CPLEscapeString("\t", -1, CPLES_CSV);
-  EXPECT_STREQ("\"\t\"", result);
-  CPLFree(result);
-
-  result = CPLEscapeString("\n", -1, CPLES_CSV);
-  EXPECT_STREQ("\"\n\"", result);
-  CPLFree(result);
-
-  result = CPLEscapeString("\r", -1, CPLES_CSV);
-  EXPECT_STREQ("\"\r\"", result);
-  CPLFree(result);
-
-  result = CPLEscapeString("1,2", -1, CPLES_CSV);
-  EXPECT_STREQ("\"1,2\"", result);
-  CPLFree(result);
-
-  result = CPLEscapeString("1,3\t\r\n\t", -1, CPLES_CSV);
-  EXPECT_STREQ("\"1,3\t\r\n\t\"", result);
-  CPLFree(result);
-
-  result = CPLEscapeString("azAZ091<>?:'][{}|~!`", -1, CPLES_CSV);
-  EXPECT_STREQ("azAZ091<>?:'][{}|~!`", result);
-  CPLFree(result);
-
-  result = CPLEscapeString("@#$%^&*()_+-=\\", -1, CPLES_CSV);
-  EXPECT_STREQ("@#$%^&*()_+-=\\", result);
-  CPLFree(result);
+  struct TestCase {
+    const char* input;
+    std::string_view expected;
+  };
+  constexpr TestCase kCases[] = {
+      {.input = "", .expected = ""},
+      {.input = "1", .expected = "1"},
+      {.input = ",", .expected = "\",\""},
+      {.input = "\"", .expected = "\"\"\"\""},
+      {.input = ";", .expected = "\";\""},
+      {.input = "\t", .expected = "\"\t\""},
+      {.input = "\n", .expected = "\"\n\""},
+      {.input = "\r", .expected = "\"\r\""},
+      {.input = "1,2", .expected = "\"1,2\""},
+      {.input = "1,3\t\r\n\t", .expected = "\"1,3\t\r\n\t\""},
+      {.input = "azAZ091<>?:'][{}|~!`", .expected = "azAZ091<>?:'][{}|~!`"},
+      {.input = "@#$%^&*()_+-=\\", .expected = "@#$%^&*()_+-=\\"},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.input);
+    std::unique_ptr<char, CplFreeDeleter> result(
+        CPLEscapeString(tc.input, -1, CPLES_CSV));
+    ASSERT_NE(nullptr, result);
+    EXPECT_EQ(tc.expected, result.get());
+  }
 }
 
 TEST(CplStringNumberTest, TestBinaryToHex) {
-  char* result = CPLBinaryToHex(0, nullptr);
-  EXPECT_STREQ("", result);
-  CPLFree(result);
+  std::unique_ptr<char, CplFreeDeleter> result(CPLBinaryToHex(0, nullptr));
+  EXPECT_STREQ("", result.get());
 
-  GByte data_a[1] = {0};
-  result = CPLBinaryToHex(0, data_a);
-  EXPECT_STREQ("", result);
-  CPLFree(result);
+  constexpr GByte kDataA[1] = {0};
+  result.reset(CPLBinaryToHex(0, kDataA));
+  EXPECT_STREQ("", result.get());
 
-  GByte data_b[1] = {0};
-  result = CPLBinaryToHex(1, &data_b[0]);
-  EXPECT_STREQ("00", result);
-  CPLFree(result);
-
-  GByte data_c[1] = {11};
-  result = CPLBinaryToHex(1, &data_c[0]);
-  EXPECT_STREQ("0B", result);
-  CPLFree(result);
-
-  GByte data_d[1] = {254};
-  result = CPLBinaryToHex(1, &data_d[0]);
-  EXPECT_STREQ("FE", result);
-  CPLFree(result);
-
-  GByte data_e[2] = {15, 1};
-  result = CPLBinaryToHex(2, &data_e[0]);
-  EXPECT_STREQ("0F01", result);
-  CPLFree(result);
-
-  GByte data_f[2] = {240, 160};
-  result = CPLBinaryToHex(2, &data_f[0]);
-  EXPECT_STREQ("F0A0", result);
-  CPLFree(result);
+  struct TestCase {
+    std::span<const GByte> data;
+    std::string_view expected;
+  };
+  static constexpr auto kDataB = std::to_array<GByte>({0});
+  static constexpr auto kDataC = std::to_array<GByte>({11});
+  static constexpr auto kDataD = std::to_array<GByte>({254});
+  static constexpr auto kDataE = std::to_array<GByte>({15, 1});
+  static constexpr auto kDataF = std::to_array<GByte>({240, 160});
+  constexpr TestCase kCases[] = {
+      {.data = kDataB, .expected = "00"},
+      {.data = kDataC, .expected = "0B"},
+      {.data = kDataD, .expected = "FE"},
+      {.data = kDataE, .expected = "0F01"},
+      {.data = kDataF, .expected = "F0A0"},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.expected);
+    result.reset(
+        CPLBinaryToHex(static_cast<int>(tc.data.size()), tc.data.data()));
+    ASSERT_NE(nullptr, result);
+    EXPECT_EQ(tc.expected, result.get());
+  }
 }
 
 TEST(CplStringNumberTest, TestHexToBinary) {
@@ -1055,214 +964,184 @@ TEST(CplStringNumberTest, TestHexToBinary) {
   // This documents the existing behavior and does not imply that
   // this is the behavior we want.
   // It does not work correctly for odd numbers of characters.
-  //
-  // TODO(schwehr): Provide GDAL with a more robust replacement.
-
   int len = 0;
-  GByte* data = CPLHexToBinary("0", &len);
+  std::unique_ptr<GByte, CplFreeDeleter> data(CPLHexToBinary("0", &len));
   ASSERT_EQ(0, len);
   EXPECT_NE(nullptr, data);
-  CPLFree(data);
 
-  data = CPLHexToBinary("1", &len);
-  ASSERT_EQ(0, len);
-  EXPECT_NE(nullptr, data);
-  EXPECT_EQ(0, data[0]);
-  CPLFree(data);
+  struct TestCase {
+    const char* input;
+    int expected_len;
+    GByte expected_first_byte;
+  };
+  // Note: CPLHexToBinary always allocates (nLen / 2 + 1) bytes and writes a
+  // trailing NUL at pabyWKB[i] after decoding, so data[0] is valid (and 0)
+  // even when expected_len == 0.
+  constexpr TestCase kCases[] = {
+      {.input = "1", .expected_len = 0, .expected_first_byte = 0},
+      {.input = "F", .expected_len = 0, .expected_first_byte = 0},
+      {.input = "FF", .expected_len = 1, .expected_first_byte = 255},
+      {.input = "ff", .expected_len = 1, .expected_first_byte = 255},
+      {.input = "0F", .expected_len = 1, .expected_first_byte = 15},
+      // The 0x is treated as two zero digits.
+      {.input = "0xF", .expected_len = 1, .expected_first_byte = 0},
+      {.input = "0x0F", .expected_len = 2, .expected_first_byte = 0},
+      // Improper handling of odd number of digits.
+      {.input = "FFF", .expected_len = 1, .expected_first_byte = 255},
+      // All other characters are 0 in the LUT.
+      {.input = "OO", .expected_len = 1, .expected_first_byte = 0},
+      {.input = "xx", .expected_len = 1, .expected_first_byte = 0},
+      {.input = "zz", .expected_len = 1, .expected_first_byte = 0},
+      {.input = "--", .expected_len = 1, .expected_first_byte = 0},
+      {.input = "++", .expected_len = 1, .expected_first_byte = 0},
+      {.input = "..", .expected_len = 1, .expected_first_byte = 0},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.input);
+    data.reset(CPLHexToBinary(tc.input, &len));
+    ASSERT_EQ(tc.expected_len, len);
+    ASSERT_NE(nullptr, data);
+    EXPECT_EQ(tc.expected_first_byte, data.get()[0]);
+  }
 
-  data = CPLHexToBinary("F", &len);
-  ASSERT_EQ(0, len);
-  EXPECT_NE(nullptr, data);
-  EXPECT_EQ(0, data[0]);
-  CPLFree(data);
-
-  data = CPLHexToBinary("FF", &len);
-  ASSERT_EQ(1, len);
-  EXPECT_NE(nullptr, data);
-  EXPECT_EQ(255, data[0]);
-  CPLFree(data);
-
-  data = CPLHexToBinary("ff", &len);
-  ASSERT_EQ(1, len);
-  EXPECT_NE(nullptr, data);
-  EXPECT_EQ(255, data[0]);
-  CPLFree(data);
-
-  data = CPLHexToBinary("0F", &len);
-  ASSERT_EQ(1, len);
-  EXPECT_NE(nullptr, data);
-  EXPECT_EQ(15, data[0]);
-  CPLFree(data);
-
-  // The 0x is treated as two zero digits.
-  data = CPLHexToBinary("0xF", &len);
-  ASSERT_EQ(1, len);
-  EXPECT_NE(nullptr, data);
-  EXPECT_EQ(0, data[0]);
-  CPLFree(data);
-
-  data = CPLHexToBinary("0x0F", &len);
-  ASSERT_EQ(2, len);
-  EXPECT_NE(nullptr, data);
-  EXPECT_EQ(0, data[0]);
-  CPLFree(data);
-
-  // Improper handling of odd number of digits.
-  data = CPLHexToBinary("FFF", &len);
-  ASSERT_EQ(1, len);
-  EXPECT_NE(nullptr, data);
-  EXPECT_EQ(255, data[0]);
-  CPLFree(data);
-
-  data = CPLHexToBinary("FFFFFFFF", &len);
+  data.reset(CPLHexToBinary("FFFFFFFF", &len));
   ASSERT_EQ(4, len);
-  EXPECT_NE(nullptr, data);
-  EXPECT_EQ(255, data[0]);
-  EXPECT_EQ(255, data[1]);
-  EXPECT_EQ(255, data[2]);
-  EXPECT_EQ(255, data[3]);
-  CPLFree(data);
-
-  // All other characters are 0 in the LUT.
-
-  // The capital letter o.
-  data = CPLHexToBinary("OO", &len);
-  ASSERT_EQ(1, len);
-  EXPECT_NE(nullptr, data);
-  EXPECT_EQ(0, data[0]);
-  CPLFree(data);
-
-  data = CPLHexToBinary("xx", &len);
-  ASSERT_EQ(1, len);
-  EXPECT_NE(nullptr, data);
-  EXPECT_EQ(0, data[0]);
-  CPLFree(data);
-
-  data = CPLHexToBinary("zz", &len);
-  ASSERT_EQ(1, len);
-  EXPECT_NE(nullptr, data);
-  EXPECT_EQ(0, data[0]);
-  CPLFree(data);
-
-  data = CPLHexToBinary("--", &len);
-  ASSERT_EQ(1, len);
-  EXPECT_NE(nullptr, data);
-  EXPECT_EQ(0, data[0]);
-  CPLFree(data);
-
-  data = CPLHexToBinary("++", &len);
-  ASSERT_EQ(1, len);
-  EXPECT_NE(nullptr, data);
-  EXPECT_EQ(0, data[0]);
-  CPLFree(data);
-
-  data = CPLHexToBinary("..", &len);
-  ASSERT_EQ(1, len);
-  EXPECT_NE(nullptr, data);
-  EXPECT_EQ(0, data[0]);
-  CPLFree(data);
+  ASSERT_NE(nullptr, data);
+  for (int i = 0; i < 4; ++i) {
+    EXPECT_EQ(255, data.get()[i]);
+  }
 }
 
 TEST(CplStringNumberTest, TestGetValueType) {
   EXPECT_EQ(CPL_VALUE_STRING, CPLGetValueType(nullptr));
 
-  EXPECT_EQ(CPL_VALUE_STRING, CPLGetValueType(""));
-  EXPECT_EQ(CPL_VALUE_STRING, CPLGetValueType("a"));
-  EXPECT_EQ(CPL_VALUE_STRING, CPLGetValueType("B"));
-  EXPECT_EQ(CPL_VALUE_STRING, CPLGetValueType("_"));
-  EXPECT_EQ(CPL_VALUE_STRING, CPLGetValueType("<"));
-  EXPECT_EQ(CPL_VALUE_STRING, CPLGetValueType(">"));
-  EXPECT_EQ(CPL_VALUE_STRING, CPLGetValueType("123abc"));
-
-  EXPECT_EQ(CPL_VALUE_INTEGER, CPLGetValueType("-"));
-  EXPECT_EQ(CPL_VALUE_INTEGER, CPLGetValueType("+"));
-  EXPECT_EQ(CPL_VALUE_INTEGER, CPLGetValueType("0"));
-  EXPECT_EQ(CPL_VALUE_STRING, CPLGetValueType("0 "));
-  EXPECT_EQ(CPL_VALUE_STRING, CPLGetValueType("01"));
-  EXPECT_EQ(CPL_VALUE_INTEGER, CPLGetValueType("-1"));
-  EXPECT_EQ(CPL_VALUE_INTEGER, CPLGetValueType("2"));
-  EXPECT_EQ(CPL_VALUE_INTEGER, CPLGetValueType("+2"));
-  EXPECT_EQ(CPL_VALUE_INTEGER, CPLGetValueType("9999999999999999"));
-
-  EXPECT_EQ(CPL_VALUE_REAL, CPLGetValueType("."));
-  EXPECT_EQ(CPL_VALUE_REAL, CPLGetValueType(".1"));
-  EXPECT_EQ(CPL_VALUE_REAL, CPLGetValueType("0."));
-  EXPECT_EQ(CPL_VALUE_REAL, CPLGetValueType("-1."));
-  EXPECT_EQ(CPL_VALUE_REAL, CPLGetValueType("-.1"));
-  EXPECT_EQ(CPL_VALUE_REAL, CPLGetValueType("1e3"));
-  EXPECT_EQ(CPL_VALUE_REAL, CPLGetValueType("1e3 "));
-  EXPECT_EQ(CPL_VALUE_REAL, CPLGetValueType("2.e4"));
-  EXPECT_EQ(CPL_VALUE_REAL, CPLGetValueType("-3e5"));
-  EXPECT_EQ(CPL_VALUE_REAL, CPLGetValueType("1e-5"));
-  EXPECT_EQ(CPL_VALUE_REAL, CPLGetValueType("5e+9"));
+  struct TestCase {
+    const char* input;
+    CPLValueType expected;
+  };
+  constexpr TestCase kCases[] = {
+      {.input = "", .expected = CPL_VALUE_STRING},
+      {.input = "a", .expected = CPL_VALUE_STRING},
+      {.input = "B", .expected = CPL_VALUE_STRING},
+      {.input = "_", .expected = CPL_VALUE_STRING},
+      {.input = "<", .expected = CPL_VALUE_STRING},
+      {.input = ">", .expected = CPL_VALUE_STRING},
+      {.input = "123abc", .expected = CPL_VALUE_STRING},
+      {.input = "-", .expected = CPL_VALUE_INTEGER},
+      {.input = "+", .expected = CPL_VALUE_INTEGER},
+      {.input = "0", .expected = CPL_VALUE_INTEGER},
+      {.input = "0 ", .expected = CPL_VALUE_STRING},
+      {.input = "01", .expected = CPL_VALUE_STRING},
+      {.input = "-1", .expected = CPL_VALUE_INTEGER},
+      {.input = "2", .expected = CPL_VALUE_INTEGER},
+      {.input = "+2", .expected = CPL_VALUE_INTEGER},
+      {.input = "9999999999999999", .expected = CPL_VALUE_INTEGER},
+      {.input = ".", .expected = CPL_VALUE_REAL},
+      {.input = ".1", .expected = CPL_VALUE_REAL},
+      {.input = "0.", .expected = CPL_VALUE_REAL},
+      {.input = "-1.", .expected = CPL_VALUE_REAL},
+      {.input = "-.1", .expected = CPL_VALUE_REAL},
+      {.input = "1e3", .expected = CPL_VALUE_REAL},
+      {.input = "1e3 ", .expected = CPL_VALUE_REAL},
+      {.input = "2.e4", .expected = CPL_VALUE_REAL},
+      {.input = "-3e5", .expected = CPL_VALUE_REAL},
+      {.input = "1e-5", .expected = CPL_VALUE_REAL},
+      {.input = "5e+9", .expected = CPL_VALUE_REAL},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.input);
+    EXPECT_EQ(tc.expected, CPLGetValueType(tc.input));
+  }
 }
 
 TEST(CplStringTest, TestStrlcpy) {
-  char dst[5] = "1234";
-  EXPECT_EQ(0, CPLStrlcpy(dst, "", 0));
-  EXPECT_STREQ("1234", dst);
-
-  char dst2[5] = "1234";
-  EXPECT_EQ(0, CPLStrlcpy(dst2, "", sizeof(dst2)));
-  EXPECT_STREQ("", dst2);
-
-  char dst3[5] = "1234";
-  EXPECT_EQ(0, CPLStrlcpy(dst3, "", 0));
-  EXPECT_STREQ("1234", dst3);
-
-  char dst4[5] = "1234";
-  EXPECT_EQ(2, CPLStrlcpy(dst4, "12", 1));
-  EXPECT_STREQ("", dst4);
-
-  char dst5[5] = "1234";
-  EXPECT_EQ(2, CPLStrlcpy(dst5, "12", 2));
-  EXPECT_STREQ("1", dst5);
-
-  char dst6[5] = "1234";
-  EXPECT_EQ(2, CPLStrlcpy(dst6, "12", sizeof(dst5)));
-  EXPECT_STREQ("12", dst6);
-
-  char dst7[5] = "abcd";
-  EXPECT_EQ(7, CPLStrlcpy(dst7, "1234567", sizeof(dst6)));
-  EXPECT_STREQ("1234", dst7);
+  struct TestCase {
+    const char* src;
+    size_t size;
+    size_t expected_ret;
+    std::string_view expected_dst;
+  };
+  constexpr TestCase kCases[] = {
+      {.src = "", .size = 0, .expected_ret = 0, .expected_dst = "1234"},
+      {.src = "", .size = 5, .expected_ret = 0, .expected_dst = ""},
+      {.src = "12", .size = 1, .expected_ret = 2, .expected_dst = ""},
+      {.src = "12", .size = 2, .expected_ret = 2, .expected_dst = "1"},
+      {.src = "12", .size = 5, .expected_ret = 2, .expected_dst = "12"},
+      {.src = "1234567", .size = 5, .expected_ret = 7, .expected_dst = "1234"},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.src);
+    char dst[5] = "1234";
+    EXPECT_EQ(tc.expected_ret, CPLStrlcpy(dst, tc.src, tc.size));
+    EXPECT_EQ(tc.expected_dst, dst);
+  }
 }
 
 TEST(CplStringTest, TestStrlcat) {
   // BSD style string concatenation.
   // The return is the size the call tried to create.
-
-  char dst[5] = "";
-  EXPECT_EQ(0, CPLStrlcat(dst, "", 0));
-  EXPECT_STREQ("", dst);
-
-  char dst2[5] = "";
-  EXPECT_EQ(1, CPLStrlcat(dst2, "1", 0));
-  EXPECT_STREQ("", dst2);
-
-  char dst3[5] = "";
-  EXPECT_EQ(8, CPLStrlcat(dst3, "12345678", sizeof(dst3)));
-  EXPECT_STREQ("1234", dst3);
-
-  char dst4[5] = "abc";
-  EXPECT_EQ(7, CPLStrlcat(dst4, "defg", sizeof(dst4)));
-  EXPECT_STREQ("abcd", dst4);
-
-  char dst5[15] = "abcdefg";
-  EXPECT_EQ(9, CPLStrlcat(dst5, "defg", 5));
-  EXPECT_STREQ("abcdefg", dst5);
+  struct TestCase {
+    const char* initial;
+    const char* src;
+    size_t size;
+    size_t expected_ret;
+    std::string_view expected_dst;
+  };
+  constexpr TestCase kCases[] = {
+      {.initial = "",
+       .src = "",
+       .size = 0,
+       .expected_ret = 0,
+       .expected_dst = ""},
+      {.initial = "",
+       .src = "1",
+       .size = 0,
+       .expected_ret = 1,
+       .expected_dst = ""},
+      {.initial = "",
+       .src = "12345678",
+       .size = 5,
+       .expected_ret = 8,
+       .expected_dst = "1234"},
+      {.initial = "abc",
+       .src = "defg",
+       .size = 5,
+       .expected_ret = 7,
+       .expected_dst = "abcd"},
+      {.initial = "abcdefg",
+       .src = "defg",
+       .size = 5,
+       .expected_ret = 9,
+       .expected_dst = "abcdefg"},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.initial);
+    char dst[15] = {};
+    CPLStrlcpy(dst, tc.initial, sizeof(dst));
+    EXPECT_EQ(tc.expected_ret, CPLStrlcat(dst, tc.src, tc.size));
+    EXPECT_EQ(tc.expected_dst, dst);
+  }
 }
 
 TEST(CplStringTest, TestStrnlen) {
   // nullptr not allowed.
-
-  EXPECT_EQ(0, CPLStrnlen("", 0));
-  EXPECT_EQ(0, CPLStrnlen("", 1));
-
-  EXPECT_EQ(0, CPLStrnlen(" ", 0));
-  EXPECT_EQ(1, CPLStrnlen(" ", 1));
-
-  EXPECT_EQ(5, CPLStrnlen("0123456789", 5));
-  EXPECT_EQ(10, CPLStrnlen("0123456789", 12));
+  struct TestCase {
+    const char* str;
+    size_t maxlen;
+    size_t expected;
+  };
+  constexpr TestCase kCases[] = {
+      {.str = "", .maxlen = 0, .expected = 0},
+      {.str = "", .maxlen = 1, .expected = 0},
+      {.str = " ", .maxlen = 0, .expected = 0},
+      {.str = " ", .maxlen = 1, .expected = 1},
+      {.str = "0123456789", .maxlen = 5, .expected = 5},
+      {.str = "0123456789", .maxlen = 12, .expected = 10},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.str);
+    EXPECT_EQ(tc.expected, CPLStrnlen(tc.str, tc.maxlen));
+  }
 }
 
 // CPLCharUniquePtr is only defined when GDAL_COMPILATION is defined.
@@ -1304,35 +1183,36 @@ TEST(CslStringTest, LoadSavePrintInsertAndRemove) {
             CSLLoad2("/vsimem/no_such_csl_file.txt", -1, -1, no_err_opts));
 
   // CSLLoad with > 16 lines to trigger line array reallocation.
-  const char* kManyLinesFile = "/vsimem/csl_many_lines.txt";
+  static constexpr char kManyLinesFile[] = "/vsimem/csl_many_lines.txt";
+  absl::Cleanup unlink_many_lines = [] { VSIUnlink(kManyLinesFile); };
   {
     VSILFILE* fp = VSIFOpenL(kManyLinesFile, "wb");
     ASSERT_NE(nullptr, fp);
+    absl::Cleanup close_fp = [fp] { VSIFCloseL(fp); };
     for (int i = 0; i < 25; ++i) {
       VSIFPrintfL(fp, "line_%d\n", i);
     }
-    VSIFCloseL(fp);
   }
-  char** loaded = CSLLoad(kManyLinesFile);
-  ASSERT_EQ(25, CSLCount(loaded));
+  StringListPtr loaded(CSLLoad(kManyLinesFile), CSLDestroy);
+  ASSERT_EQ(25, CSLCount(loaded.get()));
 
   // CSLSave edge cases.
   EXPECT_EQ(0, CSLSave(nullptr, "/vsimem/empty_save.txt"));
   const std::string missing_dir_file =
       std::string(::testing::TempDir()) + "/no_such_dir/save.txt";
-  EXPECT_EQ(0, CSLSave(loaded, missing_dir_file.c_str()));
+  EXPECT_EQ(0, CSLSave(loaded.get(), missing_dir_file.c_str()));
 
   // CSLPrint to nullptr (stdout) with nullptr list, and to a temporary FILE*.
   EXPECT_EQ(0, CSLPrint(nullptr, nullptr));
   const std::string temp_file =
       std::string(::testing::TempDir()) + "/csl_print.txt";
-  FILE* fp_out = fopen(temp_file.c_str(), "wb");
-  ASSERT_NE(nullptr, fp_out);
-  EXPECT_EQ(25, CSLPrint(loaded, fp_out));
-  fclose(fp_out);
-  VSIUnlink(temp_file.c_str());
-  VSIUnlink(kManyLinesFile);
-  CSLDestroy(loaded);
+  {
+    absl::Cleanup unlink_temp = [&temp_file] { VSIUnlink(temp_file.c_str()); };
+    FILE* fp_out = fopen(temp_file.c_str(), "wb");
+    ASSERT_NE(nullptr, fp_out);
+    absl::Cleanup close_out = [fp_out] { fclose(fp_out); };
+    EXPECT_EQ(25, CSLPrint(loaded.get(), fp_out));
+  }
 
   // CSLInsertStrings and CSLInsertString.
   char* to_insert[] = {const_cast<char*>("ins1"), const_cast<char*>("ins2"),
@@ -1592,64 +1472,54 @@ TEST(CplStringTest, EscapeUnescapeCommandLineAndSqlComments) {
   // XML and XML_BUT_QUOTES with BOM, control chars, single quotes, numeric
   // entities, and unknown entities. The BOM is escaped as &#xFEFF; and the
   // unrepresentable control character is dropped.
-  char* esc = CPLEscapeString("\xEF\xBB\xBF\x01'\"<>&a", -1, CPLES_XML);
-  EXPECT_STREQ("&#xFEFF;'&quot;&lt;&gt;&amp;a", esc);
-  CPLFree(esc);
-  esc = CPLEscapeString("\xEF\xBB\xBF\x01'\"<>&a", -1, CPLES_XML_BUT_QUOTES);
-  EXPECT_STREQ("&#xFEFF;'\"&lt;&gt;&amp;a", esc);
-  CPLFree(esc);
+  std::unique_ptr<char, CplFreeDeleter> esc(
+      CPLEscapeString("\xEF\xBB\xBF\x01'\"<>&a", -1, CPLES_XML));
+  EXPECT_STREQ("&#xFEFF;'&quot;&lt;&gt;&amp;a", esc.get());
+  esc.reset(
+      CPLEscapeString("\xEF\xBB\xBF\x01'\"<>&a", -1, CPLES_XML_BUT_QUOTES));
+  EXPECT_STREQ("&#xFEFF;'\"&lt;&gt;&amp;a", esc.get());
 
   // Hex and decimal numeric entities are decoded; an unterminated entity
   // (&#65 without ';') stops the decoding.
-  char* unesc = CPLUnescapeString("&#x41;&#x6a;&#x3F;&#65;&#65&bogus;normal",
-                                  &len, CPLES_XML);
-  EXPECT_STREQ("Aj?A", unesc);
+  std::unique_ptr<char, CplFreeDeleter> unesc(CPLUnescapeString(
+      "&#x41;&#x6a;&#x3F;&#65;&#65&bogus;normal", &len, CPLES_XML));
+  EXPECT_STREQ("Aj?A", unesc.get());
   EXPECT_EQ(4, len);
-  CPLFree(unesc);
 
   // An unknown named entity stops the decoding.
-  unesc = CPLUnescapeString("ok&bogus;normal", &len, CPLES_XML);
-  EXPECT_STREQ("ok", unesc);
+  unesc.reset(CPLUnescapeString("ok&bogus;normal", &len, CPLES_XML));
+  EXPECT_STREQ("ok", unesc.get());
   EXPECT_EQ(2, len);
-  CPLFree(unesc);
 
   // BackslashQuotable with \0 (an embedded NUL in the output) and a trailing
   // backslash (ignored).
-  unesc = CPLUnescapeString("a\\0b\\nc\\", &len, CPLES_BackslashQuotable);
+  unesc.reset(CPLUnescapeString("a\\0b\\nc\\", &len, CPLES_BackslashQuotable));
   ASSERT_EQ(5, len);
-  EXPECT_EQ(0, memcmp("a\0b\nc", unesc, 5));
-  CPLFree(unesc);
+  EXPECT_EQ(0, memcmp("a\0b\nc", unesc.get(), 5));
 
   // URL with lowercase/uppercase hex, '+', and invalid %ZZ (decoded as 0).
-  unesc = CPLUnescapeString("a+b%2a%2A%a0%A0%ZZ", &len, CPLES_URL);
+  unesc.reset(CPLUnescapeString("a+b%2a%2A%a0%A0%ZZ", &len, CPLES_URL));
   ASSERT_EQ(8, len);
-  EXPECT_EQ(0, memcmp("a b**\xa0\xa0\0", unesc, 8));
-  CPLFree(unesc);
+  EXPECT_EQ(0, memcmp("a b**\xa0\xa0\0", unesc.get(), 8));
 
   // SQLI.
-  esc = CPLEscapeString("a\"b'c", -1, CPLES_SQLI);
-  EXPECT_STREQ("a\"\"b'c", esc);
-  CPLFree(esc);
-  unesc = CPLUnescapeString("a\"\"b", &len, CPLES_SQLI);
-  EXPECT_STREQ("a\"b", unesc);
-  CPLFree(unesc);
+  esc.reset(CPLEscapeString("a\"b'c", -1, CPLES_SQLI));
+  EXPECT_STREQ("a\"\"b'c", esc.get());
+  unesc.reset(CPLUnescapeString("a\"\"b", &len, CPLES_SQLI));
+  EXPECT_STREQ("a\"b", unesc.get());
 
   // CSV with CPLES_CSV_FORCE_QUOTING.
-  esc = CPLEscapeString(" leading_space", -1, CPLES_CSV);
-  EXPECT_STREQ(" leading_space", esc);
-  CPLFree(esc);
+  esc.reset(CPLEscapeString(" leading_space", -1, CPLES_CSV));
+  EXPECT_STREQ(" leading_space", esc.get());
 
-  esc = CPLEscapeString("", -1, CPLES_CSV_FORCE_QUOTING);
-  EXPECT_STREQ("\"\"", esc);
-  CPLFree(esc);
+  esc.reset(CPLEscapeString("", -1, CPLES_CSV_FORCE_QUOTING));
+  EXPECT_STREQ("\"\"", esc.get());
 
-  esc = CPLEscapeString("plain", -1, CPLES_CSV_FORCE_QUOTING);
-  EXPECT_STREQ("\"plain\"", esc);
-  CPLFree(esc);
+  esc.reset(CPLEscapeString("plain", -1, CPLES_CSV_FORCE_QUOTING));
+  EXPECT_STREQ("\"plain\"", esc.get());
 
-  esc = CPLEscapeString("with\"quote", -1, CPLES_CSV_FORCE_QUOTING);
-  EXPECT_STREQ("\"with\"\"quote\"", esc);
-  CPLFree(esc);
+  esc.reset(CPLEscapeString("with\"quote", -1, CPLES_CSV_FORCE_QUOTING));
+  EXPECT_STREQ("\"with\"\"quote\"", esc.get());
 
   // CPLGetValueType additional branches.
   EXPECT_EQ(CPL_VALUE_INTEGER, CPLGetValueType("   42"));
@@ -1662,10 +1532,11 @@ TEST(CplStringTest, EscapeUnescapeCommandLineAndSqlComments) {
   EXPECT_EQ(CPL_VALUE_STRING, CPLGetValueType("1e5000"));
 
   // CSLParseCommandLine.
-  char** cmd = CSLParseCommandLine(
-      "prog \"arg1 with \\\" quote\" 'arg2 with \\' quote' \\\\ plain");
-  EXPECT_GE(CSLCount(cmd), 4);
-  CSLDestroy(cmd);
+  StringListPtr cmd(
+      CSLParseCommandLine(
+          "prog \"arg1 with \\\" quote\" 'arg2 with \\' quote' \\\\ plain"),
+      CSLDestroy);
+  EXPECT_GE(CSLCount(cmd.get()), 4);
 
   // CPLToupper and CPLTolower.
   EXPECT_EQ('A', CPLToupper('a'));

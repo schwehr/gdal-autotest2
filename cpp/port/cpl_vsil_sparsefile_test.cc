@@ -22,7 +22,6 @@
 #include <string>
 
 #include "testing/base/public/gunit.h"
-#include "third_party/absl/strings/str_cat.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/autotest2/cpp/util/vsimem.h"
 #include "third_party/gdal/port/cpl_vsi.h"
@@ -59,8 +58,7 @@ TEST(CplVsilSparsefileTest, HandlerErrorsAndUnsupportedOperations) {
   VsiMemTempWrapper bad_xml_wrapper(bad_xml, "<VSISparseFile>");
   {
     WithQuietHandler quiet;
-    EXPECT_EQ(nullptr,
-              VSIFOpenL(absl::StrCat("/vsisparse/", bad_xml).c_str(), "rb"));
+    EXPECT_EQ(nullptr, VSIFOpenL(("/vsisparse/" + bad_xml).c_str(), "rb"));
   }
 
   // Unsupported filesystem methods return -1 or nullptr with EACCES.
@@ -87,8 +85,8 @@ TEST(CplVsilSparsefileTest, HandlerErrorsAndUnsupportedOperations) {
 TEST(CplVsilSparsefileTest, ReadSeekTellAndStatAcrossRegions) {
   const std::string subfile1 = "/vsimem/sparse_part1.bin";
   const std::string subfile2 = "/vsimem/sparse_part2.bin";
-  autotest2::VsiMemTempWrapper wrap1(subfile1, "0123456789");
-  autotest2::VsiMemTempWrapper wrap2(subfile2, "ABCDEF");
+  VsiMemTempWrapper wrap1(subfile1, "0123456789");
+  VsiMemTempWrapper wrap2(subfile2, "ABCDEF");
 
   // XML without top-level <Length> so overall length is computed from regions:
   // - [0..4): SubfileRegion from sparse_part1.bin (relative="1") at source
@@ -120,8 +118,8 @@ TEST(CplVsilSparsefileTest, ReadSeekTellAndStatAcrossRegions) {
 </VSISparseFile>)xml";
 
   const std::string xml_file = "/vsimem/sparse_test.xml";
-  autotest2::VsiMemTempWrapper xml_wrap(xml_file, xml_content);
-  const std::string sparse_path = absl::StrCat("/vsisparse/", xml_file);
+  VsiMemTempWrapper xml_wrap(xml_file, xml_content);
+  const std::string sparse_path = "/vsisparse/" + xml_file;
 
   VSIStatBufL stat_buf;
   ASSERT_EQ(0, VSIStatL(sparse_path.c_str(), &stat_buf));
@@ -193,7 +191,7 @@ TEST(CplVsilSparsefileTest, ReadSeekTellAndStatAcrossRegions) {
 
 TEST(CplVsilSparsefileTest, ErrorPathsMissingSubfileShortReadAndRecursion) {
   const std::string short_subfile = "/vsimem/sparse_short.bin";
-  autotest2::VsiMemTempWrapper short_wrap(short_subfile, "123");
+  VsiMemTempWrapper short_wrap(short_subfile, "123");
 
   // XML with explicit <Length>30</Length>:
   // - [0..10): SubfileRegion pointing to non-existent file
@@ -215,8 +213,8 @@ TEST(CplVsilSparsefileTest, ErrorPathsMissingSubfileShortReadAndRecursion) {
 </VSISparseFile>)xml";
 
   const std::string xml_file = "/vsimem/sparse_errors.xml";
-  autotest2::VsiMemTempWrapper xml_wrap(xml_file, xml_content);
-  const std::string sparse_path = absl::StrCat("/vsisparse/", xml_file);
+  VsiMemTempWrapper xml_wrap(xml_file, xml_content);
+  const std::string sparse_path = "/vsisparse/" + xml_file;
 
   VSILFILE* fp = VSIFOpenL(sparse_path.c_str(), "r");
   ASSERT_NE(nullptr, fp);
@@ -257,10 +255,9 @@ TEST(CplVsilSparsefileTest, ErrorPathsMissingSubfileShortReadAndRecursion) {
     <RegionLength>10</RegionLength>
   </SubfileRegion>
 </VSISparseFile>)xml";
-  autotest2::VsiMemTempWrapper self_wrap(self_xml, self_xml_content);
+  VsiMemTempWrapper self_wrap(self_xml, self_xml_content);
 
-  VSILFILE* fp_self =
-      VSIFOpenL(absl::StrCat("/vsisparse/", self_xml).c_str(), "rb");
+  VSILFILE* fp_self = VSIFOpenL(("/vsisparse/" + self_xml).c_str(), "rb");
   ASSERT_NE(nullptr, fp_self);
   EXPECT_EQ(0, VSIFReadL(buf, 1, 4, fp_self));
   EXPECT_NE(0, VSIFErrorL(fp_self));

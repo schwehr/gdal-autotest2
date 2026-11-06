@@ -1,10 +1,10 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,6 +16,7 @@
 
 #include "third_party/gdal/port/cpl_json_streaming_parser.h"
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -23,10 +24,11 @@
 #include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
 
-namespace gdal {
+namespace autotest2 {
 namespace {
 
 using ::testing::ElementsAre;
+using ::testing::HasSubstr;
 
 class RecordingParser : public CPLJSonStreamingParser {
  public:
@@ -173,6 +175,7 @@ TEST(CplJsonStreamingParserTest, TopLevelScalarsAndStopParsing) {
   EXPECT_TRUE(ParseAllAtOnce(&p, "-Infinity"));
   EXPECT_TRUE(ParseAllAtOnce(&p, "NaN"));
   EXPECT_TRUE(ParseAllAtOnce(&p, "nan"));
+  EXPECT_TRUE(ParseAllAtOnce(&p, "\"top_str\""));
   EXPECT_TRUE(ParseCharByChar(&p, "true"));
   EXPECT_TRUE(ParseCharByChar(&p, "false"));
   EXPECT_TRUE(ParseCharByChar(&p, "null"));
@@ -229,46 +232,159 @@ TEST(CplJsonStreamingParserTest, UnicodeEscapesAndSurrogates) {
 TEST(CplJsonStreamingParserTest, LimitsAndSyntaxErrors) {
   RecordingParser p;
 
-  // Max depth exceeded for objects and arrays.
+  // Max depth exceeded for objects and arrays (including at top-level INIT
+  // state when MaxDepth == 1, where m_aState.size() == 1).
+  p.SetMaxDepth(1);
+  EXPECT_FALSE(ParseAllAtOnce(&p, "["));
+  EXPECT_THAT(p.exceptions,
+              ElementsAre(HasSubstr("Too many nested objects and/or arrays")));
+  EXPECT_FALSE(ParseAllAtOnce(&p, "{\"key\":{}}"));
+  EXPECT_THAT(p.exceptions,
+              ElementsAre(HasSubstr("Too many nested objects and/or arrays")));
   p.SetMaxDepth(2);
   EXPECT_FALSE(ParseAllAtOnce(&p, "[[[]]]"));
+  EXPECT_THAT(p.exceptions,
+              ElementsAre(HasSubstr("Too many nested objects and/or arrays")));
   EXPECT_FALSE(ParseAllAtOnce(&p, "{\"a\":{\"b\":{\"c\":1}}}"));
+  EXPECT_THAT(p.exceptions,
+              ElementsAre(HasSubstr("Too many nested objects and/or arrays")));
   p.SetMaxDepth(1024);
+
+  // Unterminated array with trailing whitespace in final chunk.
+  p.Reset();
+  p.exceptions.clear();
+  EXPECT_TRUE(p.Parse("[1,", false));
+  EXPECT_FALSE(p.Parse("   ", true));
+  EXPECT_TRUE(p.ExceptionOccurred());
+  EXPECT_THAT(p.exceptions, ElementsAre(HasSubstr("Unterminated array")));
 
   // Max string size exceeded in fast path and slow (escaped/chunked) path.
   p.SetMaxStringSize(4);
   EXPECT_FALSE(ParseAllAtOnce(&p, "\"12345\""));
+  EXPECT_THAT(p.exceptions, ElementsAre(HasSubstr("Too many characters")));
   EXPECT_FALSE(ParseCharByChar(&p, "\"12345\""));
+  EXPECT_THAT(p.exceptions, ElementsAre(HasSubstr("Too many characters")));
   EXPECT_FALSE(ParseAllAtOnce(&p, "\"12\\n45\""));
+  EXPECT_THAT(p.exceptions, ElementsAre(HasSubstr("Too many characters")));
   p.SetMaxStringSize(10000000);
 
   // Number > 1024 chars.
   std::string huge_num(1030, '9');
   EXPECT_FALSE(ParseAllAtOnce(&p, huge_num));
+  EXPECT_THAT(p.exceptions,
+              ElementsAre(HasSubstr("Too many characters in number")));
 
-  // Various invalid JSON inputs covering every error branch.
-  const char* kInvalidInputs[] = {
-      "true false",  "@",           "\"unterminated",
-      "\"\\x\"",     "\"\\",        "\"\\u12\"",
-      "123a",        "Inf",         "Inf,",
-      "-Inf",        "-Inf,",       "Na",
-      "Na,",         "[1",          "{\"a\":1",
-      "[,]",         "[1,,2]",      "[1,]",
-      "[1 2]",       "[@]",         "{,}",
-      "{\"a\":1,,}", "{:}",         "{\"a\"::1}",
-      "{",           "{\"a\"}",     "{\"a\":}",
-      "{1:2}",       "{\"a\":1 2}", "{\"a\":1 @}",
-      "tru",         "truX",        "trueX",
-      "tr@",         "fals",        "falsX",
-      "falseX",      "fa@",         "nul",
-      "nulX",        "nullX",       "nu@",
+  // Various invalid JSON inputs covering every error branch and exception text.
+  struct InvalidCase {
+    std::string_view input;
+    std::string_view expected_exception;
+  };
+  constexpr InvalidCase kInvalidCases[] = {
+      {.input = "true false", .expected_exception = "Unexpected character (f)"},
+      {.input = "@", .expected_exception = "Unexpected character (@)"},
+      {.input = "x", .expected_exception = "Unexpected character (x)"},
+      {.input = "}", .expected_exception = "Unexpected character (})"},
+      {.input = "]", .expected_exception = "Unexpected character (])"},
+      {.input = "\"unterminated", .expected_exception = "Unterminated string"},
+      {.input = "\"", .expected_exception = "Unterminated string"},
+      {.input = "\"\\", .expected_exception = "Unterminated string"},
+      {.input = "\"\\\"", .expected_exception = "Unterminated string"},
+      {.input = "\"\\u", .expected_exception = "Unterminated string"},
+      {.input = "\"\\u12\"",
+       .expected_exception = "Illegal character in unicode sequence"},
+      {.input = "\"\\u000", .expected_exception = "Unterminated string"},
+      {.input = "\"\\x\"",
+       .expected_exception = "Illegal escape sequence (\\x)"},
+      {.input = "\"\\x", .expected_exception = "Illegal escape sequence (\\x)"},
+      {.input = "\"\\ux",
+       .expected_exception = "Illegal character in unicode sequence (\\x)"},
+      {.input = "\"\\uD834\\ux",
+       .expected_exception = "Illegal character in unicode sequence (\\x)"},
+      {.input = "123a", .expected_exception = "Unexpected character (a)"},
+      {.input = "1x", .expected_exception = "Unexpected character (x)"},
+      {.input = "Inf", .expected_exception = "Invalid number"},
+      {.input = "Inf,", .expected_exception = "Unexpected character (,)"},
+      {.input = "-Inf", .expected_exception = "Invalid number"},
+      {.input = "-Inf,", .expected_exception = "Unexpected character (,)"},
+      {.input = "infinit", .expected_exception = "Invalid number"},
+      {.input = "infinityx", .expected_exception = "Unexpected character (x)"},
+      {.input = "Na", .expected_exception = "Invalid number"},
+      {.input = "Na,", .expected_exception = "Unexpected character (,)"},
+      {.input = "na", .expected_exception = "Invalid number"},
+      {.input = "nanx", .expected_exception = "Unexpected character (x)"},
+      {.input = "[", .expected_exception = "Unterminated array"},
+      {.input = "[1", .expected_exception = "Unterminated array"},
+      {.input = "[,", .expected_exception = "Unexpected character (,)"},
+      {.input = "[|", .expected_exception = "Unexpected character (|)"},
+      {.input = "[,]", .expected_exception = "Unexpected character (,)"},
+      {.input = "[1,,2]", .expected_exception = "Unexpected character (,)"},
+      {.input = "[true,,true]",
+       .expected_exception = "Unexpected character (,)"},
+      {.input = "[1,]", .expected_exception = "Missing value"},
+      {.input = "[true,]", .expected_exception = "Missing value"},
+      {.input = "[1 2]", .expected_exception = "Unexpected state"},
+      {.input = "[true true]", .expected_exception = "Unexpected state"},
+      {.input = "[@]", .expected_exception = "Unexpected character (@)"},
+      {.input = "{", .expected_exception = "Unterminated object"},
+      {.input = "{\"a\":1", .expected_exception = "Unterminated object"},
+      {.input = "{\"x\"", .expected_exception = "Unterminated object"},
+      {.input = "{\"x\":", .expected_exception = "Unterminated object"},
+      {.input = "{,}", .expected_exception = "Unexpected character (,)"},
+      {.input = "{ ,", .expected_exception = "Unexpected character (,)"},
+      {.input = "{\"x\",", .expected_exception = "Unexpected character (,)"},
+      {.input = "{\"a\":1,,}",
+       .expected_exception = "Unexpected character (,)"},
+      {.input = "{:}", .expected_exception = "Unexpected character (:)"},
+      {.input = "{ :", .expected_exception = "Unexpected character (:)"},
+      {.input = "{ |", .expected_exception = "Unexpected character (|)"},
+      {.input = "{ 1", .expected_exception = "Unexpected character (1)"},
+      {.input = "{\"a\"::1}", .expected_exception = "Unexpected character (:)"},
+      {.input = "{\"a\"}", .expected_exception = "Missing value"},
+      {.input = "{\"x\"}", .expected_exception = "Missing value"},
+      {.input = "{\"a\":}", .expected_exception = "Missing value"},
+      {.input = "{1:2}", .expected_exception = "Unexpected character (1)"},
+      {.input = "{\"a\" x}", .expected_exception = "Unexpected character (x)"},
+      {.input = "{\"a\":1 2}", .expected_exception = "Unexpected state"},
+      {.input = "{\"x\": 1 2", .expected_exception = "Unexpected state"},
+      {.input = "{\"a\":1 @}",
+       .expected_exception = "Unexpected character (@)"},
+      {.input = "tru", .expected_exception = "Unexpected character"},
+      {.input = "tru1", .expected_exception = "Unexpected character (1)"},
+      {.input = "truX", .expected_exception = "Unexpected character (X)"},
+      {.input = "truxe", .expected_exception = "Unexpected character (x)"},
+      {.input = "trueX", .expected_exception = "Unexpected character (X)"},
+      {.input = "truex", .expected_exception = "Unexpected character (x)"},
+      {.input = "tr@", .expected_exception = "Unexpected character (@)"},
+      {.input = "fals", .expected_exception = "Unexpected character"},
+      {.input = "falsX", .expected_exception = "Unexpected character (X)"},
+      {.input = "falsxe", .expected_exception = "Unexpected character (x)"},
+      {.input = "falseX", .expected_exception = "Unexpected character (X)"},
+      {.input = "falsex", .expected_exception = "Unexpected character (x)"},
+      {.input = "fa@", .expected_exception = "Unexpected character (@)"},
+      {.input = "nul", .expected_exception = "Unexpected character"},
+      {.input = "nulX", .expected_exception = "Unexpected character (X)"},
+      {.input = "nulxl", .expected_exception = "Unexpected character (x)"},
+      {.input = "nullX", .expected_exception = "Unexpected character (X)"},
+      {.input = "nullx", .expected_exception = "Unexpected character (x)"},
+      {.input = "nu@", .expected_exception = "Unexpected character (@)"},
   };
 
-  for (const char* bad : kInvalidInputs) {
-    EXPECT_FALSE(ParseAllAtOnce(&p, bad)) << "Expected failure for: " << bad;
-    EXPECT_TRUE(p.ExceptionOccurred()) << "Expected exception for: " << bad;
+  for (const auto& tc : kInvalidCases) {
+    SCOPED_TRACE(tc.input);
+    EXPECT_FALSE(ParseAllAtOnce(&p, tc.input));
+    EXPECT_TRUE(p.ExceptionOccurred());
+    EXPECT_THAT(p.exceptions, ElementsAre(HasSubstr(tc.expected_exception)));
+  }
+
+  // Exercise the chunked (m_osToken non-empty) delimiter-break path in NUMBER
+  // state on incomplete Infinity/-Infinity/NaN tokens.
+  for (std::string_view input : {"Inf,", "-Inf,", "Na,"}) {
+    SCOPED_TRACE(input);
+    EXPECT_FALSE(ParseCharByChar(&p, input));
+    EXPECT_TRUE(p.ExceptionOccurred());
+    EXPECT_THAT(p.exceptions, ElementsAre(HasSubstr("Invalid number")));
   }
 }
 
 }  // namespace
-}  // namespace gdal
+}  // namespace autotest2

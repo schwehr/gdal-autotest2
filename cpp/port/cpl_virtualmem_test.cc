@@ -28,11 +28,10 @@
 #include <vector>
 
 #include "testing/base/public/gunit.h"
-#include "third_party/absl/strings/str_cat.h"
+#include "third_party/absl/cleanup/cleanup.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/autotest2/cpp/util/vsimem.h"
-#include "third_party/gdal/port/cpl_conv.h"
-#include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 
 namespace autotest2 {
@@ -92,9 +91,13 @@ TEST(CplVirtualMemTest, PageSizeAndFileMapBasic) {
 
   // Real local file mapping.
   const std::string path =
-      absl::StrCat(testing::TempDir(), "/vmem_filemap_test.bin");
+      std::string(testing::TempDir()) + "/vmem_filemap_test.bin";
+  absl::Cleanup unlink_path = [&path] { VSIUnlink(path.c_str()); };
   VSILFILE* fp = VSIFOpenL(path.c_str(), "wb+");
   ASSERT_NE(nullptr, fp);
+  absl::Cleanup close_fp = [&fp] {
+    if (fp != nullptr) EXPECT_EQ(0, VSIFCloseL(fp));
+  };
   std::string initial(page_size + 500, 'A');
   ASSERT_EQ(1u, VSIFWriteL(initial.data(), initial.size(), 1, fp));
   ASSERT_EQ(0, VSIFFlushL(fp));
@@ -113,6 +116,11 @@ TEST(CplVirtualMemTest, PageSizeAndFileMapBasic) {
                                                 VIRTUALMEM_READWRITE,
                                                 FreeUserDataCallback, &stats);
   ASSERT_NE(nullptr, vmem);
+  CPLVirtualMem* derived = nullptr;
+  absl::Cleanup free_vmem = [&vmem, &derived] {
+    if (vmem != nullptr) CPLVirtualMemFree(vmem);
+    if (derived != nullptr) CPLVirtualMemFree(derived);
+  };
   EXPECT_EQ(TRUE, CPLVirtualMemIsFileMapping(vmem));
   EXPECT_EQ(VIRTUALMEM_READWRITE, CPLVirtualMemGetAccessMode(vmem));
   EXPECT_EQ(page_size, CPLVirtualMemGetPageSize(vmem));
@@ -134,24 +142,28 @@ TEST(CplVirtualMemTest, PageSizeAndFileMapBasic) {
   EXPECT_EQ(nullptr, CPLVirtualMemDerivedNew(vmem, initial.size() + 500, 1000,
                                              nullptr, nullptr));
   CacheStats derived_stats;
-  CPLVirtualMem* derived = CPLVirtualMemDerivedNew(
-      vmem, 10, 200, FreeUserDataCallback, &derived_stats);
+  derived = CPLVirtualMemDerivedNew(vmem, 10, 200, FreeUserDataCallback,
+                                    &derived_stats);
   ASSERT_NE(nullptr, derived);
   EXPECT_EQ(200u, CPLVirtualMemGetSize(derived));
   EXPECT_EQ(ptr + 10, CPLVirtualMemGetAddr(derived));
 
   // Free base first (decrement refcount), then derived (frees both).
   CPLVirtualMemFree(vmem);
+  vmem = nullptr;
   EXPECT_EQ(0, stats.free_calls);
   CPLVirtualMemFree(derived);
+  derived = nullptr;
   EXPECT_EQ(1, derived_stats.free_calls);
   EXPECT_EQ(1, stats.free_calls);
 
   EXPECT_EQ(0, VSIFCloseL(fp));
+  fp = nullptr;
 
   // Read-only file with read-write mapping beyond file size fails to extend.
   VSILFILE* fp_ro = VSIFOpenL(path.c_str(), "rb");
   ASSERT_NE(nullptr, fp_ro);
+  absl::Cleanup close_fp_ro = [fp_ro] { EXPECT_EQ(0, VSIFCloseL(fp_ro)); };
   {
     WithQuietHandler quiet;
     EXPECT_EQ(nullptr,
@@ -162,8 +174,6 @@ TEST(CplVirtualMemTest, PageSizeAndFileMapBasic) {
               CPLVirtualMemFileMapNew(fp_ro, 0, 100, VIRTUALMEM_READWRITE,
                                       nullptr, nullptr));
   }
-  EXPECT_EQ(0, VSIFCloseL(fp_ro));
-  VSIUnlink(path.c_str());
 }
 
 // CPLVirtualMemMsgToWorkerThread in third_party/gdal/port/cpl_virtualmem.cpp

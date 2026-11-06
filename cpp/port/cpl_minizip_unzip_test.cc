@@ -28,11 +28,11 @@
 #include "third_party/absl/cleanup/cleanup.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/autotest2/cpp/util/vsimem.h"
-#include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_minizip_ioapi.h"
 #include "third_party/gdal/port/cpl_minizip_zip.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 
+namespace autotest2 {
 namespace {
 
 void AppendU16(std::vector<uint8_t>& buf, uint16_t val) {
@@ -527,6 +527,9 @@ TEST(CplMinizipUnzipTest, Zip64AndExtraFieldsAndUnicodePath) {
 
   unzFile uf = cpl_unzOpen(zip_path.c_str());
   ASSERT_NE(uf, nullptr);
+  absl::Cleanup close_uf = [&uf] {
+    if (uf != nullptr) EXPECT_EQ(cpl_unzClose(uf), UNZ_OK);
+  };
 
   // Entry 1: test truncated filename buffer (so lSeek > 0 before extra field!)
   unz_file_info fi = {};
@@ -558,8 +561,6 @@ TEST(CplMinizipUnzipTest, Zip64AndExtraFieldsAndUnicodePath) {
                                       nullptr, 0, nullptr, 0),
             UNZ_OK);
   EXPECT_STREQ(full_buf, "\xC3\xA9.txt");
-
-  ASSERT_EQ(cpl_unzClose(uf), UNZ_OK);
 }
 
 TEST(CplMinizipUnzipTest, CorruptAndErrorConditions) {
@@ -728,6 +729,9 @@ TEST(CplMinizipUnzipTest, CorruptAndErrorConditions) {
 
     unzFile uf = cpl_unzOpen(corrupt_zip.c_str());
     ASSERT_NE(uf, nullptr);
+    absl::Cleanup close_uf = [&uf] {
+      if (uf != nullptr) EXPECT_EQ(cpl_unzClose(uf), UNZ_OK);
+    };
 
     // Entry 0: unsupported compression method (99)
     {
@@ -769,9 +773,8 @@ TEST(CplMinizipUnzipTest, CorruptAndErrorConditions) {
     EXPECT_EQ(cpl_unzGetFilePos(uf, &pos), UNZ_END_OF_LIST_OF_FILE);
     EXPECT_EQ(cpl_unzOpenCurrentFile(uf), UNZ_PARAMERROR);
     EXPECT_EQ(cpl_unzGetOffset(uf), 0U);
-
-    ASSERT_EQ(cpl_unzClose(uf), UNZ_OK);
   }
 }
 
 }  // namespace
+}  // namespace autotest2

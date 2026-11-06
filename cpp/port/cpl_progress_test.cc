@@ -16,8 +16,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// GDALTermProgress keeps its state in function-local statics and reads the
-// wall clock directly, so the estimated-remaining-time branch (which also
+// GDALTermProgress keeps its state in function-local static variables and reads
+// the wall clock directly, so the estimated-remaining-time branch (which also
 // requires stdout to be a TTY) is not unit-testable without a seam in
 // upstream GDAL. Only the clock-independent behaviour is covered here.
 

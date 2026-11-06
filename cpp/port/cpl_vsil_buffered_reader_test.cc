@@ -21,13 +21,15 @@
 #include <cstring>
 #include <memory>
 #include <string>
-#include <vector>
+#include <utility>
 
 #include "testing/base/public/gunit.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
+#include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 #include "third_party/gdal/port/cpl_vsi_virtual.h"
 
+namespace autotest2 {
 namespace {
 
 // A customizable underlying VSIVirtualHandle to test seek failures, short
@@ -269,3 +271,4 @@ TEST(CplVsilBufferedReaderTest, ReadErrorAndSeekBaseToFailureFromBuffer) {
 }
 
 }  // namespace
+}  // namespace autotest2

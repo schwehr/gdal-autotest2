@@ -25,9 +25,8 @@
 
 #include "testing/base/public/gunit.h"
 #include "third_party/absl/cleanup/cleanup.h"
-#include "third_party/absl/strings/str_cat.h"
-#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/port/cpl_conv.h"
+#include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_string.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 #include "third_party/gdal/port/cpl_vsi_virtual.h"
@@ -37,16 +36,16 @@ namespace {
 
 TEST(CplVsilUnixStdio64Test, OpenReadWriteSeekAndVsiCacheOption) {
   const std::string base_dir =
-      absl::StrCat(::testing::TempDir(), "/unix_stdio_64_rw");
+      std::string(::testing::TempDir()) + "/unix_stdio_64_rw";
   ASSERT_EQ(0, VSIMkdir(base_dir.c_str(), 0755));
   absl::Cleanup rm_dir = [&base_dir] { VSIRmdirRecursive(base_dir.c_str()); };
 
   // Opening non-existent file with bSetError=true and bSetError=false.
-  const std::string missing_file = absl::StrCat(base_dir, "/missing.bin");
+  const std::string missing_file = base_dir + "/missing.bin";
   EXPECT_EQ(nullptr, VSIFOpenExL(missing_file.c_str(), "rb", TRUE));
   EXPECT_EQ(nullptr, VSIFOpenExL(missing_file.c_str(), "rb", FALSE));
 
-  const std::string filepath = absl::StrCat(base_dir, "/test.bin");
+  const std::string filepath = base_dir + "/test.bin";
   VSILFILE* fp = VSIFOpenL(filepath.c_str(), "wb+");
   ASSERT_NE(nullptr, fp);
 
@@ -121,7 +120,7 @@ TEST(CplVsilUnixStdio64Test, OpenReadWriteSeekAndVsiCacheOption) {
 
 TEST(CplVsilUnixStdio64Test, CreateOnlyVisibleAtCloseTimeAndCancelCreation) {
   const std::string base_dir =
-      absl::StrCat(::testing::TempDir(), "/unix_stdio_64_atomic");
+      std::string(::testing::TempDir()) + "/unix_stdio_64_atomic";
   ASSERT_EQ(0, VSIMkdir(base_dir.c_str(), 0755));
   absl::Cleanup rm_dir = [&base_dir] { VSIRmdirRecursive(base_dir.c_str()); };
 
@@ -129,7 +128,7 @@ TEST(CplVsilUnixStdio64Test, CreateOnlyVisibleAtCloseTimeAndCancelCreation) {
   ASSERT_NE(nullptr, handler);
 
   // 1. Create file only visible at close time and close normally.
-  const std::string target1 = absl::StrCat(base_dir, "/visible_on_close.bin");
+  const std::string target1 = base_dir + "/visible_on_close.bin";
   {
     auto handle1 =
         handler->CreateOnlyVisibleAtCloseTime(target1.c_str(), true, nullptr);
@@ -142,7 +141,7 @@ TEST(CplVsilUnixStdio64Test, CreateOnlyVisibleAtCloseTimeAndCancelCreation) {
   EXPECT_EQ(4, stat_buf.st_size);
 
   // 2. Create file only visible at close time and call CancelCreation().
-  const std::string target2 = absl::StrCat(base_dir, "/cancelled_on_close.bin");
+  const std::string target2 = base_dir + "/cancelled_on_close.bin";
   {
     auto handle2 =
         handler->CreateOnlyVisibleAtCloseTime(target2.c_str(), true, nullptr);
@@ -154,7 +153,7 @@ TEST(CplVsilUnixStdio64Test, CreateOnlyVisibleAtCloseTimeAndCancelCreation) {
   EXPECT_EQ(-1, VSIStatL(target2.c_str(), &stat_buf));
 
   // 3. Also test CancelCreation() on a normal handle (where !m_bUnlinkedFile).
-  const std::string target3 = absl::StrCat(base_dir, "/normal_cancelled.bin");
+  const std::string target3 = base_dir + "/normal_cancelled.bin";
   {
     auto handle3 = handler->Open(target3.c_str(), "wb+", false, nullptr);
     ASSERT_NE(nullptr, handle3);
@@ -165,15 +164,14 @@ TEST(CplVsilUnixStdio64Test, CreateOnlyVisibleAtCloseTimeAndCancelCreation) {
 
   // 4. Test CreateOnlyVisibleAtCloseTime in a non-existent directory so
   // open(O_TMPFILE) fails and falls back to emulation.
-  const std::string bad_target =
-      absl::StrCat(base_dir, "/no_such_subdir/file.bin");
+  const std::string bad_target = base_dir + "/no_such_subdir/file.bin";
   EXPECT_EQ(nullptr, handler->CreateOnlyVisibleAtCloseTime(bad_target.c_str(),
                                                            false, nullptr));
 }
 
 TEST(CplVsilUnixStdio64Test, FilesystemQueriesSparseFilesAndRangeStatus) {
   const std::string base_dir =
-      absl::StrCat(::testing::TempDir(), "/unix_stdio_64_fs");
+      std::string(::testing::TempDir()) + "/unix_stdio_64_fs";
   ASSERT_EQ(0, VSIMkdir(base_dir.c_str(), 0755));
   absl::Cleanup rm_dir = [&base_dir] { VSIRmdirRecursive(base_dir.c_str()); };
 
@@ -182,8 +180,7 @@ TEST(CplVsilUnixStdio64Test, FilesystemQueriesSparseFilesAndRangeStatus) {
   EXPECT_TRUE(VSISupportsSequentialWrite(base_dir.c_str(), false));
   EXPECT_TRUE(VSISupportsRandomWrite(base_dir.c_str(), false));
 
-  const std::string non_existent_child =
-      absl::StrCat(base_dir, "/non_existent_child.bin");
+  const std::string non_existent_child = base_dir + "/non_existent_child.bin";
   EXPECT_TRUE(VSISupportsSequentialWrite(non_existent_child.c_str(), false));
   EXPECT_TRUE(VSISupportsRandomWrite(non_existent_child.c_str(), false));
 
@@ -191,9 +188,10 @@ TEST(CplVsilUnixStdio64Test, FilesystemQueriesSparseFilesAndRangeStatus) {
   EXPECT_EQ(FALSE, VSISupportsSparseFiles("/does/not/exist/path"));
 
   // Create a file with a sparse hole and query VSIFGetRangeStatusL.
-  const std::string sparse_file = absl::StrCat(base_dir, "/sparse.bin");
+  const std::string sparse_file = base_dir + "/sparse.bin";
   VSILFILE* fp = VSIFOpenL(sparse_file.c_str(), "wb+");
   ASSERT_NE(nullptr, fp);
+  absl::Cleanup close_fp = [fp] { EXPECT_EQ(0, VSIFCloseL(fp)); };
   // Seek forward 1MB and write 4KB at the end.
   ASSERT_EQ(0, VSIFSeekL(fp, 1024 * 1024, SEEK_SET));
   std::string block(4096, 'X');
@@ -218,21 +216,19 @@ TEST(CplVsilUnixStdio64Test, FilesystemQueriesSparseFilesAndRangeStatus) {
     // to yield HOLE for written data either.
     EXPECT_NE(VSI_RANGE_STATUS_HOLE, status_data);
   }
-
-  EXPECT_EQ(0, VSIFCloseL(fp));
 }
 
 TEST(CplVsilUnixStdio64Test, ReadDirExAndOpenDirWithRecursionAndFilters) {
   const std::string base_dir =
-      absl::StrCat(::testing::TempDir(), "/unix_stdio_64_dir");
+      std::string(::testing::TempDir()) + "/unix_stdio_64_dir";
   ASSERT_EQ(0, VSIMkdir(base_dir.c_str(), 0755));
   absl::Cleanup rm_dir = [&base_dir] { VSIRmdirRecursive(base_dir.c_str()); };
 
-  const std::string sub_dir = absl::StrCat(base_dir, "/sub");
+  const std::string sub_dir = base_dir + "/sub";
   ASSERT_EQ(0, VSIMkdir(sub_dir.c_str(), 0755));
 
-  const std::string file1 = absl::StrCat(base_dir, "/file1.txt");
-  const std::string file2 = absl::StrCat(sub_dir, "/file2.txt");
+  const std::string file1 = base_dir + "/file1.txt";
+  const std::string file2 = sub_dir + "/file2.txt";
   VSILFILE* fp1 = VSIFOpenL(file1.c_str(), "wb");
   ASSERT_NE(nullptr, fp1);
   EXPECT_EQ(3, VSIFWriteL("abc", 1, 3, fp1));
@@ -244,7 +240,7 @@ TEST(CplVsilUnixStdio64Test, ReadDirExAndOpenDirWithRecursionAndFilters) {
   ASSERT_EQ(0, VSIFCloseL(fp2));
 
   // Create a symlink inside base_dir to exercise DT_LNK.
-  const std::string link_path = absl::StrCat(base_dir, "/link1.txt");
+  const std::string link_path = base_dir + "/link1.txt";
   EXPECT_EQ(0, symlink(file1.c_str(), link_path.c_str()));
 
   // ReadDirEx with max_files=1 stops after the first entry past the limit, so

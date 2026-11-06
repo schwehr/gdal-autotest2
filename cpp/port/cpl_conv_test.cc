@@ -1,7 +1,4 @@
-// Test convenience functions:
-//   https://github.com/OSGeo/gdal/blob/master/port/cpl_conv.cpp
-//
-// Copyright 2014 Google Inc. All Rights Reserved.
+// Copyright 2014 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,6 +11,9 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Test convenience functions:
+//   https://github.com/OSGeo/gdal/blob/master/port/cpl_conv.cpp
 
 #include "third_party/gdal/port/cpl_conv.h"
 
@@ -27,16 +27,17 @@
 #include <cstring>
 #include <ctime>
 #include <filesystem>  // NOLINT
+#include <latch>  // NOLINT
 #include <limits>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <thread>  // NOLINT
 
 #include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
 #include "third_party/absl/cleanup/cleanup.h"
-#include "third_party/absl/strings/string_view.h"
-#include "third_party/absl/synchronization/barrier.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_cstringlist.h"
 #include "third_party/gdal/autotest2/cpp/util/cpl_memory.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/port/cpl_error.h"
@@ -163,13 +164,11 @@ TEST_F(CplConvTest, Memory) {
 TEST_F(CplConvTest, Strings) {
   // Unlike strdup, CPLStrdup of a nullptr returns the empty string
   // per documentation.
-  char* ptr = CPLStrdup(nullptr);
-  EXPECT_STREQ("", ptr);
-  CPLFree(ptr);
+  std::unique_ptr<char, CplFreeDeleter> ptr(CPLStrdup(nullptr));
+  EXPECT_STREQ("", ptr.get());
 
-  ptr = CPLStrdup("abc123");
-  EXPECT_STREQ("abc123", ptr);
-  CPLFree(ptr);
+  ptr.reset(CPLStrdup("abc123"));
+  EXPECT_STREQ("abc123", ptr.get());
 
   char str[] = "AbC123";
   // Converts in place to lower case and returns the original pointer.
@@ -187,8 +186,10 @@ TEST_F(CplConvTest, CplFGets) {
 
 #if _XOPEN_SOURCE >= 700 || _POSIX_C_SOURCE >= 200809L  // fmemopen.
   std::string src_buf("\nfoo\rbar\r\nmuch longer line\n \n\n");
-  FILE* src = fmemopen(const_cast<char*>(src_buf.c_str()), src_buf.size(), "r");
-  const size_t kBufSize = 10;
+  FILE* src = fmemopen(src_buf.data(), src_buf.size(), "r");
+  ASSERT_NE(nullptr, src);
+  absl::Cleanup close_src = [src] { fclose(src); };
+  constexpr size_t kBufSize = 10;
   char buf[kBufSize];
 
   EXPECT_STREQ("", CPLFGets(buf, kBufSize, src));
@@ -207,7 +208,9 @@ TEST_F(CplConvTest, CplFGets) {
 TEST_F(CplConvTest, CplReadLine) {
 #if _XOPEN_SOURCE >= 700 || _POSIX_C_SOURCE >= 200809L  // fmemopen.
   std::string src_buf("\na\rb\r\nc\n \n");
-  FILE* src = fmemopen(const_cast<char*>(src_buf.c_str()), src_buf.size(), "r");
+  FILE* src = fmemopen(src_buf.data(), src_buf.size(), "r");
+  ASSERT_NE(nullptr, src);
+  absl::Cleanup close_src = [src] { fclose(src); };
 
   EXPECT_STREQ("", CPLReadLine(src));
   EXPECT_STREQ("a", CPLReadLine(src));
@@ -218,124 +221,154 @@ TEST_F(CplConvTest, CplReadLine) {
 #endif  // POSIX-2008.1
 }
 
-// TODO(schwehr): Write tests for CPLReadLineL.
-// TODO(schwehr): Write tests for CPLReadLine2L.
-
 // Tests returning a length limited copy of a string with optional
 // removal of trailing white space and optional replacement of colons
 // with under bars. The last 2 integer parameters are treated as booleans.
 TEST_F(CplConvTest, CplScanString) {
   EXPECT_EQ(nullptr, CPLScanString(nullptr, 0, 0, 0));
-  char* ptr = CPLScanString("", 0, 0, 0);
-  EXPECT_STREQ("", ptr);
-  CPLFree(ptr);
 
-  // nMaxLength greater than the string.
-  ptr = CPLScanString(" Foo", 10, 0, 0);
-  EXPECT_STREQ(" Foo", ptr);
-  CPLFree(ptr);
-
-  // nMaxLength less than the string.
-  ptr = CPLScanString(" FooBar", 4, 0, 0);
-  EXPECT_STREQ(" Foo", ptr);
-  CPLFree(ptr);
-
-  // Trim trailing spaces.
-  ptr = CPLScanString(" Foo ", 5, 1, 0);
-  EXPECT_STREQ(" Foo", ptr);
-  CPLFree(ptr);
-
-  // "Normalization" means replace all occurrences of ":" with "_".
-  ptr = CPLScanString(" :_:_", 5, 0, 1);
-  EXPECT_STREQ(" ____", ptr);
-  CPLFree(ptr);
-
-  // Trim trailing spaces and "normalize" by replacing ":" with "_".
-  ptr = CPLScanString(" :_ _:   ", 6, 1, 1);
-  EXPECT_STREQ(" __ __", ptr);
-  CPLFree(ptr);
+  struct TestCase {
+    const char* input;
+    int max_len;
+    int trim_spaces;
+    int normalize;
+    std::string_view expected;
+  };
+  constexpr TestCase kCases[] = {
+      {.input = "",
+       .max_len = 0,
+       .trim_spaces = 0,
+       .normalize = 0,
+       .expected = ""},
+      {.input = " Foo",
+       .max_len = 10,
+       .trim_spaces = 0,
+       .normalize = 0,
+       .expected = " Foo"},
+      {.input = " FooBar",
+       .max_len = 4,
+       .trim_spaces = 0,
+       .normalize = 0,
+       .expected = " Foo"},
+      {.input = " Foo ",
+       .max_len = 5,
+       .trim_spaces = 1,
+       .normalize = 0,
+       .expected = " Foo"},
+      {.input = " :_:_",
+       .max_len = 5,
+       .trim_spaces = 0,
+       .normalize = 1,
+       .expected = " ____"},
+      {.input = " :_ _:   ",
+       .max_len = 6,
+       .trim_spaces = 1,
+       .normalize = 1,
+       .expected = " __ __"},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.input);
+    std::unique_ptr<char, CplFreeDeleter> ptr(
+        CPLScanString(tc.input, tc.max_len, tc.trim_spaces, tc.normalize));
+    ASSERT_NE(nullptr, ptr);
+    EXPECT_EQ(tc.expected, ptr.get());
+  }
 }
 
 // Tests converting a string to an integer. CplScanLong is a wrapper
 // around atoi that adds setting a maximum number of characters.
 TEST_F(CplConvTest, CplScanLong) {
-  // A maximum length of 0 might be undefined based on the definitions
-  // atoi and strtol.
-  EXPECT_EQ(0, CPLScanLong("", 0));
-  EXPECT_EQ(0, CPLScanLong("9", 0));
-  EXPECT_EQ(0, CPLScanLong("a", 1));
-  EXPECT_EQ(0, CPLScanLong("+", 1));
-  EXPECT_EQ(0, CPLScanLong("-", 1));
+  struct TestCase {
+    const char* input;
+    int max_len;
+    long expected;  // NOLINT
+  };
+  constexpr TestCase kCases[] = {
+      {.input = "", .max_len = 0, .expected = 0},
+      {.input = "9", .max_len = 0, .expected = 0},
+      {.input = "a", .max_len = 1, .expected = 0},
+      {.input = "+", .max_len = 1, .expected = 0},
+      {.input = "-", .max_len = 1, .expected = 0},
+      {.input = "0", .max_len = 1, .expected = 0},
+      {.input = "0", .max_len = 2, .expected = 0},
+      {.input = "1", .max_len = 1, .expected = 1},
+      {.input = "1", .max_len = 2, .expected = 1},
+      {.input = "12", .max_len = 1, .expected = 1},
+      {.input = "+1", .max_len = 1, .expected = 0},
+      {.input = "+1", .max_len = 2, .expected = 1},
+      {.input = "-1", .max_len = 2, .expected = -1},
+      {.input = "-1", .max_len = 3, .expected = -1},
+      // Hex and octal are not supported.
+      {.input = "0xF", .max_len = 3, .expected = 0},
+      {.input = "010", .max_len = 3, .expected = 10},
+      {.input = " 2", .max_len = 2, .expected = 2},
+      {.input = "\t\n3", .max_len = 3, .expected = 3},
+      {.input = "4 ", .max_len = 2, .expected = 4},
+      {.input = " 5 ", .max_len = 3, .expected = 5},
+      {.input = " 6 1", .max_len = 4, .expected = 6},
+      {.input = " 7-", .max_len = 3, .expected = 7},
+      {.input = " 8a", .max_len = 3, .expected = 8},
+      {.input = " 9.1", .max_len = 4, .expected = 9},
+      {.input = "2", .max_len = 20, .expected = 2},
+      {.input = "3", .max_len = 200, .expected = 3},
+      {.input = "4", .max_len = 2000, .expected = 4},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.input);
+    EXPECT_EQ(tc.expected, CPLScanLong(tc.input, tc.max_len));
+  }
 
-  EXPECT_EQ(0, CPLScanLong("0", 1));
-  EXPECT_EQ(0, CPLScanLong("0", 2));
-  EXPECT_EQ(1, CPLScanLong("1", 1));
-  EXPECT_EQ(1, CPLScanLong("1", 2));
-  EXPECT_EQ(1, CPLScanLong("12", 1));
-  EXPECT_EQ(0, CPLScanLong("+1", 1));
-  EXPECT_EQ(1, CPLScanLong("+1", 2));
-  EXPECT_EQ(-1, CPLScanLong("-1", 2));
-  EXPECT_EQ(-1, CPLScanLong("-1", 3));
-
-  // Hex and octal are not supported.
-  EXPECT_EQ(0, CPLScanLong("0xF", 3));
-  EXPECT_EQ(10, CPLScanLong("010", 3));
-
-  EXPECT_EQ(2, CPLScanLong(" 2", 2));
-  EXPECT_EQ(3, CPLScanLong("\t\n3", 3));
-  EXPECT_EQ(4, CPLScanLong("4 ", 2));
-  EXPECT_EQ(5, CPLScanLong(" 5 ", 3));
-  EXPECT_EQ(6, CPLScanLong(" 6 1", 4));
-  EXPECT_EQ(7, CPLScanLong(" 7-", 3));
-  EXPECT_EQ(8, CPLScanLong(" 8a", 3));
-  EXPECT_EQ(9, CPLScanLong(" 9.1", 4));
-
-  EXPECT_EQ(1, CPLScanLong("1", 2));
-  EXPECT_EQ(2, CPLScanLong("2", 20));
-  EXPECT_EQ(3, CPLScanLong("3", 200));
-  EXPECT_EQ(4, CPLScanLong("4", 2000));
-
-  if (sizeof(long) > 4) {  // NOLINT
+  if constexpr (sizeof(long) > 4) {  // NOLINT
     EXPECT_EQ(1234567890123, CPLScanLong("1234567890123", 9999));
     EXPECT_EQ(-1234567890123, CPLScanLong("-1234567890123", 9999));
   }
 }
 
-// Tests converting string to unsigned long.  CplScanULong is a
+// Tests converting string to unsigned long. CplScanULong is a
 // wrapper around strtoul that adds setting a maximum number of
 // characters.
 TEST_F(CplConvTest, CplScanULong) {
-  EXPECT_EQ(0, CPLScanULong("", 0));
-  EXPECT_EQ(0, CPLScanULong("9", 0));
-  EXPECT_EQ(0, CPLScanULong("a", 1));
-  EXPECT_EQ(0, CPLScanULong("+", 1));
-  EXPECT_EQ(0, CPLScanULong("-", 1));
+  struct TestCase {
+    const char* input;
+    int max_len;
+    unsigned long expected;  // NOLINT
+  };
+  constexpr TestCase kCases[] = {
+      {.input = "", .max_len = 0, .expected = 0},
+      {.input = "9", .max_len = 0, .expected = 0},
+      {.input = "a", .max_len = 1, .expected = 0},
+      {.input = "+", .max_len = 1, .expected = 0},
+      {.input = "-", .max_len = 1, .expected = 0},
+      {.input = "0", .max_len = 1, .expected = 0},
+      {.input = "1", .max_len = 1, .expected = 1},
+      {.input = "1", .max_len = 2, .expected = 1},
+      {.input = "12", .max_len = 1, .expected = 1},
+      {.input = "+1", .max_len = 2, .expected = 1},
+      // strtoul parses "-" by negating the unsigned portion.
+      {.input = "-1",
+       .max_len = 2,
+       .expected = static_cast<unsigned long>(-1)},  // NOLINT
+      {.input = "-2",
+       .max_len = 2,
+       .expected = static_cast<unsigned long>(-2)},  // NOLINT
+      // Hex and octal are not supported.
+      {.input = "0xF", .max_len = 3, .expected = 0},
+      {.input = "010", .max_len = 3, .expected = 10},
+      {.input = " 2", .max_len = 2, .expected = 2},
+      {.input = "\t\n3", .max_len = 3, .expected = 3},
+      {.input = "4 ", .max_len = 2, .expected = 4},
+      {.input = " 5 ", .max_len = 3, .expected = 5},
+      {.input = " 6 1", .max_len = 4, .expected = 6},
+      {.input = " 7-", .max_len = 3, .expected = 7},
+      {.input = " 8a", .max_len = 3, .expected = 8},
+      {.input = " 9.1", .max_len = 4, .expected = 9},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.input);
+    EXPECT_EQ(tc.expected, CPLScanULong(tc.input, tc.max_len));
+  }
 
-  EXPECT_EQ(0, CPLScanULong("0", 1));
-  EXPECT_EQ(1, CPLScanULong("1", 1));
-  EXPECT_EQ(1, CPLScanULong("1", 2));
-  EXPECT_EQ(1, CPLScanULong("12", 1));
-  EXPECT_EQ(1, CPLScanULong("+1", 2));
-
-  // strtoul does parse the "-".  It negates the unsigned portion and then
-  // casts to unsigned long.
-  EXPECT_EQ(static_cast<unsigned long>(-1), CPLScanULong("-1", 2));  // NOLINT
-  EXPECT_EQ(static_cast<unsigned long>(-2), CPLScanULong("-2", 2));  // NOLINT
-
-  // Hex and octal are not supported.
-  EXPECT_EQ(0, CPLScanULong("0xF", 3));
-  EXPECT_EQ(10, CPLScanULong("010", 3));
-
-  EXPECT_EQ(2, CPLScanULong(" 2", 2));
-  EXPECT_EQ(3, CPLScanULong("\t\n3", 3));
-  EXPECT_EQ(4, CPLScanULong("4 ", 2));
-  EXPECT_EQ(5, CPLScanULong(" 5 ", 3));
-  EXPECT_EQ(6, CPLScanULong(" 6 1", 4));
-  EXPECT_EQ(7, CPLScanULong(" 7-", 3));
-  EXPECT_EQ(8, CPLScanULong(" 8a", 3));
-  EXPECT_EQ(9, CPLScanULong(" 9.1", 4));
-
-  if (sizeof(unsigned long) > 4) {  // NOLINT
+  if constexpr (sizeof(unsigned long) > 4) {  // NOLINT
     EXPECT_EQ(1234567890123, CPLScanULong("1234567890123", 9999));
     EXPECT_EQ(static_cast<unsigned long>(-1234567890123),  // NOLINT
               CPLScanULong("-1234567890123", 9999));
@@ -587,37 +620,36 @@ TEST(ConfigOptions, ConfigOptionsBulkGetterAndSetterShouldWorkAsExpected) {
 }
 
 TEST(ConfigOptions, ConfigShouldBeGlobal) {
-  static const char kTestOption[] = "TEST_CONFIG_OPTION";
-  static const char kTestOptionValue[] = "test_option_value";
+  static constexpr char kTestOption[] = "TEST_CONFIG_OPTION";
+  static constexpr char kTestOptionValue[] = "test_option_value";
 
   absl::Cleanup config_remover = [] {
     CPLSetConfigOption(kTestOption, nullptr);
   };
 
-  absl::Barrier value_set(2);
+  std::latch value_set(2);
 
   auto thread_function = [&](bool should_set) {
     if (should_set) {
       CPLSetConfigOption(kTestOption, kTestOptionValue);
     }
 
-    value_set.Block();
+    value_set.arrive_and_wait();
 
     EXPECT_STREQ(CPLGetConfigOption(kTestOption, nullptr), kTestOptionValue);
   };
 
-  std::thread thread_1(thread_function, true);
-  std::thread thread_2(thread_function, false);
-
-  thread_1.join();
-  thread_2.join();
+  {
+    std::jthread thread_1(thread_function, true);
+    std::jthread thread_2(thread_function, false);
+  }
 
   EXPECT_STREQ(CPLGetConfigOption(kTestOption, nullptr), kTestOptionValue);
 }
 
 TEST(ThreadLocalConfigOptions, GetterAndSetterShouldWorkAsExpected) {
-  static const char kTestOption[] = "TEST_CONFIG_OPTION";
-  static const char kTestOptionValue[] = "option_value";
+  static constexpr char kTestOption[] = "TEST_CONFIG_OPTION";
+  static constexpr char kTestOptionValue[] = "option_value";
 
   CPLSetThreadLocalConfigOption(kTestOption, kTestOptionValue);
   absl::Cleanup config_remover = [] {
@@ -629,8 +661,8 @@ TEST(ThreadLocalConfigOptions, GetterAndSetterShouldWorkAsExpected) {
 }
 
 TEST(ThreadLocalConfigOptions, GetNonExistentConfigOptionShouldReturnDefault) {
-  static const char kTestOption[] = "TEST_CONFIG_NON_EXISTENT";
-  static const char kTestDefaultValue[] = "option_default_value";
+  constexpr char kTestOption[] = "TEST_CONFIG_NON_EXISTENT";
+  constexpr char kTestDefaultValue[] = "option_default_value";
 
   EXPECT_STREQ(CPLGetThreadLocalConfigOption(kTestOption, kTestDefaultValue),
                kTestDefaultValue);
@@ -644,53 +676,50 @@ TEST(ThreadLocalConfigOptions, BulkGetterAndSetterShouldWorkAsExpected) {
     CSLDestroy(original_config_options);
   };
 
-  static const char kTestOption1[] = "TEST_CONFIG_OPTION_1";
-  static const char kTestOption1Value[] = "option_1_value";
-  static const char kTestOption2[] = "TEST_CONFIG_OPTION_2";
-  static const char kTestOption2Value[] = "option_2_value";
-  static const char kTestOptionNonExistent[] = "TEST_CONFIG_NON_EXISTENT";
+  constexpr char kTestOption1[] = "TEST_CONFIG_OPTION_1";
+  constexpr char kTestOption1Value[] = "option_1_value";
+  constexpr char kTestOption2[] = "TEST_CONFIG_OPTION_2";
+  constexpr char kTestOption2Value[] = "option_2_value";
+  constexpr char kTestOptionNonExistent[] = "TEST_CONFIG_NON_EXISTENT";
 
   CPLSetThreadLocalConfigOption(kTestOption1, kTestOption1Value);
   CPLSetThreadLocalConfigOption(kTestOption2, kTestOption2Value);
 
-  char** config_options = CPLGetThreadLocalConfigOptions();
-  absl::Cleanup config_cleanup = [config_options] {
-    CSLDestroy(config_options);
-  };
+  StringListPtr config_options(CPLGetThreadLocalConfigOptions(), CSLDestroy);
 
-  EXPECT_STREQ(CSLFetchNameValue(config_options, kTestOption1),
+  EXPECT_STREQ(CSLFetchNameValue(config_options.get(), kTestOption1),
                kTestOption1Value);
-  EXPECT_STREQ(CSLFetchNameValue(config_options, kTestOption2),
+  EXPECT_STREQ(CSLFetchNameValue(config_options.get(), kTestOption2),
                kTestOption2Value);
-  EXPECT_EQ(CSLFetchNameValue(config_options, kTestOptionNonExistent), nullptr);
+  EXPECT_EQ(CSLFetchNameValue(config_options.get(), kTestOptionNonExistent),
+            nullptr);
 }
 
 TEST(ThreadLocalConfigOptions, ConfigShouldBeThreadLocal) {
-  static const char kTestOption[] = "TEST_CONFIG_OPTION";
-  static const char kTestOptionThread1Value[] = "option_value_1";
-  static const char kTestOptionThread2Value[] = "option_value_2";
+  static constexpr char kTestOption[] = "TEST_CONFIG_OPTION";
+  static constexpr char kTestOptionThread1Value[] = "option_value_1";
+  static constexpr char kTestOptionThread2Value[] = "option_value_2";
 
-  absl::Barrier values_set(2);
+  std::latch values_set(2);
 
   auto thread_function = [&](const char* value) {
     CPLSetThreadLocalConfigOption(kTestOption, value);
+    absl::Cleanup cleanup = [] {
+      CPLSetThreadLocalConfigOption(kTestOption, nullptr);
+    };
 
-    values_set.Block();
+    values_set.arrive_and_wait();
 
     EXPECT_STREQ(CPLGetThreadLocalConfigOption(kTestOption, nullptr), value);
   };
 
-  std::thread thread_1(thread_function, kTestOptionThread1Value);
-  std::thread thread_2(thread_function, kTestOptionThread2Value);
-
-  thread_1.join();
-  thread_2.join();
+  {
+    std::jthread thread_1(thread_function, kTestOptionThread1Value);
+    std::jthread thread_2(thread_function, kTestOptionThread2Value);
+  }
 
   EXPECT_STREQ(CPLGetThreadLocalConfigOption(kTestOption, nullptr), nullptr);
 }
-
-// TODO(schwehr): CPLVerifyConfiguration
-// TODO(schwehr): CPLFreeConfig
 
 TEST_F(CplConvTest, CPLStat) {
   constexpr int kFailure = -1;
@@ -701,106 +730,178 @@ TEST_F(CplConvTest, CPLStat) {
 
 TEST_F(CplConvTest, CPLDMSToDec) {
   // nullptr crashes.
-  EXPECT_DOUBLE_EQ(0, CPLDMSToDec(""));
-  EXPECT_DOUBLE_EQ(0, CPLDMSToDec(" "));
-  EXPECT_DOUBLE_EQ(0, CPLDMSToDec("a"));
-  EXPECT_DOUBLE_EQ(0, CPLDMSToDec("  0d 0' 0.9720\"N"));
-  EXPECT_DOUBLE_EQ(0, CPLDMSToDec("  0d 0' 0.9720\"S"));
-
-  EXPECT_DOUBLE_EQ(1, CPLDMSToDec("1"));
-  EXPECT_DOUBLE_EQ(1, CPLDMSToDec("1N"));
-  EXPECT_DOUBLE_EQ(1, CPLDMSToDec("1n"));
-  EXPECT_DOUBLE_EQ(1, CPLDMSToDec("+1"));
-
-  EXPECT_DOUBLE_EQ(1, CPLDMSToDec("\t\n\r 1 "));
-
-  EXPECT_DOUBLE_EQ(-1, CPLDMSToDec("-1"));
-  EXPECT_DOUBLE_EQ(-1, CPLDMSToDec("1S"));
-  EXPECT_DOUBLE_EQ(-1, CPLDMSToDec("1s"));
-
-  EXPECT_DOUBLE_EQ(1, CPLDMSToDec("1E"));
-  EXPECT_DOUBLE_EQ(1, CPLDMSToDec("1e"));
-  EXPECT_DOUBLE_EQ(-1, CPLDMSToDec("1W"));
-  EXPECT_DOUBLE_EQ(-1, CPLDMSToDec("1w"));
-
-  EXPECT_DOUBLE_EQ(2, CPLDMSToDec("2d"));
-  EXPECT_DOUBLE_EQ(0.0500000000001, CPLDMSToDec("3'"));
-  EXPECT_DOUBLE_EQ(0.0011111111200, CPLDMSToDec("4\""));
-
-  EXPECT_DOUBLE_EQ(0.00027777778, CPLDMSToDec("+1\""));
-  EXPECT_DOUBLE_EQ(-0.00027777778, CPLDMSToDec("-1\""));
-
-  EXPECT_DOUBLE_EQ(9.87, CPLDMSToDec("9.87r"));
-  EXPECT_DOUBLE_EQ(-9.87, CPLDMSToDec("-9.87R"));
-
-  EXPECT_DOUBLE_EQ(200000, CPLDMSToDec("2e5R"));
-
-  EXPECT_DOUBLE_EQ(1, CPLDMSToDec(" 1R "));
-  EXPECT_DOUBLE_EQ(0, CPLDMSToDec("R"));
-  EXPECT_DOUBLE_EQ(0, CPLDMSToDec(" R "));
+  struct TestCase {
+    const char* input;
+    double expected;
+  };
+  constexpr TestCase kCases[] = {
+      {.input = "", .expected = 0},
+      {.input = " ", .expected = 0},
+      {.input = "a", .expected = 0},
+      {.input = "  0d 0' 0.9720\"N", .expected = 0},
+      {.input = "  0d 0' 0.9720\"S", .expected = 0},
+      {.input = "1", .expected = 1},
+      {.input = "1N", .expected = 1},
+      {.input = "1n", .expected = 1},
+      {.input = "+1", .expected = 1},
+      {.input = "\t\n\r 1 ", .expected = 1},
+      {.input = "-1", .expected = -1},
+      {.input = "1S", .expected = -1},
+      {.input = "1s", .expected = -1},
+      {.input = "1E", .expected = 1},
+      {.input = "1e", .expected = 1},
+      {.input = "1W", .expected = -1},
+      {.input = "1w", .expected = -1},
+      {.input = "2d", .expected = 2},
+      // These expected values pin upstream CPLDMSToDec's inexact
+      // decimal-minute/second scaling.
+      {.input = "3'", .expected = 0.0500000000001},
+      {.input = "4\"", .expected = 0.0011111111200},
+      {.input = "+1\"", .expected = 0.00027777778},
+      {.input = "-1\"", .expected = -0.00027777778},
+      {.input = "9.87r", .expected = 9.87},
+      {.input = "-9.87R", .expected = -9.87},
+      {.input = "2e5R", .expected = 200000},
+      {.input = " 1R ", .expected = 1},
+      {.input = "R", .expected = 0},
+      {.input = " R ", .expected = 0},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.input);
+    EXPECT_DOUBLE_EQ(tc.expected, CPLDMSToDec(tc.input));
+  }
 }
 
 TEST_F(CplConvTest, CPLDecToDMS) {
-  EXPECT_STREQ("Invalid angle",
-               CPLDecToDMS(std::numeric_limits<double>::quiet_NaN(), "", 0));
-  EXPECT_STREQ("Invalid angle",
-               CPLDecToDMS(std::numeric_limits<double>::infinity(), "", 0));
-  EXPECT_STREQ("Invalid angle",
-               CPLDecToDMS(-std::numeric_limits<double>::infinity(), "", 0));
-  EXPECT_STREQ("Invalid angle", CPLDecToDMS(361.1, "", 0));
-  EXPECT_STREQ("Invalid angle", CPLDecToDMS(-361.1, "", 0));
-
-  EXPECT_STREQ("360d 0'  0\"N", CPLDecToDMS(360.0, "", 0));
-  EXPECT_STREQ("360d 0'  0\"E", CPLDecToDMS(360.0, "Long", 0));
-
-  EXPECT_STREQ("360d 0'  0\"S", CPLDecToDMS(-360.0, "", 0));
-  EXPECT_STREQ("360d 0'  0\"W", CPLDecToDMS(-360.0, "Long", 0));
-
-  EXPECT_STREQ(" 90d 0'  0\"N", CPLDecToDMS(90.0, "", 0));
-  EXPECT_STREQ(" 90d 0'  0\"S", CPLDecToDMS(-90.0, "", 0));
-
-  // Just under 1 minute.
-  EXPECT_STREQ("  0d 0' 58\"N", CPLDecToDMS(0.016, "", 0));
-  EXPECT_STREQ("  0d 0' 58\"S", CPLDecToDMS(-0.016, "", 0));
-
-  EXPECT_STREQ("  0d 0'57.6\"N", CPLDecToDMS(0.016, "", 1));
-  EXPECT_STREQ("  0d 0'57.6\"S", CPLDecToDMS(-0.016, "", 1));
-
-  EXPECT_STREQ("  0d 0'57.60\"N", CPLDecToDMS(0.016, "", 2));
-  EXPECT_STREQ("  0d 0'57.60\"S", CPLDecToDMS(-0.016, "", 2));
-
-  // Just under 1 second
-  EXPECT_STREQ("  0d 0' 0.97\"N", CPLDecToDMS(0.00027, "", 2));
-  EXPECT_STREQ("  0d 0' 0.97\"S", CPLDecToDMS(-0.00027, "", 2));
-
-  EXPECT_STREQ("  0d 0' 0.9720\"N", CPLDecToDMS(0.00027, "", 4));
-  EXPECT_STREQ("  0d 0' 0.9720\"S", CPLDecToDMS(-0.00027, "", 4));
+  struct TestCase {
+    double angle;
+    const char* axis;
+    int precision;
+    std::string_view expected;
+  };
+  constexpr TestCase kCases[] = {
+      {.angle = std::numeric_limits<double>::quiet_NaN(),
+       .axis = "",
+       .precision = 0,
+       .expected = "Invalid angle"},
+      {.angle = std::numeric_limits<double>::infinity(),
+       .axis = "",
+       .precision = 0,
+       .expected = "Invalid angle"},
+      {.angle = -std::numeric_limits<double>::infinity(),
+       .axis = "",
+       .precision = 0,
+       .expected = "Invalid angle"},
+      {.angle = 361.1, .axis = "", .precision = 0, .expected = "Invalid angle"},
+      {.angle = -361.1,
+       .axis = "",
+       .precision = 0,
+       .expected = "Invalid angle"},
+      {.angle = 360.0, .axis = "", .precision = 0, .expected = "360d 0'  0\"N"},
+      {.angle = 360.0,
+       .axis = "Long",
+       .precision = 0,
+       .expected = "360d 0'  0\"E"},
+      {.angle = -360.0,
+       .axis = "",
+       .precision = 0,
+       .expected = "360d 0'  0\"S"},
+      {.angle = -360.0,
+       .axis = "Long",
+       .precision = 0,
+       .expected = "360d 0'  0\"W"},
+      {.angle = 90.0, .axis = "", .precision = 0, .expected = " 90d 0'  0\"N"},
+      {.angle = -90.0, .axis = "", .precision = 0, .expected = " 90d 0'  0\"S"},
+      // Just under 1 minute.
+      {.angle = 0.016, .axis = "", .precision = 0, .expected = "  0d 0' 58\"N"},
+      {.angle = -0.016,
+       .axis = "",
+       .precision = 0,
+       .expected = "  0d 0' 58\"S"},
+      {.angle = 0.016,
+       .axis = "",
+       .precision = 1,
+       .expected = "  0d 0'57.6\"N"},
+      {.angle = -0.016,
+       .axis = "",
+       .precision = 1,
+       .expected = "  0d 0'57.6\"S"},
+      {.angle = 0.016,
+       .axis = "",
+       .precision = 2,
+       .expected = "  0d 0'57.60\"N"},
+      {.angle = -0.016,
+       .axis = "",
+       .precision = 2,
+       .expected = "  0d 0'57.60\"S"},
+      // Just under 1 second.
+      {.angle = 0.00027,
+       .axis = "",
+       .precision = 2,
+       .expected = "  0d 0' 0.97\"N"},
+      {.angle = -0.00027,
+       .axis = "",
+       .precision = 2,
+       .expected = "  0d 0' 0.97\"S"},
+      {.angle = 0.00027,
+       .axis = "",
+       .precision = 4,
+       .expected = "  0d 0' 0.9720\"N"},
+      {.angle = -0.00027,
+       .axis = "",
+       .precision = 4,
+       .expected = "  0d 0' 0.9720\"S"},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.expected);
+    EXPECT_EQ(tc.expected, CPLDecToDMS(tc.angle, tc.axis, tc.precision));
+  }
 }
 
 TEST_F(CplConvTest, CPLPackedDMSToDec) {
-  EXPECT_DOUBLE_EQ(720.0, CPLPackedDMSToDec(720000000.0));
-  EXPECT_DOUBLE_EQ(1.0, CPLPackedDMSToDec(1000000.0));
-  EXPECT_DOUBLE_EQ(0.1, CPLPackedDMSToDec(6000.0));
-  EXPECT_DOUBLE_EQ(0.0001, CPLPackedDMSToDec(0.36));
-  EXPECT_DOUBLE_EQ(-0.0001, CPLPackedDMSToDec(-0.36));
-  EXPECT_DOUBLE_EQ(-0.1, CPLPackedDMSToDec(-6000.0));
-  EXPECT_DOUBLE_EQ(-1.0, CPLPackedDMSToDec(-1000000.0));
+  struct TestCase {
+    double packed;
+    double expected;
+  };
+  constexpr TestCase kCases[] = {
+      {.packed = 720000000.0, .expected = 720.0},
+      {.packed = 1000000.0, .expected = 1.0},
+      {.packed = 6000.0, .expected = 0.1},
+      {.packed = 0.36, .expected = 0.0001},
+      {.packed = -0.36, .expected = -0.0001},
+      {.packed = -6000.0, .expected = -0.1},
+      {.packed = -1000000.0, .expected = -1.0},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.packed);
+    EXPECT_DOUBLE_EQ(tc.expected, CPLPackedDMSToDec(tc.packed));
+  }
 }
 
 TEST_F(CplConvTest, CPLDecToPackedDMS) {
-  EXPECT_DOUBLE_EQ(0.0, CPLDecToPackedDMS(0.0));
-  EXPECT_DOUBLE_EQ(720000000.0, CPLDecToPackedDMS(720.0));
-  EXPECT_DOUBLE_EQ(360000000.0, CPLDecToPackedDMS(360.0));
-  EXPECT_DOUBLE_EQ(1000000.0, CPLDecToPackedDMS(1.0));
-  EXPECT_DOUBLE_EQ(6000.0, CPLDecToPackedDMS(0.1));
-  EXPECT_DOUBLE_EQ(36.0, CPLDecToPackedDMS(0.01));
-  EXPECT_DOUBLE_EQ(3.6, CPLDecToPackedDMS(0.001));
-  EXPECT_DOUBLE_EQ(0.36, CPLDecToPackedDMS(0.0001));
-  EXPECT_DOUBLE_EQ(0.036, CPLDecToPackedDMS(0.00001));
-  EXPECT_DOUBLE_EQ(0.0036, CPLDecToPackedDMS(0.000001));
-  EXPECT_DOUBLE_EQ(0.00036, CPLDecToPackedDMS(0.0000001));
-  EXPECT_DOUBLE_EQ(-0.00036, CPLDecToPackedDMS(-0.0000001));
-  EXPECT_DOUBLE_EQ(-1000000.0, CPLDecToPackedDMS(-1.0));
+  struct TestCase {
+    double dec;
+    double expected;
+  };
+  constexpr TestCase kCases[] = {
+      {.dec = 0.0, .expected = 0.0},
+      {.dec = 720.0, .expected = 720000000.0},
+      {.dec = 360.0, .expected = 360000000.0},
+      {.dec = 1.0, .expected = 1000000.0},
+      {.dec = 0.1, .expected = 6000.0},
+      {.dec = 0.01, .expected = 36.0},
+      {.dec = 0.001, .expected = 3.6},
+      {.dec = 0.0001, .expected = 0.36},
+      {.dec = 0.00001, .expected = 0.036},
+      {.dec = 0.000001, .expected = 0.0036},
+      {.dec = 0.0000001, .expected = 0.00036},
+      {.dec = -0.0000001, .expected = -0.00036},
+      {.dec = -1.0, .expected = -1000000.0},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.dec);
+    EXPECT_DOUBLE_EQ(tc.expected, CPLDecToPackedDMS(tc.dec));
+  }
 }
 
 // TODO(schwehr): CPLStringToComplex
@@ -822,27 +923,37 @@ TEST_F(CplConvTest, CPLCopyTreeSourceDoesNotExist) {
 }
 
 TEST_F(CplConvTest, CPLCopyTree) {
-  constexpr char kDirpath[] = "/vsimem/cplcopytree";
+  static constexpr char kDirpath[] = "/vsimem/cplcopytree";
+  absl::Cleanup cleanup_dir = [] { VSIRmdirRecursive(kDirpath); };
   const std::string subdir = CPLFormFilename(kDirpath, "subdir", nullptr);
   ASSERT_EQ(kSuccess, VSIMkdir(subdir.c_str(), 0755));
   const std::string subfile =
       CPLFormFilename(subdir.c_str(), "subfile", nullptr);
   const std::string data = "abc";
-  VSILFILE* file = VSIFOpenL(subfile.c_str(), "wb");
-  ASSERT_NE(nullptr, file);
-  EXPECT_EQ(1, VSIFWriteL(data.c_str(), data.length(), 1, file));
-  ASSERT_EQ(kSuccess, VSIFCloseL(file));
+  {
+    VSILFILE* file = VSIFOpenL(subfile.c_str(), "wb");
+    ASSERT_NE(nullptr, file);
+    absl::Cleanup close_file = [file] {
+      EXPECT_EQ(kSuccess, VSIFCloseL(file));
+    };
+    EXPECT_EQ(1, VSIFWriteL(data.c_str(), data.length(), 1, file));
+  }
 
   const std::string destdir = CPLFormFilename(kDirpath, "dest", nullptr);
   EXPECT_EQ(kSuccess, CPLCopyTree(destdir.c_str(), subdir.c_str()));
   const std::string dest_subfile =
       CPLFormFilename(destdir.c_str(), "subfile", nullptr);
 
-  file = VSIFOpenL(dest_subfile.c_str(), "r");
-  constexpr int kMaxSize = 5;
-  char buf[kMaxSize] = {};
-  EXPECT_EQ(data.length(), VSIFReadL(buf, 1, kMaxSize - 1, file));
-  ASSERT_EQ(kSuccess, VSIFCloseL(file));
+  {
+    VSILFILE* file = VSIFOpenL(dest_subfile.c_str(), "r");
+    ASSERT_NE(nullptr, file);
+    absl::Cleanup close_file = [file] {
+      EXPECT_EQ(kSuccess, VSIFCloseL(file));
+    };
+    constexpr int kMaxSize = 5;
+    char buf[kMaxSize] = {};
+    EXPECT_EQ(data.length(), VSIFReadL(buf, 1, kMaxSize - 1, file));
+  }
 
   // Does not allow writing over self.
   WithQuietHandler error_handler;
@@ -850,64 +961,60 @@ TEST_F(CplConvTest, CPLCopyTree) {
   EXPECT_THAT(CPLGetLastErrorMsg(), testing::HasSubstr("already exists"));
 }
 
-// TODO(schwehr): CPLMoveFile
-// TODO(schwehr): CPLSymlink
-// TODO(schwehr): CPLLocaleC
-// TODO(schwehr): CPLThreadLocaleC
-// TODO(schwehr): CPLsetlocale
-
 // Tests looking for files with a list.
 TEST_F(CplConvTest, CPLCheckForFileWithFileList) {
   char kFilename[] = "Aa";
   char* files[2] = {kFilename, nullptr};
 
-  const char kDoesNotExist[] = "does-not-exist";
-  std::unique_ptr<char, CplFreeDeleter> filename(strdup(kDoesNotExist));
-  EXPECT_FALSE(CPLCheckForFile(const_cast<char*>(filename.get()), files));
+  constexpr char kDoesNotExist[] = "does-not-exist";
+  std::unique_ptr<char, CplFreeDeleter> filename(CPLStrdup(kDoesNotExist));
+  EXPECT_FALSE(CPLCheckForFile(filename.get(), files));
   EXPECT_STREQ(kDoesNotExist, filename.get());
 
-  filename.reset(strdup(kFilename));
-  EXPECT_TRUE(CPLCheckForFile(const_cast<char*>(filename.get()), files));
+  filename.reset(CPLStrdup(kFilename));
+  EXPECT_TRUE(CPLCheckForFile(filename.get(), files));
   EXPECT_STREQ(kFilename, filename.get());
 
-  const char kLower[] = "aa";
-  filename.reset(strdup(kLower));
-  EXPECT_TRUE(CPLCheckForFile(const_cast<char*>(filename.get()), files));
+  constexpr char kLower[] = "aa";
+  filename.reset(CPLStrdup(kLower));
+  EXPECT_TRUE(CPLCheckForFile(filename.get(), files));
   EXPECT_STREQ(kFilename, filename.get());
 
-  const char kUpper[] = "AA";
-  filename.reset(strdup(kUpper));
-  EXPECT_TRUE(CPLCheckForFile(const_cast<char*>(filename.get()), files));
+  constexpr char kUpper[] = "AA";
+  filename.reset(CPLStrdup(kUpper));
+  EXPECT_TRUE(CPLCheckForFile(filename.get(), files));
   EXPECT_STREQ(kFilename, filename.get());
 }
 
 // Tests looking for files without a filelist.
 // Probes for the actual file.
 TEST_F(CplConvTest, CPLCheckForFileVsimemFiles) {
-  const char kFilename[] = "/vsimem/CheckForFile";
-  const char kLower[] = "/vsimem/checkforfile";
-  const char kUpper[] = "/vsimem/CHECKFORFILE";
+  static constexpr char kFilename[] = "/vsimem/CheckForFile";
+  constexpr char kLower[] = "/vsimem/checkforfile";
+  constexpr char kUpper[] = "/vsimem/CHECKFORFILE";
 
-  std::unique_ptr<char, CplFreeDeleter> filename(strdup(kFilename));
-  EXPECT_FALSE(CPLCheckForFile(const_cast<char*>(filename.get()), nullptr));
+  std::unique_ptr<char, CplFreeDeleter> filename(CPLStrdup(kFilename));
+  EXPECT_FALSE(CPLCheckForFile(filename.get(), nullptr));
   EXPECT_STREQ(kFilename, filename.get());
 
   {
     // Create an empty file.
     VSILFILE* file = VSIFOpenL(filename.get(), "wb");
+    ASSERT_NE(nullptr, file);
     VSIFCloseL(file);
   }
-  EXPECT_TRUE(CPLCheckForFile(const_cast<char*>(filename.get()), nullptr));
+  absl::Cleanup remove_file = [] { VSIUnlink(kFilename); };
+  EXPECT_TRUE(CPLCheckForFile(filename.get(), nullptr));
   EXPECT_STREQ(kFilename, filename.get());
 
   // The /vsimem filesystem is case sensitive.
   // Mismatches return false and do not alter the filename.
-  filename.reset(strdup(kLower));
-  EXPECT_FALSE(CPLCheckForFile((filename.get()), nullptr));
+  filename.reset(CPLStrdup(kLower));
+  EXPECT_FALSE(CPLCheckForFile(filename.get(), nullptr));
   EXPECT_STREQ(kLower, filename.get());
 
-  filename.reset(strdup(kUpper));
-  EXPECT_FALSE(CPLCheckForFile((filename.get()), nullptr));
+  filename.reset(CPLStrdup(kUpper));
+  EXPECT_FALSE(CPLCheckForFile(filename.get(), nullptr));
   EXPECT_STREQ(kUpper, filename.get());
 }
 
@@ -926,10 +1033,10 @@ TEST_F(CplConvTest, CPLIsPowerOfTwo) {
   EXPECT_FALSE(CPLIsPowerOfTwo(std::numeric_limits<unsigned int>::max()));
 }
 
-const std::filesystem::path kTestConfigsDirectory(
-    "google3/third_party/gdal/autotest2/cpp/port/testdata/config");
+constexpr std::string_view kTestConfigsDirectory =
+    "google3/third_party/gdal/autotest2/cpp/port/testdata/config";
 
-std::filesystem::path GetTestGdalConfig(const absl::string_view filename) {
+std::filesystem::path GetTestGdalConfig(std::string_view filename) {
   return std::filesystem::path(SrcDir()) / kTestConfigsDirectory / filename;
 }
 
@@ -951,15 +1058,9 @@ TEST(CplLoadConfigOptionsFromFile, NonExistentFileNoErrors) {
 }
 
 TEST(CplLoadConfigOptionsFromPredefinedFiles, UseConfigOptionGdalConfigFile) {
-  constexpr char kConfigFileKey[] = "GDAL_CONFIG_FILE";
-
-  const char* curr_config = CPLGetConfigOption(kConfigFileKey, "");
-  absl::Cleanup reset_curr_config = [kConfigFileKey, curr_config] {
-    CPLSetConfigOption(kConfigFileKey, curr_config);
-  };
-
   const auto path = GetTestGdalConfig("basic.gdalrc");
-  CPLSetConfigOption(kConfigFileKey, path.c_str());
+  CPLConfigOptionSetter config_file("GDAL_CONFIG_FILE", path.c_str(),
+                                    /*bSetOnlyIfUndefined=*/false);
 
   CPLLoadConfigOptionsFromPredefinedFiles();
   absl::Cleanup config_cleaner = [] {
@@ -970,28 +1071,9 @@ TEST(CplLoadConfigOptionsFromPredefinedFiles, UseConfigOptionGdalConfigFile) {
 }
 
 TEST(CplLoadConfigOptionsFromPredefinedFiles, UseHomeDirGdalConfigFile) {
-  constexpr char kConfigFileKey[] = "GDAL_CONFIG_FILE";
-
-  // TODO: CPLGetConfigOption returns a pointer into the string which holds the
-  // value. The docs for CPLGetConfigOption says that the caller should not
-  // attempt to free ths returned string.
-  //
-  // However, calling CPLSetConfigOption() (with any value) causes the string to
-  // be freed, so whatever was returned from CPLGetConfigOption becomes a
-  // dangling pointer.
-  //
-  // To work around this, this test copies the original value in
-  // curr_config_file_config and resets kConfigFileKey using the copy.
-
-  // GDAL_CONFIG_FILE must be nullptr for fallback to home directory
-  const char* curr_config_file_config = CPLGetConfigOption(kConfigFileKey, "");
-  std::string copy = curr_config_file_config;
-
-  CPLSetConfigOption(kConfigFileKey, nullptr);
-
-  absl::Cleanup reset_curr_config_file_config = [kConfigFileKey, copy] {
-    CPLSetConfigOption(kConfigFileKey, copy.c_str());
-  };
+  // GDAL_CONFIG_FILE must be nullptr for fallback to home directory.
+  CPLConfigOptionSetter config_file("GDAL_CONFIG_FILE", nullptr,
+                                    /*bSetOnlyIfUndefined=*/false);
 
 #ifdef _WIN32
   constexpr char kHomeEnvVarName[] = "USERPROFILE";
@@ -999,14 +1081,10 @@ TEST(CplLoadConfigOptionsFromPredefinedFiles, UseHomeDirGdalConfigFile) {
   constexpr char kHomeEnvVarName[] = "HOME";
 #endif
 
-  const char* curr_home_config = CPLGetConfigOption(kHomeEnvVarName, "");
-  absl::Cleanup reset_curr_home_config = [kHomeEnvVarName, curr_home_config] {
-    CPLSetConfigOption(kHomeEnvVarName, curr_home_config);
-  };
-
-  // Setup home directory using config options to test configs directory
+  // Setup home directory using config options to test configs directory.
   const auto path = GetTestGdalConfig("");
-  CPLSetConfigOption(kHomeEnvVarName, path.c_str());
+  CPLConfigOptionSetter home_config(kHomeEnvVarName, path.c_str(),
+                                    /*bSetOnlyIfUndefined=*/false);
 
   CPLLoadConfigOptionsFromPredefinedFiles();
   absl::Cleanup config_cleaner = [] {
@@ -1016,7 +1094,7 @@ TEST(CplLoadConfigOptionsFromPredefinedFiles, UseHomeDirGdalConfigFile) {
   ASSERT_STREQ(CPLGetConfigOption("FOO_CONFIGOPTION", ""), "DOT_GDALRC");
 }
 
-void WriteConfig(const char* filename, const absl::string_view contents) {
+void WriteConfig(const char* filename, std::string_view contents) {
   VSILFILE* fp = VSIFOpenL(filename, "wb");
   ASSERT_NE(fp, nullptr);
   absl::Cleanup fp_closer = [fp] { VSIFCloseL(fp); };
@@ -1027,7 +1105,7 @@ void WriteConfig(const char* filename, const absl::string_view contents) {
 
 TEST(CplLoadConfigOptionsFromFileCredentialSectionParsing,
      PathSpecificOptions) {
-  constexpr absl::string_view gdalrc_contents = R"gdalrc(
+  constexpr std::string_view gdalrc_contents = R"gdalrc(
 [credentials]
 
 [.foobar_subsection]
@@ -1078,7 +1156,7 @@ TEST_KEY2=CONFIGOPTIONS_VAL2
 
 TEST(CplLoadConfigOptionsFromFileCredentialSectionParsing,
      WarningContentOutsideSubsection) {
-  constexpr absl::string_view gdalrc_contents = R"gdalrc(
+  constexpr std::string_view gdalrc_contents = R"gdalrc(
 [credentials]
 
 path=/vsi_test/foo/bar
@@ -1113,7 +1191,7 @@ TEST_CREDENTIALS_OUTSIDE_SUBSECTION_KEY=VAL
 
 TEST(CplLoadConfigOptionsFromFileCredentialSectionParsing,
      WarningSubsectionFirstKeyIsPath) {
-  constexpr absl::string_view gdalrc_contents = R"gdalrc(
+  constexpr std::string_view gdalrc_contents = R"gdalrc(
 [credentials]
 
 [.test_subsection]
@@ -1146,7 +1224,7 @@ TEST_CREDENTIALS_SUBSECTION_KEY=VAL
 
 TEST(CplLoadConfigOptionsFromFileCredentialSectionParsing,
      WarningDuplicatePath) {
-  constexpr absl::string_view gdalrc_contents = R"gdalrc(
+  constexpr std::string_view gdalrc_contents = R"gdalrc(
 [credentials]
 
 [.test_subsection]
@@ -1190,7 +1268,7 @@ TEST_CREDENTIALS_SUBSECTION_KEY=VAL
 }
 
 TEST(CplLoadConfigOptionsFromFileParsing, UnknownSectionsIgnored) {
-  constexpr absl::string_view gdalrc_contents = R"gdalrc(
+  constexpr std::string_view gdalrc_contents = R"gdalrc(
 [unknown]
 TEST_UNKNOWN_KEY=UNKNOWN_VAL
 
@@ -1229,53 +1307,59 @@ TEST(DownCast, WillCastDerivedToBaseClassWorksOnNullptrs) {
 }
 
 TEST(CPLFormatReadableFileSize, Uint64) {
-  EXPECT_EQ(CPLFormatReadableFileSize(static_cast<uint64_t>(0ULL)),
-            "000,000 bytes");
-  EXPECT_EQ(CPLFormatReadableFileSize(static_cast<uint64_t>(1ULL)),
-            "000,001 bytes");
-  EXPECT_EQ(CPLFormatReadableFileSize(static_cast<uint64_t>(1000000ULL)),
-            "1000,000 bytes");
-  EXPECT_EQ(CPLFormatReadableFileSize(static_cast<uint64_t>(1234567ULL)),
-            "1.23 MB");
-  EXPECT_EQ(CPLFormatReadableFileSize(static_cast<uint64_t>(1000000000ULL)),
-            "1000.00 MB");
-  EXPECT_EQ(CPLFormatReadableFileSize(static_cast<uint64_t>(1234567890ULL)),
-            "1.23 GB");
-  EXPECT_EQ(CPLFormatReadableFileSize(static_cast<uint64_t>(1000000000000ULL)),
-            "1000.00 GB");
-  EXPECT_EQ(CPLFormatReadableFileSize(static_cast<uint64_t>(1234567890123ULL)),
-            "1.23 TB");
-  EXPECT_EQ(
-      CPLFormatReadableFileSize(static_cast<uint64_t>(1000000000000000ULL)),
-      "1000.00 TB");
-  EXPECT_EQ(
-      CPLFormatReadableFileSize(static_cast<uint64_t>(1234567890123456ULL)),
-      "1.23 PB");
-  EXPECT_EQ(
-      CPLFormatReadableFileSize(static_cast<uint64_t>(1000000000000000000ULL)),
-      "1000.00 PB");
-  EXPECT_EQ(CPLFormatReadableFileSize(std::numeric_limits<uint64_t>::max()),
-            "18.45 HB");
+  struct TestCase {
+    uint64_t size;
+    std::string_view expected;
+  };
+  constexpr TestCase kCases[] = {
+      {.size = 0ULL, .expected = "000,000 bytes"},
+      {.size = 1ULL, .expected = "000,001 bytes"},
+      {.size = 1000000ULL, .expected = "1000,000 bytes"},
+      {.size = 1234567ULL, .expected = "1.23 MB"},
+      {.size = 1000000000ULL, .expected = "1000.00 MB"},
+      {.size = 1234567890ULL, .expected = "1.23 GB"},
+      {.size = 1000000000000ULL, .expected = "1000.00 GB"},
+      {.size = 1234567890123ULL, .expected = "1.23 TB"},
+      {.size = 1000000000000000ULL, .expected = "1000.00 TB"},
+      {.size = 1234567890123456ULL, .expected = "1.23 PB"},
+      {.size = 1000000000000000000ULL, .expected = "1000.00 PB"},
+      {.size = std::numeric_limits<uint64_t>::max(), .expected = "18.45 HB"},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.expected);
+    EXPECT_EQ(tc.expected, CPLFormatReadableFileSize(tc.size));
+  }
 }
 
 TEST(CPLFormatReadableFileSize, Double) {
-  EXPECT_EQ(CPLFormatReadableFileSize(0.0), "000,000 bytes");
-  EXPECT_EQ(CPLFormatReadableFileSize(1.0), "000,001 bytes");
-  EXPECT_EQ(CPLFormatReadableFileSize(1000000.0), "1000,000 bytes");
-  EXPECT_EQ(CPLFormatReadableFileSize(1234567.0), "1.23 MB");
-  EXPECT_EQ(CPLFormatReadableFileSize(1000000000.0), "1000.00 MB");
-  EXPECT_EQ(CPLFormatReadableFileSize(1234567890.0), "1.23 GB");
-  EXPECT_EQ(CPLFormatReadableFileSize(1000000000000.0), "1000.00 GB");
-  EXPECT_EQ(CPLFormatReadableFileSize(1234567890123.0), "1.23 TB");
-  EXPECT_EQ(CPLFormatReadableFileSize(1000000000000000.0), "1000.00 TB");
-  EXPECT_EQ(CPLFormatReadableFileSize(1234567890123456.0), "1.23 PB");
-  EXPECT_EQ(CPLFormatReadableFileSize(1000000000000000000.0), "1000.00 PB");
-  EXPECT_EQ(CPLFormatReadableFileSize(std::numeric_limits<double>::max()),
-            "179769313486231569011752584012189387881197018537899519684975567093"
-            "221424140287316977399479372650156877497075426045784429462895627128"
-            "692503729547397989056174152722947655352627933902673885763380310970"
-            "863459777311366506329324386668754953244789789343800952415837295514"
-            "371927114812537179201339392.00 HB");
+  struct TestCase {
+    double size;
+    std::string_view expected;
+  };
+  constexpr TestCase kCases[] = {
+      {.size = 0.0, .expected = "000,000 bytes"},
+      {.size = 1.0, .expected = "000,001 bytes"},
+      {.size = 1000000.0, .expected = "1000,000 bytes"},
+      {.size = 1234567.0, .expected = "1.23 MB"},
+      {.size = 1000000000.0, .expected = "1000.00 MB"},
+      {.size = 1234567890.0, .expected = "1.23 GB"},
+      {.size = 1000000000000.0, .expected = "1000.00 GB"},
+      {.size = 1234567890123.0, .expected = "1.23 TB"},
+      {.size = 1000000000000000.0, .expected = "1000.00 TB"},
+      {.size = 1234567890123456.0, .expected = "1.23 PB"},
+      {.size = 1000000000000000000.0, .expected = "1000.00 PB"},
+      {.size = std::numeric_limits<double>::max(),
+       .expected =
+           "179769313486231569011752584012189387881197018537899519684975567093"
+           "221424140287316977399479372650156877497075426045784429462895627128"
+           "692503729547397989056174152722947655352627933902673885763380310970"
+           "863459777311366506329324386668754953244789789343800952415837295514"
+           "371927114812537179201339392.00 HB"},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.expected);
+    EXPECT_EQ(tc.expected, CPLFormatReadableFileSize(tc.size));
+  }
 }
 
 TEST_F(CplConvTest, ReadLineAndFGetsEdgeCases) {
@@ -1286,22 +1370,27 @@ TEST_F(CplConvTest, ReadLineAndFGetsEdgeCases) {
 
   const std::string temp_dir(::testing::TempDir());
   const std::string local_file = temp_dir + "/readline_test.txt";
+  absl::Cleanup unlink_local = [&local_file] { VSIUnlink(local_file.c_str()); };
   {
     FILE* fp = fopen(local_file.c_str(), "wb");
     ASSERT_NE(nullptr, fp);
+    absl::Cleanup close_fp = [fp] { fclose(fp); };
     // 1. Short line for CPLFGets where buffer hits \r followed by \n, and \r
     // followed by non-\n.
     fwrite("ab\r\ncd\ref\n", 1, 10, fp);
     // 2. Long line (> 600 chars) to exercise CPLReadLine buffer growth.
     std::string long_line(650, 'X');
-    long_line += "\n";
+    long_line += '\n';
     fwrite(long_line.data(), 1, long_line.size(), fp);
-    fclose(fp);
   }
 
   {
     FILE* fp = fopen(local_file.c_str(), "rb");
     ASSERT_NE(nullptr, fp);
+    absl::Cleanup close_fp = [fp] {
+      fclose(fp);
+      CPLReadLine(nullptr);
+    };
     char small_buf[4] = {};
     // Reads "ab\r" (3 chars into 4-byte buffer), sees next char is '\n' and
     // consumes it.
@@ -1320,16 +1409,15 @@ TEST_F(CplConvTest, ReadLineAndFGetsEdgeCases) {
     ASSERT_NE(nullptr, line);
     EXPECT_EQ(650U, strlen(line));
     EXPECT_EQ(nullptr, CPLReadLine(fp));
-    fclose(fp);
-    CPLReadLine(nullptr);
   }
-  VSIUnlink(local_file.c_str());
 
   // Test CPLReadLineL / CPLReadLine2L / CPLReadLine3L on /vsimem/.
-  const char* kVsiLineFile = "/vsimem/vsi_readline.txt";
+  static constexpr char kVsiLineFile[] = "/vsimem/vsi_readline.txt";
+  absl::Cleanup unlink_vsi = [] { VSIUnlink(kVsiLineFile); };
   {
     VSILFILE* fp = VSIFOpenL(kVsiLineFile, "wb");
     ASSERT_NE(nullptr, fp);
+    absl::Cleanup close_fp = [fp] { VSIFCloseL(fp); };
     // Exactly 39 chars + \r\n to hit the 40-byte chunk boundary in
     // CPLReadLine3L.
     std::string chunk_boundary(39, 'A');
@@ -1339,11 +1427,11 @@ TEST_F(CplConvTest, ReadLineAndFGetsEdgeCases) {
     VSIFWriteL("line_nr\n\r", 1, 9, fp);
     // Line without trailing newline at EOF.
     VSIFWriteL("no_newline_eof", 1, 14, fp);
-    VSIFCloseL(fp);
   }
   {
     VSILFILE* fp = VSIFOpenL(kVsiLineFile, "rb");
     ASSERT_NE(nullptr, fp);
+    absl::Cleanup close_fp = [fp] { VSIFCloseL(fp); };
     const char* l1 = CPLReadLineL(fp);
     ASSERT_NE(nullptr, l1);
     EXPECT_EQ(39U, strlen(l1));
@@ -1354,21 +1442,21 @@ TEST_F(CplConvTest, ReadLineAndFGetsEdgeCases) {
 
     // Exceed nMaxCars limit.
     EXPECT_EQ(nullptr, CPLReadLine2L(fp, 5, nullptr));
-    VSIFCloseL(fp);
   }
   {
     VSILFILE* fp = VSIFOpenL(kVsiLineFile, "rb");
     ASSERT_NE(nullptr, fp);
+    absl::Cleanup close_fp = [fp] {
+      VSIFCloseL(fp);
+      CPLReadLineL(nullptr);
+    };
     EXPECT_NE(nullptr, CPLReadLineL(fp));
     EXPECT_NE(nullptr, CPLReadLineL(fp));
     const char* l3 = CPLReadLineL(fp);
     ASSERT_NE(nullptr, l3);
     EXPECT_STREQ("no_newline_eof", l3);
     EXPECT_EQ(nullptr, CPLReadLineL(fp));
-    VSIFCloseL(fp);
-    CPLReadLineL(nullptr);
   }
-  VSIUnlink(kVsiLineFile);
 }
 
 TEST_F(CplConvTest, ScanPrintAndComplexEdgeCases) {
@@ -1434,12 +1522,22 @@ TEST_F(CplConvTest, ConfigSubscribersKnownOptionsAndDirectives) {
   int count1 = 0;
   int count2 = 0;
   int count3 = 0;
+  int count4 = 0;
   auto cb = [](const char*, const char*, bool, void* user_data) {
     ++(*static_cast<int*>(user_data));
   };
   int id1 = CPLSubscribeToSetConfigOption(cb, &count1);
   int id2 = CPLSubscribeToSetConfigOption(cb, &count2);
   int id3 = CPLSubscribeToSetConfigOption(cb, &count3);
+  int id4 = -1;
+  absl::Cleanup cleanup_subscribers = [&] {
+    if (id1 >= 0) CPLUnsubscribeToSetConfigOption(id1);
+    if (id2 >= 0) CPLUnsubscribeToSetConfigOption(id2);
+    if (id3 >= 0) CPLUnsubscribeToSetConfigOption(id3);
+    if (id4 >= 0) CPLUnsubscribeToSetConfigOption(id4);
+    CPLSetConfigOption("AWS_TEST_SUB_OPT", nullptr);
+    CPLSetThreadLocalConfigOption("GS_TEST_SUB_OPT", nullptr);
+  };
 
   // Setting AWS_ / GS_ options also exercises
   // NotifyOtherComponentsConfigOptionChanged.
@@ -1451,21 +1549,24 @@ TEST_F(CplConvTest, ConfigSubscribersKnownOptionsAndDirectives) {
 
   // Unsubscribe middle (id2), then subscribe id4 to reuse freed slot.
   CPLUnsubscribeToSetConfigOption(id2);
-  int count4 = 0;
-  int id4 = CPLSubscribeToSetConfigOption(cb, &count4);
-  EXPECT_EQ(id2, id4);
+  const int old_id2 = id2;
+  id2 = -1;
+  id4 = CPLSubscribeToSetConfigOption(cb, &count4);
+  EXPECT_EQ(old_id2, id4);
 
   CPLUnsubscribeToSetConfigOption(id1);
+  id1 = -1;
   CPLUnsubscribeToSetConfigOption(id4);
+  id4 = -1;
   CPLUnsubscribeToSetConfigOption(id3);
+  id3 = -1;
   CPLSetConfigOption("AWS_TEST_SUB_OPT", nullptr);
   CPLSetThreadLocalConfigOption("GS_TEST_SUB_OPT", nullptr);
 
   // Known config options & CPL_DEBUG unknown config option detection.
   CPLDeclareKnownConfigOption("TEST_DECLARED_OPTION_123", "test desc");
-  char** known = CPLGetKnownConfigOptions();
+  StringListPtr known(CPLGetKnownConfigOptions(), CSLDestroy);
   EXPECT_NE(nullptr, known);
-  CSLDestroy(known);
 
   CPLSetConfigOption("CPL_DEBUG", "ON");
   CPLSetConfigOption("TEST_DECLARED_OPTION_123", "val");
@@ -1535,6 +1636,10 @@ TEST_F(CplConvTest, SharedFilesTreeOpsLocaleAndLocking) {
 
   // CPLOpenShared / CPLCloseShared / CPLGetSharedList / CPLDumpSharedList.
   const std::string shared_file = temp_dir + "/shared_test.bin";
+  absl::Cleanup cleanup_shared_file = [&shared_file] {
+    CPLCleanupSharedFileMutex();
+    VSIUnlink(shared_file.c_str());
+  };
   {
     FILE* fp = fopen(shared_file.c_str(), "wb");
     ASSERT_NE(nullptr, fp);
@@ -1554,11 +1659,13 @@ TEST_F(CplConvTest, SharedFilesTreeOpsLocaleAndLocking) {
   EXPECT_GE(n_shared, 2);
 
   const std::string dump_path = temp_dir + "/dump_shared.txt";
-  FILE* dump_fp = fopen(dump_path.c_str(), "wb");
-  ASSERT_NE(nullptr, dump_fp);
-  CPLDumpSharedList(dump_fp);
-  fclose(dump_fp);
-  VSIUnlink(dump_path.c_str());
+  {
+    absl::Cleanup unlink_dump = [&dump_path] { VSIUnlink(dump_path.c_str()); };
+    FILE* dump_fp = fopen(dump_path.c_str(), "wb");
+    ASSERT_NE(nullptr, dump_fp);
+    CPLDumpSharedList(dump_fp);
+    fclose(dump_fp);
+  }
 
   CPLCloseShared(s2);
   CPLCloseShared(s1);
@@ -1566,8 +1673,6 @@ TEST_F(CplConvTest, SharedFilesTreeOpsLocaleAndLocking) {
   CPLCloseShared(s_large1);
   // Closing unknown pointer logs an error.
   CPLCloseShared(reinterpret_cast<FILE*>(0x1));
-  CPLCleanupSharedFileMutex();
-  VSIUnlink(shared_file.c_str());
 
   // CPLUnlinkTree, CPLCopyFile, CPLMoveFile, CPLSymlink.
   EXPECT_NE(0, CPLUnlinkTree("/vsimem/does_not_exist_tree"));
@@ -1659,6 +1764,8 @@ TEST_F(CplConvTest, SharedFilesTreeOpsLocaleAndLocking) {
   // Unlocking removes the lock file.
   EXPECT_NE(0, VSIStatL(stalled_target.c_str(), &stalled_stat));
 }
+
+// TODO: b/335317901 - Cover CPLFreeConfig, CPLLocaleC, CPLThreadLocaleC.
 
 }  // namespace
 }  // namespace autotest2

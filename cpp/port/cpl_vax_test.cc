@@ -1,10 +1,10 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,6 +16,7 @@
 
 #include "third_party/gdal/port/cpl_vax.h"
 
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -26,12 +27,12 @@
 namespace autotest2 {
 namespace {
 
+static_assert(std::endian::native == std::endian::little);
+
 TEST(CplVaxTest, DoubleZeroAndNegativeZero) {
   double val = 0.0;
   CPLIEEEToVaxDouble(&val);
-  uint64_t bits = 0;
-  std::memcpy(&bits, &val, sizeof(bits));
-  EXPECT_EQ(bits, 0u);
+  EXPECT_EQ(std::bit_cast<uint64_t>(val), 0u);
 
   CPLVaxToIEEEDouble(&val);
   EXPECT_EQ(val, 0.0);
@@ -47,7 +48,7 @@ TEST(CplVaxTest, DoubleZeroAndNegativeZero) {
 }
 
 TEST(CplVaxTest, DoubleRoundTripNormalAndRoundingBits) {
-  const double kValues[] = {
+  constexpr double kValues[] = {
       1.0,
       -1.0,
       3.141592653589793,
@@ -67,8 +68,8 @@ TEST(CplVaxTest, DoubleRoundTripNormalAndRoundingBits) {
   // Explicitly test CPLVaxToIEEEDouble with rndbits != 0 (low 3 bits of dt.lo
   // set after word swap) and rndbits == 0, for both positive and negative VAX
   // doubles.
-  {
-    double v = 1.5;
+  for (double sign_val : {1.5, -1.5}) {
+    double v = sign_val;
     CPLIEEEToVaxDouble(&v);
     uint8_t raw[8];
     std::memcpy(raw, &v, sizeof(raw));
@@ -77,18 +78,7 @@ TEST(CplVaxTest, DoubleRoundTripNormalAndRoundingBits) {
     raw[7] = 0xFF;
     std::memcpy(&v, raw, sizeof(raw));
     CPLVaxToIEEEDouble(&v);
-    EXPECT_NEAR(v, 1.5, 1e-11);
-  }
-  {
-    double v = -1.5;
-    CPLIEEEToVaxDouble(&v);
-    uint8_t raw[8];
-    std::memcpy(raw, &v, sizeof(raw));
-    raw[6] = 0xFF;
-    raw[7] = 0xFF;
-    std::memcpy(&v, raw, sizeof(raw));
-    CPLVaxToIEEEDouble(&v);
-    EXPECT_NEAR(v, -1.5, 1e-11);
+    EXPECT_NEAR(v, sign_val, 1e-11);
   }
 }
 
@@ -111,26 +101,21 @@ TEST(CplVaxTest, DoubleOverflowAndUnderflow) {
   // Underflow (exponent < 0 in VAX D-float).
   double tiny = 1e-100;
   CPLIEEEToVaxDouble(&tiny);
-  uint64_t bits = 1;
-  std::memcpy(&bits, &tiny, sizeof(bits));
-  EXPECT_EQ(bits, 0u);
+  EXPECT_EQ(std::bit_cast<uint64_t>(tiny), 0u);
 
   double neg_tiny = -1e-100;
   CPLIEEEToVaxDouble(&neg_tiny);
-  std::memcpy(&bits, &neg_tiny, sizeof(bits));
-  EXPECT_EQ(bits, 0u);
+  EXPECT_EQ(std::bit_cast<uint64_t>(neg_tiny), 0u);
 }
 
 TEST(CplVaxTest, FloatRoundTripNormalAndZero) {
   float zero = 0.0f;
   CPLIEEEToVaxFloat(&zero);
-  uint32_t bits = 1;
-  std::memcpy(&bits, &zero, sizeof(bits));
-  EXPECT_EQ(bits, 0u);
+  EXPECT_EQ(std::bit_cast<uint32_t>(zero), 0u);
   CPLVaxToIEEEFloat(&zero);
   EXPECT_EQ(zero, 0.0f);
 
-  const float kValues[] = {1.0f, -1.0f, 0.5f, -123.456f, 1e10f, -1e-10f};
+  constexpr float kValues[] = {1.0f, -1.0f, 0.5f, -123.456f, 1e10f, -1e-10f};
   for (float orig : kValues) {
     float v = orig;
     CPLIEEEToVaxFloat(&v);
@@ -222,9 +207,7 @@ TEST(CplVaxTest, IEEEToVaxFloatSpecialCases) {
   {
     float tiny_denorm = std::ldexp(1.0f, -130);
     CPLIEEEToVaxFloat(&tiny_denorm);
-    uint32_t bits = 1;
-    std::memcpy(&bits, &tiny_denorm, sizeof(bits));
-    EXPECT_EQ(bits, 0u);
+    EXPECT_EQ(std::bit_cast<uint32_t>(tiny_denorm), 0u);
   }
 }
 

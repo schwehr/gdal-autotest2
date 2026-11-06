@@ -1,10 +1,10 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,11 +16,14 @@
 
 #include "third_party/gdal/port/cpl_quad_tree.h"
 
+#include <memory>
 #include <vector>
 
 #include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_memory.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
-#include "third_party/gdal/port/cpl_conv.h"
+#include "third_party/gdal/port/cpl_port.h"
 
 namespace autotest2 {
 namespace {
@@ -82,6 +85,7 @@ TEST(CplQuadTreeTest, Alg1WithGetBoundsAndForceSubNodesAndDumpStats) {
   const CPLRectObj global_bounds = {0.0, 0.0, 200.0, 100.0};
   CPLQuadTree* tree = CPLQuadTreeCreate(&global_bounds, GetFeatureBounds);
   ASSERT_NE(tree, nullptr);
+  absl::Cleanup tree_cleanup = [tree] { CPLQuadTreeDestroy(tree); };
 
   CPLQuadTreeSetBucketCapacity(tree, 0);  // Ignored (<= 0).
   CPLQuadTreeSetBucketCapacity(tree, 2);
@@ -148,16 +152,16 @@ TEST(CplQuadTreeTest, Alg1WithGetBoundsAndForceSubNodesAndDumpStats) {
   // Search with pnFeatureCount == nullptr and != nullptr, plus non-overlapping
   // AOIs in all 4 directions (left, right, below, above).
   {
-    void** res = CPLQuadTreeSearch(tree, &global_bounds, nullptr);
-    CPLFree(res);
+    std::unique_ptr<void*, CplFreeDeleter> res(
+        CPLQuadTreeSearch(tree, &global_bounds, nullptr));
   }
   {
     int count = 0;
-    void** res = CPLQuadTreeSearch(tree, &global_bounds, &count);
+    std::unique_ptr<void*, CplFreeDeleter> res(
+        CPLQuadTreeSearch(tree, &global_bounds, &count));
     EXPECT_EQ(count, kNumLeafEntries);
-    CPLFree(res);
   }
-  const CPLRectObj kOutsideRects[] = {
+  constexpr CPLRectObj kOutsideRects[] = {
       {-20.0, 10.0, -5.0, 20.0},
       {210.0, 10.0, 220.0, 20.0},
       {10.0, -20.0, 20.0, -5.0},
@@ -165,9 +169,9 @@ TEST(CplQuadTreeTest, Alg1WithGetBoundsAndForceSubNodesAndDumpStats) {
   };
   for (const auto& rect : kOutsideRects) {
     int count = -1;
-    void** res = CPLQuadTreeSearch(tree, &rect, &count);
+    std::unique_ptr<void*, CplFreeDeleter> res(
+        CPLQuadTreeSearch(tree, &rect, &count));
     EXPECT_EQ(count, 0);
-    CPLFree(res);
     EXPECT_FALSE(CPLQuadTreeHasMatch(tree, &rect));
   }
 
@@ -198,8 +202,6 @@ TEST(CplQuadTreeTest, Alg1WithGetBoundsAndForceSubNodesAndDumpStats) {
   EXPECT_EQ(feat_count, 0);
   EXPECT_EQ(max_bucket, 0);
   EXPECT_FALSE(CPLQuadTreeHasMatch(tree, &global_bounds));
-
-  CPLQuadTreeDestroy(tree);
 }
 
 TEST(CplQuadTreeTest, CreateExAndNullCallbacksAndAlg2) {
@@ -210,6 +212,7 @@ TEST(CplQuadTreeTest, CreateExAndNullCallbacksAndAlg2) {
   int ex_calls = 0;
   CPLQuadTree* tree_ex =
       CPLQuadTreeCreateEx(&global_bounds, GetFeatureBoundsEx, &ex_calls);
+  absl::Cleanup tree_ex_cleanup = [tree_ex] { CPLQuadTreeDestroy(tree_ex); };
   CPLQuadTreeSetBucketCapacity(tree_ex, 2);
 
   std::vector<Feature> features;
@@ -225,19 +228,23 @@ TEST(CplQuadTreeTest, CreateExAndNullCallbacksAndAlg2) {
   const CPLRectObj aoi = {0.0, 0.0, 100.0, 200.0};
   EXPECT_TRUE(CPLQuadTreeHasMatch(tree_ex, &aoi));
   int count = 0;
-  void** res = CPLQuadTreeSearch(tree_ex, &aoi, &count);
-  EXPECT_EQ(count, 6);
-  CPLFree(res);
+  {
+    std::unique_ptr<void*, CplFreeDeleter> res(
+        CPLQuadTreeSearch(tree_ex, &aoi, &count));
+    EXPECT_EQ(count, 6);
+  }
 
   for (auto& f : features) {
     CPLQuadTreeRemove(tree_ex, &f, nullptr);
   }
-  CPLQuadTreeDestroy(tree_ex);
 
   // 2) Tree with nullptr callback (stores pasBounds in nodes), testing both
   // Alg1 and Alg2 (when CPLQuadTreeSetMaxDepth is explicitly called).
   for (int explicit_depth : {0, 3}) {
     CPLQuadTree* tree_null = CPLQuadTreeCreate(&global_bounds, nullptr);
+    absl::Cleanup tree_null_cleanup = [tree_null] {
+      CPLQuadTreeDestroy(tree_null);
+    };
     CPLQuadTreeSetBucketCapacity(tree_null, 2);
     if (explicit_depth > 0) {
       CPLQuadTreeSetMaxDepth(tree_null, explicit_depth);
@@ -260,9 +267,11 @@ TEST(CplQuadTreeTest, CreateExAndNullCallbacksAndAlg2) {
     CPLQuadTreeInsertWithBounds(tree_null, &center3, &center3.bounds);
 
     EXPECT_TRUE(CPLQuadTreeHasMatch(tree_null, &aoi));
-    res = CPLQuadTreeSearch(tree_null, &aoi, &count);
-    EXPECT_EQ(count, 9);
-    CPLFree(res);
+    {
+      std::unique_ptr<void*, CplFreeDeleter> res(
+          CPLQuadTreeSearch(tree_null, &aoi, &count));
+      EXPECT_EQ(count, 9);
+    }
 
     CPLQuadTreeRemove(tree_null, &center1, &center1.bounds);
     CPLQuadTreeRemove(tree_null, &center2, &center2.bounds);
@@ -270,7 +279,6 @@ TEST(CplQuadTreeTest, CreateExAndNullCallbacksAndAlg2) {
     for (auto& f : features) {
       CPLQuadTreeRemove(tree_null, &f, &f.bounds);
     }
-    CPLQuadTreeDestroy(tree_null);
   }
 }
 

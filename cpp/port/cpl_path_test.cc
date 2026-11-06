@@ -1,6 +1,4 @@
-// Tests public functions in cpl_path.cpp.
-//
-// Copyright 2014 Google Inc. All Rights Reserved.
+// Copyright 2014 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,177 +11,235 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
+//
 // Tests for https://github.com/OSGeo/gdal/blob/master/port/cpl_path.cpp
 
 #include <cstdlib>
+#include <memory>
+#include <optional>
 #include <string>
 
 #include "testing/base/public/gunit.h"
 #include "third_party/absl/cleanup/cleanup.h"
-#include "third_party/absl/types/optional.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_cstringlist.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_memory.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/port/cpl_conv.h"
+#include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_string.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 
+namespace autotest2 {
 namespace {
+
+struct UnaryPathCase {
+  const char* input;
+  const char* expected;
+};
 
 // Tests extracting the directory portion of a file path.
 TEST(CplPathTest, CPLGetPath) {
-  EXPECT_STREQ("", CPLGetPath(""));
-  // nullptr causes a segfault.
-  EXPECT_STREQ("abc", CPLGetPath("abc/def.xyz"));
-  EXPECT_STREQ("/abc/def", CPLGetPath("/abc/def/"));
-  EXPECT_STREQ("/", CPLGetPath("/"));
-  EXPECT_STREQ("/abc", CPLGetPath("/abc/def"));
-  EXPECT_STREQ("", CPLGetPath("abc"));
-  EXPECT_STREQ("/tmp/../bar", CPLGetPath("/tmp/../bar/"));
-  EXPECT_STREQ("/a/./b", CPLGetPath("/a/./b/"));
-  EXPECT_STREQ("/foo", CPLGetPath("/foo/bar.baz"));
-  EXPECT_STREQ("/e//f/g", CPLGetPath("/e//f/g/"));
-  // TODO(schwehr): test really large strings.
+  // Passing nullptr causes a segfault.
+  constexpr UnaryPathCase kCases[] = {
+      {.input = "", .expected = ""},
+      {.input = "abc/def.xyz", .expected = "abc"},
+      {.input = "/abc/def/", .expected = "/abc/def"},
+      {.input = "/", .expected = "/"},
+      {.input = "/abc/def", .expected = "/abc"},
+      {.input = "abc", .expected = ""},
+      {.input = "/tmp/../bar/", .expected = "/tmp/../bar"},
+      {.input = "/a/./b/", .expected = "/a/./b"},
+      {.input = "/foo/bar.baz", .expected = "/foo"},
+      {.input = "/e//f/g/", .expected = "/e//f/g"},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.input);
+    EXPECT_STREQ(tc.expected, CPLGetPath(tc.input));
+  }
 }
 
 // Tests getting the directory portion of a file path.
 // Almost the same as CPLGetPath, but with "." rather than ""
 // for an empty directory path.
 TEST(CplPathTest, CPLGetDirname) {
-  EXPECT_STREQ(".", CPLGetDirname(""));
-  // nullptr causes a segfault.
-  EXPECT_STREQ("abc", CPLGetDirname("abc/def.xyz"));
-  EXPECT_STREQ("/abc/def", CPLGetDirname("/abc/def/"));
-  EXPECT_STREQ("/", CPLGetDirname("/"));
-  EXPECT_STREQ("/abc", CPLGetDirname("/abc/def"));
-  EXPECT_STREQ(".", CPLGetDirname("abc"));
-  EXPECT_STREQ("/tmp/../bar", CPLGetDirname("/tmp/../bar/"));
-  EXPECT_STREQ("/a/./b", CPLGetDirname("/a/./b/"));
+  // Passing nullptr causes a segfault.
+  constexpr UnaryPathCase kCases[] = {
+      {.input = "", .expected = "."},
+      {.input = "abc/def.xyz", .expected = "abc"},
+      {.input = "/abc/def/", .expected = "/abc/def"},
+      {.input = "/", .expected = "/"},
+      {.input = "/abc/def", .expected = "/abc"},
+      {.input = "abc", .expected = "."},
+      {.input = "/tmp/../bar/", .expected = "/tmp/../bar"},
+      {.input = "/a/./b/", .expected = "/a/./b"},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.input);
+    EXPECT_STREQ(tc.expected, CPLGetDirname(tc.input));
+  }
 }
 
 // Tests getting the non-directory part of a filename.
 TEST(CplPathTest, CPLGetFilename) {
-  EXPECT_STREQ("", CPLGetFilename(""));
-  EXPECT_STREQ(".", CPLGetFilename("."));
-  EXPECT_STREQ("", CPLGetFilename("/"));
-  EXPECT_STREQ("a", CPLGetFilename("a"));
-  EXPECT_STREQ("foo.bar", CPLGetFilename("foo.bar"));
-  EXPECT_STREQ("def.xyz", CPLGetFilename("abc/def.xyz"));
-  EXPECT_STREQ("def", CPLGetFilename("abc/def"));
-  EXPECT_STREQ("", CPLGetFilename("/abc/def/"));
+  constexpr UnaryPathCase kCases[] = {
+      {.input = "", .expected = ""},
+      {.input = ".", .expected = "."},
+      {.input = "/", .expected = ""},
+      {.input = "a", .expected = "a"},
+      {.input = "foo.bar", .expected = "foo.bar"},
+      {.input = "abc/def.xyz", .expected = "def.xyz"},
+      {.input = "abc/def", .expected = "def"},
+      {.input = "/abc/def/", .expected = ""},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.input);
+    EXPECT_STREQ(tc.expected, CPLGetFilename(tc.input));
+  }
 }
 
 // Tests getting the non-extension portion of a filename.
 TEST(CplPathTest, CPLGetBasename) {
-  EXPECT_STREQ("", CPLGetBasename(""));
-  EXPECT_STREQ("", CPLGetBasename("/"));
-
-  // Behavior deviates from documentation:
-  // EXPECT_STREQ("", CPLGetBasename("."));
-  // EXPECT_STREQ("", CPLGetBasename(".a"));
-  // EXPECT_STREQ("", CPLGetBasename("/a/.b"));
-
-  EXPECT_STREQ("a", CPLGetBasename("a"));
-  EXPECT_STREQ("a", CPLGetBasename("a.b"));
-  EXPECT_STREQ("a.b", CPLGetBasename("a.b.c"));
-  EXPECT_STREQ("c", CPLGetBasename("/a/b/c.d"));
-  EXPECT_STREQ("def", CPLGetBasename("abc/def.xyz"));
-  EXPECT_STREQ("def", CPLGetBasename("abc/def"));
-  EXPECT_STREQ("", CPLGetBasename("abc/def/"));
+  // Behavior deviates from documentation for dot-files (".", ".a", "/a/.b").
+  constexpr UnaryPathCase kCases[] = {
+      {.input = "", .expected = ""},
+      {.input = "/", .expected = ""},
+      {.input = "a", .expected = "a"},
+      {.input = "a.b", .expected = "a"},
+      {.input = "a.b.c", .expected = "a.b"},
+      {.input = "/a/b/c.d", .expected = "c"},
+      {.input = "abc/def.xyz", .expected = "def"},
+      {.input = "abc/def", .expected = "def"},
+      {.input = "abc/def/", .expected = ""},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.input);
+    EXPECT_STREQ(tc.expected, CPLGetBasename(tc.input));
+  }
 }
 
 // Tests getting the extension at the end of a file path.
 TEST(CplPathTest, CPLGetExtension) {
-  EXPECT_STREQ("", CPLGetExtension(""));
-  EXPECT_STREQ("", CPLGetExtension("a"));
-  EXPECT_STREQ("", CPLGetExtension("."));
-  // Undocumented behavior.  Expected "b", but got "" for ".b"
-  // Reported upstream: https://trac.osgeo.org/gdal/ticket/5373
-  EXPECT_STREQ("", CPLGetExtension(".b"));
-  EXPECT_STREQ("d", CPLGetExtension("/foo/c.d"));
-  EXPECT_STREQ("", CPLGetExtension("/foo.bar/e"));
-  EXPECT_STREQ("f", CPLGetExtension("/foo.bar/e.f"));
-  EXPECT_STREQ("txt", CPLGetExtension("/foo/bar/normal.txt"));
-  EXPECT_STREQ("long", CPLGetExtension("/foo/bar/extra.long"));
-  EXPECT_STREQ("e", CPLGetExtension("/a/b/c.d.e"));
+  constexpr UnaryPathCase kCases[] = {
+      {.input = "", .expected = ""},
+      {.input = "a", .expected = ""},
+      {.input = ".", .expected = ""},
+      // Undocumented behavior. Expected "b", but got "" for ".b" (upstream
+      // issue #5373).
+      {.input = ".b", .expected = ""},
+      {.input = "/foo/c.d", .expected = "d"},
+      {.input = "/foo.bar/e", .expected = ""},
+      {.input = "/foo.bar/e.f", .expected = "f"},
+      {.input = "/foo/bar/normal.txt", .expected = "txt"},
+      {.input = "/foo/bar/extra.long", .expected = "long"},
+      {.input = "/a/b/c.d.e", .expected = "e"},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.input);
+    EXPECT_STREQ(tc.expected, CPLGetExtension(tc.input));
+  }
 }
-
-// TODO(schwehr): Write a test for CPLGetCurrentDir.
 
 // Tests changing the current file extension to a new one.
 TEST(CplPathTest, CPLResetExtension) {
-  EXPECT_STREQ("a.c", CPLResetExtension("a.b", "c"));
-  EXPECT_STREQ("a..c", CPLResetExtension("a.b", ".c"));
-  EXPECT_STREQ("a.", CPLResetExtension("a.b", ""));
-
-  EXPECT_STREQ(".", CPLResetExtension("", ""));
-  EXPECT_STREQ(".bar", CPLResetExtension("", "bar"));
-
-  EXPECT_STREQ("/foo.baz", CPLResetExtension("/foo.bar", "baz"));
-  EXPECT_STREQ("//foo.b", CPLResetExtension("//foo.a", "b"));
-  EXPECT_STREQ("/a/.b/c.e", CPLResetExtension("/a/.b/c.d", "e"));
-  EXPECT_STREQ("/a.b.d", CPLResetExtension("/a.b.c", "d"));
+  struct ResetCase {
+    const char* path;
+    const char* ext;
+    const char* expected;
+  };
+  constexpr ResetCase kCases[] = {
+      {.path = "a.b", .ext = "c", .expected = "a.c"},
+      {.path = "a.b", .ext = ".c", .expected = "a..c"},
+      {.path = "a.b", .ext = "", .expected = "a."},
+      {.path = "", .ext = "", .expected = "."},
+      {.path = "", .ext = "bar", .expected = ".bar"},
+      {.path = "/foo.bar", .ext = "baz", .expected = "/foo.baz"},
+      {.path = "//foo.a", .ext = "b", .expected = "//foo.b"},
+      {.path = "/a/.b/c.d", .ext = "e", .expected = "/a/.b/c.e"},
+      {.path = "/a.b.c", .ext = "d", .expected = "/a.b.d"},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.path);
+    EXPECT_STREQ(tc.expected, CPLResetExtension(tc.path, tc.ext));
+  }
 }
 
 // Tests concatenating a directory path, file basename and extension.
 TEST(CplPathTest, CPLFormFilename) {
-  EXPECT_STREQ("", CPLFormFilename("", "", ""));
-  EXPECT_STREQ("abc/xyz/def.dat", CPLFormFilename("abc/xyz", "def", ".dat"));
-  EXPECT_STREQ("def", CPLFormFilename(nullptr, "def", nullptr));
-  EXPECT_STREQ("abc/def.dat", CPLFormFilename(nullptr, "abc/def.dat", nullptr));
-  EXPECT_STREQ("/abc/xyz/def.dat",
-               CPLFormFilename("/abc/xyz/", "def.dat", nullptr));
-
-  EXPECT_STREQ("a/b.c", CPLFormFilename("a", "b", "c"));
-  EXPECT_STREQ("//a/b//c.d", CPLFormFilename("//a/b//", "c", ".d"));
-  EXPECT_STREQ("a/b..c", CPLFormFilename("a", "b.", "c"));
-
-  EXPECT_STREQ("a/", CPLFormFilename("a", "", ""));
-  EXPECT_STREQ("a", CPLFormFilename("", "a", ""));
-  EXPECT_STREQ(".a", CPLFormFilename("", "", "a"));
-  EXPECT_STREQ(".a", CPLFormFilename("", "", ".a"));
-  EXPECT_STREQ("..a", CPLFormFilename("", "", "..a"));
-  EXPECT_STREQ("./a", CPLFormFilename(".", "a", ""));
-  EXPECT_STREQ("./a", CPLFormFilename("./", "a", ""));
-  EXPECT_STREQ("./b/a", CPLFormFilename("./b", "a", ""));
-  EXPECT_STREQ("./b/a", CPLFormFilename("./b/", "a", ""));
-
-  EXPECT_STREQ("/a", CPLFormFilename("/a/b", "..", ""));
-  EXPECT_STREQ("/a", CPLFormFilename("/a/b/", "..", ""));
-  EXPECT_STREQ("/a/b", CPLFormFilename("/a/b//", "..", ""));
-
-  EXPECT_STREQ("/a/b/.", CPLFormFilename("/a/b", ".", ""));
-  EXPECT_STREQ("/a/b/.", CPLFormFilename("/a/b/", ".", ""));
-  EXPECT_STREQ("/a/b//.", CPLFormFilename("/a/b//", ".", ""));
-
-  EXPECT_STREQ("/a/b//", CPLFormFilename("/a/b", "/", ""));
-  EXPECT_STREQ("/a/b//", CPLFormFilename("/a/b/", "/", ""));
-  EXPECT_STREQ("/a/b///", CPLFormFilename("/a/b//", "/", ""));
+  struct FormCase {
+    const char* path;
+    const char* basename;
+    const char* ext;
+    const char* expected;
+  };
+  constexpr FormCase kCases[] = {
+      {.path = "", .basename = "", .ext = "", .expected = ""},
+      {.path = "abc/xyz",
+       .basename = "def",
+       .ext = ".dat",
+       .expected = "abc/xyz/def.dat"},
+      {.path = nullptr, .basename = "def", .ext = nullptr, .expected = "def"},
+      {.path = nullptr,
+       .basename = "abc/def.dat",
+       .ext = nullptr,
+       .expected = "abc/def.dat"},
+      {.path = "/abc/xyz/",
+       .basename = "def.dat",
+       .ext = nullptr,
+       .expected = "/abc/xyz/def.dat"},
+      {.path = "a", .basename = "b", .ext = "c", .expected = "a/b.c"},
+      {.path = "//a/b//",
+       .basename = "c",
+       .ext = ".d",
+       .expected = "//a/b//c.d"},
+      {.path = "a", .basename = "b.", .ext = "c", .expected = "a/b..c"},
+      {.path = "a", .basename = "", .ext = "", .expected = "a/"},
+      {.path = "", .basename = "a", .ext = "", .expected = "a"},
+      {.path = "", .basename = "", .ext = "a", .expected = ".a"},
+      {.path = "", .basename = "", .ext = ".a", .expected = ".a"},
+      {.path = "", .basename = "", .ext = "..a", .expected = "..a"},
+      {.path = ".", .basename = "a", .ext = "", .expected = "./a"},
+      {.path = "./", .basename = "a", .ext = "", .expected = "./a"},
+      {.path = "./b", .basename = "a", .ext = "", .expected = "./b/a"},
+      {.path = "./b/", .basename = "a", .ext = "", .expected = "./b/a"},
+      {.path = "/a/b", .basename = "..", .ext = "", .expected = "/a"},
+      {.path = "/a/b/", .basename = "..", .ext = "", .expected = "/a"},
+      {.path = "/a/b//", .basename = "..", .ext = "", .expected = "/a/b"},
+      {.path = "/a/b", .basename = ".", .ext = "", .expected = "/a/b/."},
+      {.path = "/a/b/", .basename = ".", .ext = "", .expected = "/a/b/."},
+      {.path = "/a/b//", .basename = ".", .ext = "", .expected = "/a/b//."},
+      {.path = "/a/b", .basename = "/", .ext = "", .expected = "/a/b//"},
+      {.path = "/a/b/", .basename = "/", .ext = "", .expected = "/a/b//"},
+      {.path = "/a/b//", .basename = "/", .ext = "", .expected = "/a/b///"},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.expected);
+    EXPECT_STREQ(tc.expected, CPLFormFilename(tc.path, tc.basename, tc.ext));
+  }
 }
-
-// TODO(schwehr): Write tests for CPLFormCIFilename, CPLProjectRelativeFilename,
-// CPLIsFilenameRelative, and CPLExtractRelativePath.
 
 // Tests removal of up to one slash at the end of a path.
 TEST(CplPathTest, CPLCleanTrailingSlash) {
-  EXPECT_STREQ("", CPLCleanTrailingSlash(""));
-  EXPECT_STREQ(".", CPLCleanTrailingSlash("."));
-  EXPECT_STREQ("", CPLCleanTrailingSlash("/"));
-  EXPECT_STREQ("/a", CPLCleanTrailingSlash("/a"));
-  EXPECT_STREQ("/a", CPLCleanTrailingSlash("/a/"));
-  EXPECT_STREQ("/", CPLCleanTrailingSlash("//"));
-  EXPECT_STREQ("a/", CPLCleanTrailingSlash("a//"));
-  EXPECT_STREQ(".a", CPLCleanTrailingSlash(".a/"));
-  EXPECT_STREQ(".a/", CPLCleanTrailingSlash(".a//"));
-
-  EXPECT_STREQ("abc/def", CPLCleanTrailingSlash("abc/def/"));
-  EXPECT_STREQ("abc/def", CPLCleanTrailingSlash("abc/def"));
-  EXPECT_STREQ("c:\\abc\\def", CPLCleanTrailingSlash("c:\\abc\\def\\"));
-  EXPECT_STREQ("c:\\abc\\def", CPLCleanTrailingSlash("c:\\abc\\def"));
-  EXPECT_STREQ("abc", CPLCleanTrailingSlash("abc"));
+  constexpr UnaryPathCase kCases[] = {
+      {.input = "", .expected = ""},
+      {.input = ".", .expected = "."},
+      {.input = "/", .expected = ""},
+      {.input = "/a", .expected = "/a"},
+      {.input = "/a/", .expected = "/a"},
+      {.input = "//", .expected = "/"},
+      {.input = "a//", .expected = "a/"},
+      {.input = ".a/", .expected = ".a"},
+      {.input = ".a//", .expected = ".a/"},
+      {.input = "abc/def/", .expected = "abc/def"},
+      {.input = "abc/def", .expected = "abc/def"},
+      {.input = "c:\\abc\\def\\", .expected = "c:\\abc\\def"},
+      {.input = "c:\\abc\\def", .expected = "c:\\abc\\def"},
+      {.input = "abc", .expected = "abc"},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.input);
+    EXPECT_STREQ(tc.expected, CPLCleanTrailingSlash(tc.input));
+  }
 }
-
-// TODO(schwehr): Test CPLCorrespondingPaths
-// TODO(schwehr): Test CPLGenerateTempFilename
 
 TEST(CplExpandTilde, NoTilde) {
   EXPECT_STREQ("/foo/bar", CPLExpandTilde("/foo/bar"));
@@ -200,10 +256,13 @@ TEST(CplExpandTilde, WillExpand) {
   // the HOME env var, which would pollute config state for other tests.
   // Note, CPLSetConfigOption invalidates this ptr.
   const char* curr_config = CPLGetGlobalConfigOption("HOME", nullptr);
-  char* saved_config = curr_config ? CPLStrdup(curr_config) : nullptr;
-  absl::Cleanup curr_config_cleanup = [saved_config] {
-    CPLSetConfigOption("HOME", saved_config);
-    CPLFree(saved_config);
+  std::optional<std::string> saved_config;
+  if (curr_config != nullptr) {
+    saved_config = curr_config;
+  }
+  absl::Cleanup curr_config_cleanup = [&saved_config] {
+    CPLSetConfigOption(
+        "HOME", saved_config.has_value() ? saved_config->c_str() : nullptr);
   };
 
   CPLSetConfigOption("HOME", "/foo");
@@ -217,20 +276,20 @@ TEST(CplExpandTilde, WillExpand) {
 
 class CPLSaveEnv {
  public:
-  CPLSaveEnv(const char* key) : key_(key) {
+  explicit CPLSaveEnv(const char* key) : key_(key) {
     const char* value = getenv(key);
     if (value != nullptr) value_ = value;
   }
   ~CPLSaveEnv() {
     if (value_.has_value())
-      setenv(key_.c_str(), value_.value().c_str(), 1 /* overwrite*/);
+      setenv(key_.c_str(), value_->c_str(), 1 /* overwrite*/);
     else
       unsetenv(key_.c_str());
   }
 
  private:
   const std::string key_;
-  absl::optional<std::string> value_;
+  std::optional<std::string> value_;
 };
 
 TEST(CplPathTest, CPLGetHomeDir) {
@@ -274,9 +333,8 @@ TEST(CplPathTest, VsicurlAndDriveAndOverlongPaths) {
 }
 
 TEST(CplPathTest, CPLGetCurrentDirAndFormFilenameAdvanced) {
-  char* cwd = CPLGetCurrentDir();
-  EXPECT_NE(nullptr, cwd);
-  CPLFree(cwd);
+  std::unique_ptr<char, CplFreeDeleter> cwd(CPLGetCurrentDir());
+  EXPECT_NE(nullptr, cwd.get());
 
   EXPECT_STREQ("/a/b/c.txt", CPLFormFilename("/a/b", "./c", "txt"));
   EXPECT_STREQ("/vsicurl/http://example.com/dir/file.tif?foo=bar",
@@ -291,9 +349,9 @@ TEST(CplPathTest, CPLGetCurrentDirAndFormFilenameAdvanced) {
 }
 
 TEST(CplPathTest, CPLFormCIFilename) {
-  const char* kDir = "/vsimem/cpl_path_ci_test";
+  static constexpr char kDir[] = "/vsimem/cpl_path_ci_test";
   ASSERT_EQ(0, VSIMkdir(kDir, 0755));
-  absl::Cleanup cleanup = [kDir] { VSIRmdirRecursive(kDir); };
+  absl::Cleanup cleanup = [] { VSIRmdirRecursive(kDir); };
   VSILFILE* f1 = VSIFOpenL("/vsimem/cpl_path_ci_test/FOO.TXT", "wb");
   ASSERT_NE(nullptr, f1);
   ASSERT_EQ(0, VSIFCloseL(f1));
@@ -301,21 +359,37 @@ TEST(CplPathTest, CPLFormCIFilename) {
   ASSERT_NE(nullptr, f2);
   ASSERT_EQ(0, VSIFCloseL(f2));
 
-  // Lowercase request matches uppercase file
-  EXPECT_STREQ("/vsimem/cpl_path_ci_test/FOO.TXT",
-               CPLFormCIFilename(kDir, "foo", "txt"));
-  // Uppercase request matches lowercase file
-  EXPECT_STREQ("/vsimem/cpl_path_ci_test/bar.txt",
-               CPLFormCIFilename(kDir, "BAR", "TXT"));
-  // Mixed case request falls back to VSIReadDir scan
-  EXPECT_STREQ("/vsimem/cpl_path_ci_test/FOO.TXT",
-               CPLFormCIFilename(kDir, "Foo", "Txt"));
-  // Exact match
-  EXPECT_STREQ("/vsimem/cpl_path_ci_test/FOO.TXT",
-               CPLFormCIFilename(kDir, "FOO", "TXT"));
-  // Non-existent file falls back to CPLFormFilename
-  EXPECT_STREQ("/vsimem/cpl_path_ci_test/missing.txt",
-               CPLFormCIFilename(kDir, "missing", "txt"));
+  struct CICase {
+    const char* basename;
+    const char* ext;
+    const char* expected;
+  };
+  constexpr CICase kCases[] = {
+      // Lowercase request matches uppercase file
+      {.basename = "foo",
+       .ext = "txt",
+       .expected = "/vsimem/cpl_path_ci_test/FOO.TXT"},
+      // Uppercase request matches lowercase file
+      {.basename = "BAR",
+       .ext = "TXT",
+       .expected = "/vsimem/cpl_path_ci_test/bar.txt"},
+      // Mixed case request falls back to VSIReadDir scan
+      {.basename = "Foo",
+       .ext = "Txt",
+       .expected = "/vsimem/cpl_path_ci_test/FOO.TXT"},
+      // Exact match
+      {.basename = "FOO",
+       .ext = "TXT",
+       .expected = "/vsimem/cpl_path_ci_test/FOO.TXT"},
+      // Non-existent file falls back to CPLFormFilename
+      {.basename = "missing",
+       .ext = "txt",
+       .expected = "/vsimem/cpl_path_ci_test/missing.txt"},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.basename);
+    EXPECT_STREQ(tc.expected, CPLFormCIFilename(kDir, tc.basename, tc.ext));
+  }
 }
 
 TEST(CplPathTest, RelativeAndProjectPaths) {
@@ -325,41 +399,74 @@ TEST(CplPathTest, RelativeAndProjectPaths) {
   EXPECT_FALSE(CPLIsFilenameRelative("\\abs\\file.tif"));
   EXPECT_FALSE(CPLIsFilenameRelative("C:\\abs\\file.tif"));
 
-  EXPECT_STREQ("b.tif", CPLProjectRelativeFilename(nullptr, "b.tif"));
-  EXPECT_STREQ("b.tif", CPLProjectRelativeFilename("", "b.tif"));
-  EXPECT_STREQ("/abs/b.tif", CPLProjectRelativeFilename("/proj", "/abs/b.tif"));
-  EXPECT_STREQ("/proj/sub/b.tif",
-               CPLProjectRelativeFilename("/proj", "sub/b.tif"));
-  EXPECT_STREQ("/proj/sub/b.tif",
-               CPLProjectRelativeFilename("/proj/", "sub/b.tif"));
+  struct ProjCase {
+    const char* proj_dir;
+    const char* sub_path;
+    const char* expected;
+  };
+  constexpr ProjCase kProjCases[] = {
+      {.proj_dir = nullptr, .sub_path = "b.tif", .expected = "b.tif"},
+      {.proj_dir = "", .sub_path = "b.tif", .expected = "b.tif"},
+      {.proj_dir = "/proj", .sub_path = "/abs/b.tif", .expected = "/abs/b.tif"},
+      {.proj_dir = "/proj",
+       .sub_path = "sub/b.tif",
+       .expected = "/proj/sub/b.tif"},
+      {.proj_dir = "/proj/",
+       .sub_path = "sub/b.tif",
+       .expected = "/proj/sub/b.tif"},
+  };
+  for (const auto& tc : kProjCases) {
+    SCOPED_TRACE(tc.expected);
+    EXPECT_STREQ(tc.expected,
+                 CPLProjectRelativeFilename(tc.proj_dir, tc.sub_path));
+  }
 
-  int got_rel = -1;
-  EXPECT_STREQ("/a/b.tif",
-               CPLExtractRelativePath(nullptr, "/a/b.tif", &got_rel));
-  EXPECT_FALSE(got_rel);
   EXPECT_STREQ("/a/b.tif",
                CPLExtractRelativePath(nullptr, "/a/b.tif", nullptr));
 
-  EXPECT_STREQ("rel/b.tif", CPLExtractRelativePath("", "rel/b.tif", &got_rel));
-  EXPECT_TRUE(got_rel);
-  EXPECT_STREQ("rel/b.tif", CPLExtractRelativePath(".", "rel/b.tif", &got_rel));
-  EXPECT_TRUE(got_rel);
-
-  EXPECT_STREQ("/abs/b.tif",
-               CPLExtractRelativePath("", "/abs/b.tif", &got_rel));
-  EXPECT_FALSE(got_rel);
-
-  EXPECT_STREQ("/c/d/e.tif",
-               CPLExtractRelativePath("/a/b", "/c/d/e.tif", &got_rel));
-  EXPECT_FALSE(got_rel);
-
-  EXPECT_STREQ("c/d.tif",
-               CPLExtractRelativePath("/a/b", "/a/b/c/d.tif", &got_rel));
-  EXPECT_TRUE(got_rel);
-
-  EXPECT_STREQ("/a/b/c.tif",
-               CPLExtractRelativePath("/a/b/", "/a/b/c.tif", &got_rel));
-  EXPECT_FALSE(got_rel);
+  struct ExtractCase {
+    const char* base_dir;
+    const char* target;
+    const char* expected;
+    bool expected_got_rel;
+  };
+  constexpr ExtractCase kExtractCases[] = {
+      {.base_dir = nullptr,
+       .target = "/a/b.tif",
+       .expected = "/a/b.tif",
+       .expected_got_rel = false},
+      {.base_dir = "",
+       .target = "rel/b.tif",
+       .expected = "rel/b.tif",
+       .expected_got_rel = true},
+      {.base_dir = ".",
+       .target = "rel/b.tif",
+       .expected = "rel/b.tif",
+       .expected_got_rel = true},
+      {.base_dir = "",
+       .target = "/abs/b.tif",
+       .expected = "/abs/b.tif",
+       .expected_got_rel = false},
+      {.base_dir = "/a/b",
+       .target = "/c/d/e.tif",
+       .expected = "/c/d/e.tif",
+       .expected_got_rel = false},
+      {.base_dir = "/a/b",
+       .target = "/a/b/c/d.tif",
+       .expected = "c/d.tif",
+       .expected_got_rel = true},
+      {.base_dir = "/a/b/",
+       .target = "/a/b/c.tif",
+       .expected = "/a/b/c.tif",
+       .expected_got_rel = false},
+  };
+  for (const auto& tc : kExtractCases) {
+    SCOPED_TRACE(tc.target);
+    int got_rel = -1;
+    EXPECT_STREQ(tc.expected,
+                 CPLExtractRelativePath(tc.base_dir, tc.target, &got_rel));
+    EXPECT_EQ(tc.expected_got_rel, static_cast<bool>(got_rel));
+  }
 }
 
 TEST(CplPathTest, CPLCorrespondingPaths) {
@@ -371,30 +478,30 @@ TEST(CplPathTest, CPLCorrespondingPaths) {
 
   // Single matching element
   const char* single_list[] = {"/a/foo.shp", nullptr};
-  char** res1 = CPLCorrespondingPaths("/a/foo.shp", "/b/bar.shp",
-                                      const_cast<char**>(single_list));
-  ASSERT_NE(nullptr, res1);
-  EXPECT_EQ(1, CSLCount(res1));
-  EXPECT_STREQ("/b/bar.shp", res1[0]);
-  CSLDestroy(res1);
+  StringListPtr res1(CPLCorrespondingPaths("/a/foo.shp", "/b/bar.shp",
+                                           const_cast<char**>(single_list)),
+                     CSLDestroy);
+  ASSERT_NE(nullptr, res1.get());
+  EXPECT_EQ(1, CSLCount(res1.get()));
+  EXPECT_STREQ("/b/bar.shp", res1.get()[0]);
 
   // Multi-item list with same basename, different dir
   const char* multi_list[] = {"/old/foo.shp", "/old/foo.shx", "/old/foo.dbf",
                               nullptr};
-  char** res2 = CPLCorrespondingPaths("/old/foo.shp", "/new/foo.shp",
-                                      const_cast<char**>(multi_list));
-  ASSERT_NE(nullptr, res2);
-  EXPECT_EQ(3, CSLCount(res2));
-  EXPECT_STREQ("/new/foo.shx", res2[1]);
-  CSLDestroy(res2);
+  StringListPtr res2(CPLCorrespondingPaths("/old/foo.shp", "/new/foo.shp",
+                                           const_cast<char**>(multi_list)),
+                     CSLDestroy);
+  ASSERT_NE(nullptr, res2.get());
+  EXPECT_EQ(3, CSLCount(res2.get()));
+  EXPECT_STREQ("/new/foo.shx", res2.get()[1]);
 
   // Multi-item list with different basename
-  char** res3 = CPLCorrespondingPaths("/old/foo.shp", "/new/bar.shp",
-                                      const_cast<char**>(multi_list));
-  ASSERT_NE(nullptr, res3);
-  EXPECT_EQ(3, CSLCount(res3));
-  EXPECT_STREQ("/new/bar.shx", res3[1]);
-  CSLDestroy(res3);
+  StringListPtr res3(CPLCorrespondingPaths("/old/foo.shp", "/new/bar.shp",
+                                           const_cast<char**>(multi_list)),
+                     CSLDestroy);
+  ASSERT_NE(nullptr, res3.get());
+  EXPECT_EQ(3, CSLCount(res3.get()));
+  EXPECT_STREQ("/new/bar.shx", res3.get()[1]);
 
   // Multi-item list with mismatched basename -> nullptr
   const char* bad_list[] = {"/old/foo.shp", "/old/other.shx", nullptr};
@@ -456,3 +563,4 @@ TEST(CplPathTest, TempFilenameLaunderAndTraversal) {
 }
 
 }  // namespace
+}  // namespace autotest2

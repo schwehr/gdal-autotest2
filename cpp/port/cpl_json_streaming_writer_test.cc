@@ -1,10 +1,10 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,9 @@
 // limitations under the License.
 //
 // Tests for GDAL's JSON streaming writer (cpl_json_streaming_writer.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/port/cpl_json_streaming_writer.cpp
 
 #include "third_party/gdal/port/cpl_json_streaming_writer.h"
 
@@ -99,17 +102,53 @@ TEST(CplJsonStreamingWriterTest, PrettyObjectAndArrayWithAllTypes) {
   }
 
   const std::string& json = writer.GetString();
-  EXPECT_NE(json.find("\"bool_true\": true"), std::string::npos);
-  EXPECT_NE(json.find("\"bool_false\": false"), std::string::npos);
-  EXPECT_NE(json.find("\"null_val\": null"), std::string::npos);
-  EXPECT_NE(json.find("\\\"bs\\\\b\\bf\\fn\\nr\\rt\\tctrl\\u0001"),
-            std::string::npos);
-  EXPECT_NE(json.find("\"empty_obj\": {}"), std::string::npos);
-  EXPECT_NE(json.find("\"empty_arr\": []"), std::string::npos);
-  EXPECT_NE(json.find("[10, 20]"), std::string::npos);
+  EXPECT_EQ(
+      R"json({
+  "bool_true": true,
+  "bool_false": false,
+  "null_val": null,
+  "c_str": "hello",
+  "std_str": "world",
+  "sv_escaped": "quote\"bs\\b\bf\fn\nr\rt\tctrl\u0001",
+  "raw_json": {"pre":1},
+  "int32": -42,
+  "uint32": 42,
+  "int64": -9000000000,
+  "uint64": 18000000000,
+  "empty_obj": {},
+  "empty_arr": [],
+  "multiline_arr": [
+    1,
+    2
+  ],
+  "singleline_arr": [10, 20],
+  "singleline_obj": {"k1": 1, "k2": 2}
+})json",
+      json);
 
   writer.clear();
   EXPECT_TRUE(writer.GetString().empty());
+}
+
+TEST(CplJsonStreamingWriterTest, FloatAndDoubleDefaultAndCustomPrecision) {
+  constexpr float kFloat = 1.12345678901234567890f;
+  constexpr double kDouble = 1.12345678901234567890;
+
+  CPLJSonStreamingWriter writer(nullptr, nullptr);
+  writer.Add(kFloat);
+  EXPECT_EQ("1.12345684", writer.GetString());
+  writer.clear();
+
+  writer.Add(kFloat, 2);
+  EXPECT_EQ("1.1", writer.GetString());
+  writer.clear();
+
+  writer.Add(kDouble);
+  EXPECT_EQ("1.1234567890123457", writer.GetString());
+  writer.clear();
+
+  writer.Add(kDouble, 5);
+  EXPECT_EQ("1.1235", writer.GetString());
 }
 
 TEST(CplJsonStreamingWriterTest, NonPrettyAndCallbackAndFloatingPoint) {

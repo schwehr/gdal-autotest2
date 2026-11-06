@@ -20,11 +20,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <string>
+#include <string_view>
 
 #include "testing/base/public/gunit.h"
 #include "third_party/absl/cleanup/cleanup.h"
-#include "third_party/absl/strings/substitute.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/port/cpl_error.h"
 
@@ -33,7 +34,7 @@ namespace {
 
 constexpr size_t kReasonablySmallSize = 10;
 
-class ResetHelper : public ::testing::Test {
+class VsiTest : public ::testing::Test {
  protected:
   void SetUp() override {
     // Prevent prior tests from impacting the current test.
@@ -41,76 +42,68 @@ class ResetHelper : public ::testing::Test {
   }
 };
 
-class VsiMallocTest : public ResetHelper {};
-
-TEST_F(VsiMallocTest, VSIMallocSuccessful) {
-  void *ptr = VSIMalloc(kReasonablySmallSize);
+TEST_F(VsiTest, VSIMallocSuccessful) {
+  void* ptr = VSIMalloc(kReasonablySmallSize);
   absl::Cleanup ptr_cleaner = [ptr] { VSIFree(ptr); };
 
   EXPECT_NE(ptr, nullptr);
   ASSERT_EQ(CPLGetLastErrorType(), CE_None);
 }
 
-TEST_F(VsiMallocTest, VSIMallocTooBig) {
-  void *ptr = VSIMalloc(SIZE_MAX);
+TEST_F(VsiTest, VSIMallocTooBig) {
+  void* ptr = VSIMalloc(SIZE_MAX);
   absl::Cleanup ptr_cleaner = [ptr] { VSIFree(ptr); };
 
   EXPECT_EQ(ptr, nullptr);
   ASSERT_EQ(CPLGetLastErrorType(), CE_None);
 }
 
-class VsiReallocTest : public ResetHelper {};
-
-TEST_F(VsiReallocTest, VSIReallocSuccessful) {
-  void *ptr = VSIRealloc(nullptr, kReasonablySmallSize);
+TEST_F(VsiTest, VSIReallocSuccessful) {
+  void* ptr = VSIRealloc(nullptr, kReasonablySmallSize);
   absl::Cleanup ptr_cleaner = [ptr] { VSIFree(ptr); };
 
   EXPECT_NE(ptr, nullptr);
   ASSERT_EQ(CPLGetLastErrorType(), CE_None);
 }
 
-TEST_F(VsiReallocTest, VSIReallocTooBig) {
-  void *ptr = VSIRealloc(nullptr, SIZE_MAX);
+TEST_F(VsiTest, VSIReallocTooBig) {
+  void* ptr = VSIRealloc(nullptr, SIZE_MAX);
   absl::Cleanup ptr_cleaner = [ptr] { VSIFree(ptr); };
 
   EXPECT_EQ(ptr, nullptr);
   ASSERT_EQ(CPLGetLastErrorType(), CE_None);
 }
 
-class VsiCallocTest : public ResetHelper {};
-
-TEST_F(VsiCallocTest, VSICallocSuccessful) {
-  void *ptr = VSICalloc(1, kReasonablySmallSize);
+TEST_F(VsiTest, VSICallocSuccessful) {
+  void* ptr = VSICalloc(1, kReasonablySmallSize);
   absl::Cleanup ptr_cleaner = [ptr] { VSIFree(ptr); };
 
   EXPECT_NE(ptr, nullptr);
   ASSERT_EQ(CPLGetLastErrorType(), CE_None);
 }
 
-TEST_F(VsiCallocTest, VSICallocTooBig) {
-  void *ptr = VSICalloc(1, SIZE_MAX);
+TEST_F(VsiTest, VSICallocTooBig) {
+  void* ptr = VSICalloc(1, SIZE_MAX);
   absl::Cleanup ptr_cleaner = [ptr] { VSIFree(ptr); };
 
   EXPECT_EQ(ptr, nullptr);
   ASSERT_EQ(CPLGetLastErrorType(), CE_None);
 }
 
-class VsiMalloc2Test : public ResetHelper {};
-
-TEST_F(VsiMalloc2Test, VSIMalloc2Overflow) {
+TEST_F(VsiTest, VSIMalloc2Overflow) {
   WithQuietHandler error_handler;
 
-  void *ptr = VSIMalloc2(SIZE_MAX, SIZE_MAX);
+  void* ptr = VSIMalloc2(SIZE_MAX, SIZE_MAX);
   absl::Cleanup ptr_cleaner = [ptr] { VSIFree(ptr); };
 
   EXPECT_EQ(ptr, nullptr);
   ASSERT_EQ(CPLGetLastErrorType(), CE_Failure);
 }
 
-TEST_F(VsiMalloc2Test, VSIMalloc2OverflowOneLargeSize) {
+TEST_F(VsiTest, VSIMalloc2OverflowOneLargeSize) {
   WithQuietHandler error_handler;
 
-  void *ptr = VSIMalloc2(SIZE_MAX, 1);
+  void* ptr = VSIMalloc2(SIZE_MAX, 1);
   absl::Cleanup ptr_cleaner = [ptr] { VSIFree(ptr); };
 
   EXPECT_EQ(ptr, nullptr);
@@ -135,9 +128,9 @@ class VsiMalloc3OverflowTest
 TEST_P(VsiMalloc3OverflowTest, ShouldOverflow) {
   WithQuietHandler error_handler;
 
-  const VsiMalloc3TestCase &tc = GetParam();
+  const VsiMalloc3TestCase& tc = GetParam();
 
-  void *ptr = VSIMalloc3(tc.nSize1, tc.nSize2, tc.nSize3);
+  void* ptr = VSIMalloc3(tc.nSize1, tc.nSize2, tc.nSize3);
   absl::Cleanup ptr_cleaner = [ptr] { VSIFree(ptr); };
 
   EXPECT_EQ(ptr, nullptr);
@@ -147,23 +140,23 @@ TEST_P(VsiMalloc3OverflowTest, ShouldOverflow) {
 INSTANTIATE_TEST_SUITE_P(
     VsiMalloc3OverflowTestInstantiation, VsiMalloc3OverflowTest,
     ::testing::ValuesIn<VsiMalloc3TestCase>({
-        {1, 1, SIZE_MAX},
-        {1, SIZE_MAX, 1},
-        {SIZE_MAX, 1, 1},
-        {1, SIZE_MAX, SIZE_MAX},
-        {SIZE_MAX, 1, SIZE_MAX},
-        {SIZE_MAX, SIZE_MAX, 1},
+        {.nSize1 = 1, .nSize2 = 1, .nSize3 = SIZE_MAX},
+        {.nSize1 = 1, .nSize2 = SIZE_MAX, .nSize3 = 1},
+        {.nSize1 = SIZE_MAX, .nSize2 = 1, .nSize3 = 1},
+        {.nSize1 = 1, .nSize2 = SIZE_MAX, .nSize3 = SIZE_MAX},
+        {.nSize1 = SIZE_MAX, .nSize2 = 1, .nSize3 = SIZE_MAX},
+        {.nSize1 = SIZE_MAX, .nSize2 = SIZE_MAX, .nSize3 = 1},
     }),
-    [](const testing::TestParamInfo<VsiMalloc3OverflowTest::ParamType> &info) {
-      const VsiMalloc3TestCase &param = info.param;
-      return absl::Substitute("Size$0x$1x$2", param.nSize1, param.nSize2,
-                              param.nSize3);
+    [](const testing::TestParamInfo<VsiMalloc3OverflowTest::ParamType>& info) {
+      const VsiMalloc3TestCase& param = info.param;
+      return std::format("Size{}x{}x{}", param.nSize1, param.nSize2,
+                         param.nSize3);
     });
 
 TEST(VsiMallocAligned, AllocatesAccordingToRequestedAlignment) {
   const int kAlignment = 128;
   const int kRequestedSize = 64;
-  char *mem = static_cast<char *>(VSIMallocAligned(kAlignment, kRequestedSize));
+  char* mem = static_cast<char*>(VSIMallocAligned(kAlignment, kRequestedSize));
   absl::Cleanup memory_cleanup = [mem] { VSIFreeAligned(mem); };
 
   EXPECT_NE(mem, nullptr);
@@ -179,7 +172,7 @@ TEST(VsiMallocAligned, AllocatesAccordingToRequestedAlignment) {
 }
 
 struct VsiMallocAlignmentTestCase {
-  std::string test_name;
+  std::string_view test_name;
   int alignment;
 };
 
@@ -187,9 +180,9 @@ using VsiMallocAlignedAlignmentTest =
     testing::TestWithParam<VsiMallocAlignmentTestCase>;
 
 TEST_P(VsiMallocAlignedAlignmentTest, DisallowedAlignmentValues) {
-  const VsiMallocAlignmentTestCase &test_case = GetParam();
+  const VsiMallocAlignmentTestCase& test_case = GetParam();
 
-  void *mem = VSIMallocAligned(test_case.alignment, 64);
+  void* mem = VSIMallocAligned(test_case.alignment, 64);
   EXPECT_EQ(mem, nullptr);
 }
 
@@ -197,12 +190,12 @@ INSTANTIATE_TEST_SUITE_P(
     VsiMallocAlignedAlignmentTestSuiteInstantiation,
     VsiMallocAlignedAlignmentTest,
     testing::ValuesIn<VsiMallocAlignmentTestCase>({
-        {"NotPowerOf2", 3},
-        {"NotMultipleOfPointerSize", 4},
-        {"AlsoNotMultipleOfPointerSize", 1},
+        {.test_name = "NotPowerOf2", .alignment = 3},
+        {.test_name = "NotMultipleOfPointerSize", .alignment = 4},
+        {.test_name = "AlsoNotMultipleOfPointerSize", .alignment = 1},
     }),
-    [](const testing::TestParamInfo<VsiMallocAlignedAlignmentTest::ParamType>
-           &info) { return info.param.test_name; });
+    [](const testing::TestParamInfo<VsiMallocAlignedAlignmentTest::ParamType>&
+           info) { return std::string(info.param.test_name); });
 
 }  // namespace
 }  // namespace autotest2

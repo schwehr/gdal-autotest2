@@ -20,6 +20,7 @@
 
 #include "testing/base/public/gunit.h"
 
+namespace autotest2 {
 namespace {
 
 // Tests adding, incrementing, and decrementing.
@@ -42,3 +43,4 @@ TEST(CplAtomicOpsTest, Atomic) {
 }
 
 }  // namespace
+}  // namespace autotest2

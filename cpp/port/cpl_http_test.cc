@@ -24,9 +24,12 @@
 
 #include "testing/base/public/gunit.h"
 #include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_cstringlist.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/port/cpl_port.h"
+#include "third_party/gdal/port/cpl_progress.h"
 #include "third_party/gdal/port/cpl_string.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 
@@ -67,18 +70,17 @@ TEST(CplHttpTest, OptionsFromEnv) {
     VSIClearPathSpecificOptions("/vsimem/test.gz");
   };
 
-  char** opts_null = CPLHTTPGetOptionsFromEnv(nullptr);
-  EXPECT_STREQ("15", CSLFetchNameValue(opts_null, "TIMEOUT"));
-  CSLDestroy(opts_null);
+  StringListPtr opts_null(CPLHTTPGetOptionsFromEnv(nullptr), CSLDestroy);
+  EXPECT_STREQ("15", CSLFetchNameValue(opts_null.get(), "TIMEOUT"));
 
-  char** opts_gzip = CPLHTTPGetOptionsFromEnv("/vsigzip//vsimem/test.gz");
-  EXPECT_STREQ("15", CSLFetchNameValue(opts_gzip, "TIMEOUT"));
-  EXPECT_STREQ("c=1", CSLFetchNameValue(opts_gzip, "COOKIE"));
-  CSLDestroy(opts_gzip);
+  StringListPtr opts_gzip(CPLHTTPGetOptionsFromEnv("/vsigzip//vsimem/test.gz"),
+                          CSLDestroy);
+  EXPECT_STREQ("15", CSLFetchNameValue(opts_gzip.get(), "TIMEOUT"));
+  EXPECT_STREQ("c=1", CSLFetchNameValue(opts_gzip.get(), "COOKIE"));
 
-  char** opts_plain = CPLHTTPGetOptionsFromEnv("/vsimem/test.gz");
-  EXPECT_STREQ("user:pass", CSLFetchNameValue(opts_plain, "USERPWD"));
-  CSLDestroy(opts_plain);
+  StringListPtr opts_plain(CPLHTTPGetOptionsFromEnv("/vsimem/test.gz"),
+                           CSLDestroy);
+  EXPECT_STREQ("user:pass", CSLFetchNameValue(opts_plain.get(), "USERPWD"));
 }
 
 TEST(CplHttpTest, RetryContextAndParameters) {

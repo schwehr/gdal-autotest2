@@ -1,7 +1,4 @@
-// Test CPLJson related code
-//   https://github.com/OSGeo/gdal/blob/master/port/cpl_auto_close.h
-//
-// Copyright 2024 Google Inc. All Rights Reserved.
+// Copyright 2024 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,6 +11,11 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Tests for CPLAutoClose (cpl_auto_close.h).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/port/cpl_auto_close.h
 
 #include "third_party/gdal/port/cpl_auto_close.h"
 
@@ -26,7 +28,7 @@ TEST(AutoCloseTest, WillInvokeCloseFunctionEveryTimePointerGoesOutOfScope) {
   static int called = 0;
 
   struct AutoCloseTestContainer {
-    static void Close(void *obj) { ++called; };
+    static void Close(void* obj) { ++called; };
   };
 
   {
@@ -34,10 +36,10 @@ TEST(AutoCloseTest, WillInvokeCloseFunctionEveryTimePointerGoesOutOfScope) {
 
     ToBeClosed obj_1, obj_2;
 
-    ToBeClosed *p1 = &obj_1;
+    ToBeClosed* p1 = &obj_1;
     CPL_AUTO_CLOSE_WARP(p1, AutoCloseTestContainer::Close);
 
-    ToBeClosed *p2 = &obj_2;
+    ToBeClosed* p2 = &obj_2;
     CPL_AUTO_CLOSE_WARP(p2, AutoCloseTestContainer::Close);
   }
 

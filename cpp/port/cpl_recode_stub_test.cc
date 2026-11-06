@@ -1,10 +1,10 @@
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,7 +14,6 @@
 //
 // Tests for GDAL's stub recoding implementation (cpl_recode_stub.cpp).
 
-#include <cwchar>
 #include <string>
 
 #include "testing/base/public/gunit.h"
@@ -32,7 +31,7 @@ extern wchar_t* CPLRecodeToWCharStub(const char* pszSource,
                                      const char* pszSrcEncoding,
                                      const char* pszDstEncoding);
 
-namespace gdal {
+namespace autotest2 {
 namespace {
 
 TEST(CplRecodeStubTest, RecodeStubAllEncodingsAndFallbackWarnings) {
@@ -196,10 +195,10 @@ TEST(CplRecodeStubTest, RecodeToWCharStubAndIsUTF8) {
     EXPECT_FALSE(CPLIsUTF8(bad.c_str(), static_cast<int>(bad.size())));
     wchar_t* wres =
         CPLRecodeToWCharStub(bad.c_str(), CPL_ENC_UTF8, CPL_ENC_UCS4);
-    autotest2::CPLMemoryCloser<wchar_t> closer(wres);
+    CPLMemoryCloser<wchar_t> closer(wres);
     ASSERT_NE(wres, nullptr);
   }
 }
 
 }  // namespace
-}  // namespace gdal
+}  // namespace autotest2

@@ -20,7 +20,6 @@
 
 #include <array>
 #include <numeric>
-#include <vector>
 
 #include "testing/base/public/gunit.h"
 #include "third_party/absl/cleanup/cleanup.h"
@@ -28,6 +27,7 @@
 #include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_string.h"
 
+namespace autotest2 {
 namespace {
 
 // Tests a set with strings.
@@ -183,3 +183,4 @@ TEST(CplHashSetTest, NullStringHashAndEqual) {
 }
 
 }  // namespace
+}  // namespace autotest2

@@ -12,15 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <errno.h>
 #include <stddef.h>
 
+#include <cstdio>
 #include <cstring>
-#include <string>
+#include <memory>
 #include <vector>
 
 #include "testing/base/public/gunit.h"
 #include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_cstringlist.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_port.h"
@@ -92,13 +93,14 @@ TEST(VSIBufferTest, TakeOwnershipReading) {
   auto unlinker = absl::MakeCleanup([kFilename] { VSIUnlink(kFilename); });
 
   vsi_l_offset data_length;
-  char* tmp = reinterpret_cast<char*>(
-      VSIGetMemFileBuffer(kFilename, &data_length, true));
+  std::unique_ptr<char, decltype(&VSIFree)> tmp(
+      reinterpret_cast<char*>(
+          VSIGetMemFileBuffer(kFilename, &data_length, true)),
+      VSIFree);
   ASSERT_NE(nullptr, tmp);
   EXPECT_EQ(2, data_length);
-  EXPECT_EQ(0, tmp[0]);
-  EXPECT_EQ(0x08, tmp[1]);
-  CPLFree(tmp);
+  EXPECT_EQ(0, tmp.get()[0]);
+  EXPECT_EQ(0x08, tmp.get()[1]);
 }
 
 TEST(VSIMemTest, HandleOperationsSeekReadWriteTruncatePRead) {
@@ -265,13 +267,11 @@ TEST(VSIMemTest, DirectoriesStatRenameReadDirAndHiddenFiles) {
     ASSERT_NE(nullptr, f);
     VSIFCloseL(f);
   }
-  char** dir_all = VSIReadDirEx(kBase, 0);
-  EXPECT_EQ(6, CSLCount(dir_all));
-  CSLDestroy(dir_all);
+  StringListPtr dir_all(VSIReadDirEx(kBase, 0), CSLDestroy);
+  EXPECT_EQ(6, CSLCount(dir_all.get()));
 
-  char** dir_lim = VSIReadDirEx(kBase, 2);
-  EXPECT_EQ(3, CSLCount(dir_lim));
-  CSLDestroy(dir_lim);
+  StringListPtr dir_lim(VSIReadDirEx(kBase, 2), CSLDestroy);
+  EXPECT_EQ(3, CSLCount(dir_lim.get()));
 
   // Rename tests: invalid target prefix, self-rename, missing source,
   // directory rename.
@@ -314,13 +314,11 @@ TEST(VSIMemTest, DirectoriesStatRenameReadDirAndHiddenFiles) {
   ASSERT_NE(nullptr, fh3);
   VSIFCloseL(fh3);
 
-  char** hidden_all = VSIReadDirEx("/vsimem/.#!HIDDEN!#.", 0);
-  EXPECT_GE(CSLCount(hidden_all), 3);
-  CSLDestroy(hidden_all);
+  StringListPtr hidden_all(VSIReadDirEx("/vsimem/.#!HIDDEN!#.", 0), CSLDestroy);
+  EXPECT_GE(CSLCount(hidden_all.get()), 3);
 
-  char** hidden_lim = VSIReadDirEx("/vsimem/.#!HIDDEN!#.", 1);
-  EXPECT_EQ(2, CSLCount(hidden_lim));
-  CSLDestroy(hidden_lim);
+  StringListPtr hidden_lim(VSIReadDirEx("/vsimem/.#!HIDDEN!#.", 1), CSLDestroy);
+  EXPECT_EQ(2, CSLCount(hidden_lim.get()));
 
   // RmdirRecursive on this test's directory removes it (and its children) but
   // leaves the hidden files alone. VSIRmdirRecursive("/vsimem") is

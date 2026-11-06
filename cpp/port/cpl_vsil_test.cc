@@ -23,13 +23,17 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>  // NOLINT
+#include <iterator>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
 #include "third_party/absl/cleanup/cleanup.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_cstringlist.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_memory.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_port.h"
@@ -37,10 +41,11 @@
 #include "third_party/gdal/port/cpl_vsi.h"
 #include "third_party/gdal/port/cpl_vsi_virtual.h"
 
+namespace autotest2 {
+namespace {
+
 using std::fill;
 using ::testing::TestWithParam;
-
-namespace {
 
 // Create a fake handler for testing that provides a stat
 // that always succeeds and an open that always fails.
@@ -81,9 +86,11 @@ int DummyFilesystem::Stat(const char* path, VSIStatBufL* stat, int nFlags) {
 
 // Tests adding a driver and calling open.
 TEST(CplVsiFileManagerTest, FailToOpenExistingFile) {
-  // handler will be deleted by the VSIFilesystemHandler destructor.
-  DummyFilesystem* dummy_handler(new DummyFilesystem);
-  VSIFileManager::InstallHandler("/dummy/", dummy_handler);
+  auto dummy_handler = std::make_unique<DummyFilesystem>();
+  VSIFileManager::InstallHandler("/dummy/", dummy_handler.get());
+  absl::Cleanup remove_handler = [] {
+    VSIFileManager::RemoveHandler("/dummy/");
+  };
 
   const std::string path("/dummy/foo.tif");
 
@@ -109,17 +116,15 @@ TEST(CplVSIFunctions, VSIFilesAndPathLocalDoesNotExist) {
   ASSERT_EQ(-1, VSIUnlink("/does/not/exist3"));
   ASSERT_EQ(-1, VSIRmdir("/does/not/exist4"));
 
-  std::unique_ptr<VSIStatBufL> stat_buf(new VSIStatBufL);
+  VSIStatBufL stat_buf = {};
+  ASSERT_EQ(-1, VSIStatL("/does/not/exist5", &stat_buf));
+  ASSERT_EQ(0, stat_buf.st_mode);
+  ASSERT_EQ(0, stat_buf.st_size);
 
-  memset(stat_buf.get(), 0, sizeof(VSIStatBufL));
-  ASSERT_EQ(-1, VSIStatL("/does/not/exist5", stat_buf.get()));
-  ASSERT_EQ(0, stat_buf->st_mode);
-  ASSERT_EQ(0, stat_buf->st_size);
-
-  memset(stat_buf.get(), 0, sizeof(VSIStatBufL));
-  ASSERT_EQ(-1, VSIStatExL("/does/not/exist6", stat_buf.get(), 0));
-  ASSERT_EQ(0, stat_buf->st_mode);
-  ASSERT_EQ(0, stat_buf->st_size);
+  stat_buf = {};
+  ASSERT_EQ(-1, VSIStatExL("/does/not/exist6", &stat_buf, 0));
+  ASSERT_EQ(0, stat_buf.st_mode);
+  ASSERT_EQ(0, stat_buf.st_size);
 }
 
 // Tests most of the file operations by creating a directory and a file.
@@ -130,19 +135,18 @@ TEST(CplVSIFunctions, VSIFileAndDirOpsLocal) {
   constexpr int kSuccess = 0;
   constexpr int kFailure = -1;
 
-  std::unique_ptr<VSIStatBufL> stat_buf(new VSIStatBufL);
-  memset(stat_buf.get(), 0, sizeof(VSIStatBufL));
-  ASSERT_EQ(kSuccess, VSIStatL(temp_dir.c_str(), stat_buf.get()));
+  VSIStatBufL stat_buf = {};
+  ASSERT_EQ(kSuccess, VSIStatL(temp_dir.c_str(), &stat_buf));
 
   const std::string src_dir(temp_dir + "/foo");
   const std::string dst_dir(temp_dir + "/bar");
   ASSERT_EQ(kSuccess, VSIMkdir(src_dir.c_str(), 0755));
   ASSERT_EQ(kSuccess, VSIRename(src_dir.c_str(), dst_dir.c_str()));
 
-  memset(stat_buf.get(), 0, sizeof(VSIStatBufL));
-  ASSERT_EQ(kSuccess, VSIStatL(dst_dir.c_str(), stat_buf.get()));
+  stat_buf = {};
+  ASSERT_EQ(kSuccess, VSIStatL(dst_dir.c_str(), &stat_buf));
   // TODO(schwehr): Flaky.  Depends on user env: 040750
-  // ASSERT_EQ(stat_buf->st_mode, 040755);
+  // ASSERT_EQ(stat_buf.st_mode, 040755);
 
   const int case_sensitive = VSIIsCaseSensitiveFS(temp_dir.c_str());
   ASSERT_TRUE((0 == case_sensitive || 1 == case_sensitive));
@@ -172,9 +176,9 @@ TEST(CplVSIFunctions, VSIFileAndDirOpsLocal) {
   ASSERT_EQ(kSuccess, VSIFFlushL(file));
   ASSERT_EQ(3, VSIFTellL(file));
 
-  memset(stat_buf.get(), 0, sizeof(VSIStatBufL));
-  ASSERT_EQ(kSuccess, VSIStatL(filename.c_str(), stat_buf.get()));
-  ASSERT_EQ(3, stat_buf->st_size);
+  stat_buf = {};
+  ASSERT_EQ(kSuccess, VSIStatL(filename.c_str(), &stat_buf));
+  ASSERT_EQ(3, stat_buf.st_size);
 
   VSIRewindL(file);
   ASSERT_EQ(0, VSIFTellL(file));
@@ -204,9 +208,9 @@ TEST(CplVSIFunctions, VSIFileAndDirOpsLocal) {
 
   ASSERT_EQ(kSuccess, VSIFCloseL(file));
 
-  memset(stat_buf.get(), 0, sizeof(VSIStatBufL));
-  ASSERT_EQ(kSuccess, VSIStatL(filename.c_str(), stat_buf.get()));
-  ASSERT_EQ(3, stat_buf->st_size);
+  stat_buf = {};
+  ASSERT_EQ(kSuccess, VSIStatL(filename.c_str(), &stat_buf));
+  ASSERT_EQ(3, stat_buf.st_size);
 
   // Cannot truncate when opened read-only.
   file = VSIFOpenL(filename.c_str(), "r");
@@ -223,9 +227,9 @@ TEST(CplVSIFunctions, VSIFileAndDirOpsLocal) {
   ASSERT_EQ(kSuccess, VSIFFlushL(file));
   // Truncate does not modify the offset of open files.
   ASSERT_EQ(3, VSIFTellL(file));
-  memset(stat_buf.get(), 0, sizeof(VSIStatBufL));
-  ASSERT_EQ(kSuccess, VSIStatL(filename.c_str(), stat_buf.get()));
-  ASSERT_EQ(1, stat_buf->st_size);
+  stat_buf = {};
+  ASSERT_EQ(kSuccess, VSIStatL(filename.c_str(), &stat_buf));
+  ASSERT_EQ(1, stat_buf.st_size);
 
   ASSERT_EQ(1, VSIFWriteL("3", 1, 1, file));
   ASSERT_EQ(kSuccess, VSIFFlushL(file));
@@ -243,9 +247,9 @@ TEST(CplVSIFunctions, VSIFileAndDirOpsLocal) {
   // Truncate can also grow a file.
   ASSERT_EQ(kSuccess, VSIFTruncateL(file, 42));
   ASSERT_EQ(kSuccess, VSIFFlushL(file));
-  memset(stat_buf.get(), 0, sizeof(VSIStatBufL));
-  ASSERT_EQ(kSuccess, VSIStatL(filename.c_str(), stat_buf.get()));
-  ASSERT_EQ(42, stat_buf->st_size);
+  stat_buf = {};
+  ASSERT_EQ(kSuccess, VSIStatL(filename.c_str(), &stat_buf));
+  ASSERT_EQ(42, stat_buf.st_size);
 
   // Truncate does not move the file index forward or backwards.
   ASSERT_EQ(4, VSIFTellL(file));
@@ -354,20 +358,19 @@ TEST(CplVSIFunctions, VSIMkdirRecursive) {
   constexpr char kPath[] = "/vsimem/a/b/c";
 
   EXPECT_EQ(kSuccess, VSIMkdirRecursive(kPath, 0777));
-  std::unique_ptr<VSIStatBufL> stat_buf(new VSIStatBufL);
-  memset(stat_buf.get(), 0, sizeof(VSIStatBufL));
-  ASSERT_EQ(kSuccess, VSIStatL(kPath, stat_buf.get()));
+  VSIStatBufL stat_buf = {};
+  ASSERT_EQ(kSuccess, VSIStatL(kPath, &stat_buf));
 
   // Add a file.
   const auto filepath = std::filesystem::path(kPath) / "d";
   VSILFILE* file = VSIFOpenL(filepath.c_str(), "wb");
   ASSERT_NE(nullptr, file);
   constexpr char kData[] = "abc";
-  EXPECT_EQ(1, VSIFWriteL(kData, CPL_ARRAYSIZE(kData), 1, file));
+  EXPECT_EQ(1, VSIFWriteL(kData, std::size(kData), 1, file));
   EXPECT_EQ(kSuccess, VSIFCloseL(file));
 
   EXPECT_EQ(kSuccess, VSIRmdirRecursive(kBasePath));
-  ASSERT_EQ(kFailure, VSIStatL(kPath, stat_buf.get()));
+  ASSERT_EQ(kFailure, VSIStatL(kPath, &stat_buf));
 }
 
 TEST(CplVSIFunctions, VSIGetDiskFreeSpaceVsiMemFileShouldReturnMemorySize) {
@@ -423,7 +426,7 @@ class MockFileSystemHandler : public VSIFilesystemHandler {
 };
 
 struct VsiGetHandlerTestCase {
-  std::string test_name;
+  std::string_view test_name;
   const char* prefix;
   const char* path;
   bool expect_to_find;
@@ -437,8 +440,9 @@ TEST_P(FindHandlerTest, FindHandler) {
   auto handler = std::make_unique<MockFileSystemHandler>();
 
   VSIFileManager::InstallHandler(test_case.prefix, handler.get());
-  // RemoveHandler is not defined, hence we are unable to undo this handler
-  // installation.
+  absl::Cleanup remove_handler = [&test_case] {
+    VSIFileManager::RemoveHandler(test_case.prefix);
+  };
 
   auto actual_handler = VSIFileManager::GetHandler(test_case.path);
 
@@ -454,41 +458,40 @@ TEST_P(FindHandlerTest, FindHandler) {
 INSTANTIATE_TEST_SUITE_P(
     VsiGetHandlerTestSuite, FindHandlerTest,
     testing::ValuesIn<VsiGetHandlerTestCase>({
-        // Test path prefix names have to be unique since RemoveHandler is not
-        // defined and we are unable to undo handler installation.
         {
-            "ExactMatch",
-            "/vsi-get-handler-exact-match/",
-            "/vsi-get-handler-exact-match/",
-            /*expect_to_find=*/true,
+            .test_name = "ExactMatch",
+            .prefix = "/vsi-get-handler-exact-match/",
+            .path = "/vsi-get-handler-exact-match/",
+            .expect_to_find = true,
         },
         {
-            "SubPathMatch",
-            "/vsi-get-handler-sub-path-match/",
-            "/vsi-get-handler-sub-path-match//file.txt",
-            /*expect_to_find=*/true,
+            .test_name = "SubPathMatch",
+            .prefix = "/vsi-get-handler-sub-path-match/",
+            .path = "/vsi-get-handler-sub-path-match//file.txt",
+            .expect_to_find = true,
         },
         {
-            "PathWithBackslashes",
-            "/vsi-get-handler-path-with-backslashes/",
-            "/vsi-get-handler-path-with-backslashes\\directory\\file.txt",
-            /*expect_to_find=*/true,
+            .test_name = "PathWithBackslashes",
+            .prefix = "/vsi-get-handler-path-with-backslashes/",
+            .path =
+                "/vsi-get-handler-path-with-backslashes\\directory\\file.txt",
+            .expect_to_find = true,
         },
         {
-            "PathWithoutTrailingSlash",
-            "/vsi-get-handler-path-without-trailing-slash/",
-            "/vsi-get-handler-path-without-trailing-slash",
-            /*expect_to_find=*/true,
+            .test_name = "PathWithoutTrailingSlash",
+            .prefix = "/vsi-get-handler-path-without-trailing-slash/",
+            .path = "/vsi-get-handler-path-without-trailing-slash",
+            .expect_to_find = true,
         },
         {
-            "PathPrefixNoMatch",
-            "/vsi-get-handler-path-prefix-no-match/",
-            "/vsi-get-handler-path-prefix/",
-            /*expect_to_find=*/false,
+            .test_name = "PathPrefixNoMatch",
+            .prefix = "/vsi-get-handler-path-prefix-no-match/",
+            .path = "/vsi-get-handler-path-prefix/",
+            .expect_to_find = false,
         },
     }),
     [](const testing::TestParamInfo<FindHandlerTest::ParamType>& info) {
-      return info.param.test_name;
+      return std::string(info.param.test_name);
     });
 
 TEST(CplVSIFunctions, VsiIsLocalTreatsVsiMemAsLocalNonPersistentFileSystem) {
@@ -610,17 +613,20 @@ TEST(CplVSIFunctions, BaseVirtualHandleAndFilesystemHandlerMethods) {
 
   VSILFILE* stream_fp = VSIFOpenL("/vsistreamtest/ok", "rb");
   ASSERT_NE(nullptr, stream_fp);
+  absl::Cleanup close_stream_fp = [stream_fp] {
+    EXPECT_EQ(0, VSIFCloseL(stream_fp));
+  };
   GByte* ingested = nullptr;
   vsi_l_offset ingested_size = 0;
   EXPECT_TRUE(VSIIngestFile(stream_fp, nullptr, &ingested, &ingested_size, -1));
+  std::unique_ptr<GByte, decltype(&VSIFree)> ingested_guard(ingested, VSIFree);
   EXPECT_EQ(80000U, ingested_size);
-  VSIFree(ingested);
+  ingested_guard.reset();
 
   // Max size exceeded during streaming ingest.
   ingested = nullptr;
   EXPECT_FALSE(
       VSIIngestFile(stream_fp, nullptr, &ingested, &ingested_size, 100));
-  VSIFCloseL(stream_fp);
 
   // Exercise default virtual methods on VSIFilesystemHandler via stream_fs.
   EXPECT_EQ(nullptr, VSISiblingFiles("/vsistreamtest/ok"));
@@ -645,9 +651,9 @@ TEST(CplVSIFunctions, BaseVirtualHandleAndFilesystemHandlerMethods) {
   EXPECT_STREQ("/", VSIGetDirectorySeparator("/vsistreamtest/ok"));
   EXPECT_STREQ("/", VSIGetDirectorySeparator("http://example.com/a"));
 
-  char* canon = VSIGetCanonicalFilename("/vsistreamtest/ok");
-  EXPECT_STREQ("/vsistreamtest/ok", canon);
-  CPLFree(canon);
+  std::unique_ptr<char, CplFreeDeleter> canon(
+      VSIGetCanonicalFilename("/vsistreamtest/ok"));
+  EXPECT_STREQ("/vsistreamtest/ok", canon.get());
 
   // OpenStatic via base handler.
   auto static_h =
@@ -679,13 +685,11 @@ TEST(CplVSIFunctions, GlobAndDirOperations) {
   absl::Cleanup cleanup_dir = [kRoot] { VSIRmdirRecursive(kRoot); };
 
   // CPLReadDir and VSIReadDirRecursive.
-  char** dir_entries = CPLReadDir(kRoot);
-  EXPECT_GE(CSLCount(dir_entries), 4);
-  CSLDestroy(dir_entries);
+  StringListPtr dir_entries(CPLReadDir(kRoot), CSLDestroy);
+  EXPECT_GE(CSLCount(dir_entries.get()), 4);
 
-  char** rec_entries = VSIReadDirRecursive(kRoot);
-  EXPECT_GE(CSLCount(rec_entries), 7);
-  CSLDestroy(rec_entries);
+  StringListPtr rec_entries(VSIReadDirRecursive(kRoot), CSLDestroy);
+  EXPECT_GE(CSLCount(rec_entries.get()), 7);
 
   // VSIOpenDir with infinite recursion (with and without a PREFIX filter),
   // depth 0 and depth 1.  The fixture has 6 top-level entries (4 files + 2
@@ -696,12 +700,14 @@ TEST(CplVSIFunctions, GlobAndDirOperations) {
     const char* prefix;  // nullptr for no PREFIX option.
     int expected_entries;
   };
-  const OpenDirCase kOpenDirCases[] = {
-      {-1, nullptr, 10},
-      {-1, "sub", 6},  // sub1, sub1/f1.txt, sub1/deep, sub1/deep/f2.txt, sub2,
-                       // sub2/f3.log
-      {0, nullptr, 6},
-      {1, nullptr, 9},
+  constexpr OpenDirCase kOpenDirCases[] = {
+      {.depth = -1, .prefix = nullptr, .expected_entries = 10},
+      {.depth = -1,
+       .prefix = "sub",
+       .expected_entries = 6},  // sub1, sub1/f1.txt, sub1/deep,
+                                // sub1/deep/f2.txt, sub2, sub2/f3.log
+      {.depth = 0, .prefix = nullptr, .expected_entries = 6},
+      {.depth = 1, .prefix = nullptr, .expected_entries = 9},
   };
   for (const OpenDirCase& c : kOpenDirCases) {
     CPLStringList opts;
@@ -739,33 +745,39 @@ TEST(CplVSIFunctions, GlobAndDirOperations) {
     const char* pattern;
     int expected_matches;
   };
-  const GlobCase kGlobCases[] = {
-      {"/vsimem/glob_dir_test/a1.txt", 1},
-      {"/vsimem/glob_dir_test/nonexistent.txt", 0},
-      {"/vsimem/glob_dir_test/*.txt", 4},
-      {"/vsimem/glob_dir_test/??.txt", 4},
-      {"/vsimem/glob_dir_test/[a-b][12].txt", 2},  // a1.txt, b2.txt
-      {"/vsimem/glob_dir_test/[!a-b]?.txt", 2},    // c].txt, d-.txt
-      {"/vsimem/glob_dir_test/[]c]].txt", 1},      // ']' first in class
-      {"/vsimem/glob_dir_test/[-d]-.txt", 1},      // '-' first in class
-      {"/vsimem/glob_dir_test/[unclosed.txt", 0},
-      {"/vsimem/glob_dir_test/sub*/f?.txt", 1},  // sub1/f1.txt
+  constexpr GlobCase kGlobCases[] = {
+      {.pattern = "/vsimem/glob_dir_test/a1.txt", .expected_matches = 1},
+      {.pattern = "/vsimem/glob_dir_test/nonexistent.txt",
+       .expected_matches = 0},
+      {.pattern = "/vsimem/glob_dir_test/*.txt", .expected_matches = 4},
+      {.pattern = "/vsimem/glob_dir_test/??.txt", .expected_matches = 4},
+      {.pattern = "/vsimem/glob_dir_test/[a-b][12].txt",
+       .expected_matches = 2},  // a1.txt, b2.txt
+      {.pattern = "/vsimem/glob_dir_test/[!a-b]?.txt",
+       .expected_matches = 2},  // c].txt, d-.txt
+      {.pattern = "/vsimem/glob_dir_test/[]c]].txt",
+       .expected_matches = 1},  // ']' first in class
+      {.pattern = "/vsimem/glob_dir_test/[-d]-.txt",
+       .expected_matches = 1},  // '-' first in class
+      {.pattern = "/vsimem/glob_dir_test/[unclosed.txt", .expected_matches = 0},
+      {.pattern = "/vsimem/glob_dir_test/sub*/f?.txt",
+       .expected_matches = 1},  // sub1/f1.txt
       // All 10 entries, directories included.
-      {"/vsimem/glob_dir_test/**", 10},
+      {.pattern = "/vsimem/glob_dir_test/**", .expected_matches = 10},
   };
   for (const GlobCase& c : kGlobCases) {
-    char** matched = VSIGlob(c.pattern, nullptr, nullptr, nullptr);
-    EXPECT_EQ(c.expected_matches, CSLCount(matched)) << c.pattern;
-    CSLDestroy(matched);
+    StringListPtr matched(VSIGlob(c.pattern, nullptr, nullptr, nullptr),
+                          CSLDestroy);
+    EXPECT_EQ(c.expected_matches, CSLCount(matched.get())) << c.pattern;
   }
   {
-    char** matched =
-        VSIGlob("/vsimem/glob_dir_test/a1.txt", nullptr, nullptr, nullptr);
-    EXPECT_EQ(1, CSLCount(matched));
-    if (CSLCount(matched) == 1) {
-      EXPECT_STREQ("/vsimem/glob_dir_test/a1.txt", matched[0]);
+    StringListPtr matched(
+        VSIGlob("/vsimem/glob_dir_test/a1.txt", nullptr, nullptr, nullptr),
+        CSLDestroy);
+    EXPECT_EQ(1, CSLCount(matched.get()));
+    if (CSLCount(matched.get()) == 1) {
+      EXPECT_STREQ("/vsimem/glob_dir_test/a1.txt", matched.get()[0]);
     }
-    CSLDestroy(matched);
   }
   // "**" followed by more pattern: every entry found by "**" (files included)
   // becomes a directory candidate for the remainder, and VSIGlob() gives up
@@ -839,20 +851,23 @@ TEST(CplVSIFunctions, CopyMoveSyncAndUnlinkBatch) {
   EXPECT_EQ(0, VSICopyFileRestartable("/vsimem/cms/f1.txt",
                                       "/vsimem/cms/f1_r1.txt", nullptr,
                                       &out_payload, nullptr, nullptr, nullptr));
-  CPLFree(out_payload);
+  std::unique_ptr<char, decltype(&VSIFree)> payload_guard1(out_payload,
+                                                           VSIFree);
 
   // Cancelled restartable copy.
   char* out_payload2 = nullptr;
   EXPECT_EQ(-1, VSICopyFileRestartable(
                     "/vsimem/cms/f1.txt", "/vsimem/cms/f1_resumed.txt", nullptr,
                     &out_payload2, nullptr, cancel_cb, nullptr));
-  CPLFree(out_payload2);
+  std::unique_ptr<char, decltype(&VSIFree)> payload_guard2(out_payload2,
+                                                           VSIFree);
 
   char* out_payload3 = nullptr;
   EXPECT_EQ(0, VSICopyFileRestartable(
                    "/vsimem/cms/f1.txt", "/vsimem/cms/f1_resumed.txt",
                    "PAYLOAD", &out_payload3, nullptr, nullptr, nullptr));
-  CPLFree(out_payload3);
+  std::unique_ptr<char, decltype(&VSIFree)> payload_guard3(out_payload3,
+                                                           VSIFree);
 
   // VSIMove: invalid args, same path, same FS, cross FS (file and directory).
   EXPECT_EQ(-1, VSIMove("/vsimem/cms/nonexistent", "/vsimem/cms/x", nullptr,
@@ -893,12 +908,12 @@ TEST(CplVSIFunctions, CopyMoveSyncAndUnlinkBatch) {
   const char* to_unlink[] = {"/vsimem/cms/f1_r1.txt",
                              "/vsimem/cms/f1_resumed.txt",
                              "/vsimem/cms/does_not_exist.txt", nullptr};
-  int* unlink_res = VSIUnlinkBatch(to_unlink);
+  std::unique_ptr<int, decltype(&VSIFree)> unlink_res(VSIUnlinkBatch(to_unlink),
+                                                      VSIFree);
   ASSERT_NE(nullptr, unlink_res);
-  EXPECT_EQ(TRUE, unlink_res[0]);
-  EXPECT_EQ(TRUE, unlink_res[1]);
-  EXPECT_EQ(FALSE, unlink_res[2]);
-  VSIFree(unlink_res);
+  EXPECT_EQ(TRUE, unlink_res.get()[0]);
+  EXPECT_EQ(TRUE, unlink_res.get()[1]);
+  EXPECT_EQ(FALSE, unlink_res.get()[2]);
 
   // VSIUnlinkBatch with mixed filesystems fails and returns nullptr without
   // touching any file.
@@ -1003,9 +1018,8 @@ TEST(CplVSIFunctions, IngestOverwritePathOptionsAndMisc) {
   VSIClearPathSpecificOptions(nullptr);
 
   // Prefixes, options, and duplicate handler.
-  char** prefixes = VSIGetFileSystemsPrefixes();
+  StringListPtr prefixes(VSIGetFileSystemsPrefixes(), CSLDestroy);
   EXPECT_NE(nullptr, prefixes);
-  CSLDestroy(prefixes);
   EXPECT_NE(nullptr, VSIGetFileSystemOptions("/vsigzip/"));
   EXPECT_EQ(nullptr, VSIGetFileSystemOptions("/vsi_nonexistent_prefix/"));
 
@@ -1030,46 +1044,55 @@ TEST(CplVSIFunctions, IngestOverwritePathOptionsAndMisc) {
   EXPECT_FALSE(VSIIngestFile(nullptr, "/vsimem/does_not_exist_ingest", &ret_buf,
                              &sz, -1));
 
-  const char* kIngestFile = "/vsimem/ingest_test.bin";
-  VSILFILE* fp = VSIFOpenEx2L(kIngestFile, "wb+", true, nullptr);
-  ASSERT_NE(nullptr, fp);
-  EXPECT_EQ(5, VSIFPrintfL(fp, "%s", "12345"));
-  EXPECT_EQ(0, VSIFErrorL(fp));
-  VSIFClearErrL(fp);
-  EXPECT_EQ(VSI_RANGE_STATUS_UNKNOWN, VSIFGetRangeStatusL(fp, 0, 5));
-  fp->AdviseRead(0, nullptr, nullptr);
-  EXPECT_EQ(nullptr, VSIFGetNativeFileDescriptorL(fp));
+  static constexpr char kIngestFile[] = "/vsimem/ingest_test.bin";
+  static constexpr char kOverwriteTarget[] = "/vsimem/overwrite_target.bin";
+  absl::Cleanup unlink_files = [] {
+    VSIUnlink(kIngestFile);
+    VSIUnlink(kOverwriteTarget);
+  };
+  {
+    VSILFILE* fp = VSIFOpenEx2L(kIngestFile, "wb+", true, nullptr);
+    ASSERT_NE(nullptr, fp);
+    absl::Cleanup close_fp = [fp] { EXPECT_EQ(0, VSIFCloseL(fp)); };
+    EXPECT_EQ(5, VSIFPrintfL(fp, "%s", "12345"));
+    EXPECT_EQ(0, VSIFErrorL(fp));
+    VSIFClearErrL(fp);
+    EXPECT_EQ(VSI_RANGE_STATUS_UNKNOWN, VSIFGetRangeStatusL(fp, 0, 5));
+    fp->AdviseRead(0, nullptr, nullptr);
+    EXPECT_EQ(nullptr, VSIFGetNativeFileDescriptorL(fp));
 
-  char mr_buf[5] = {};
-  void* mr_ptrs[1] = {mr_buf};
-  vsi_l_offset mr_off[1] = {1};
-  size_t mr_sz[1] = {3};
-  EXPECT_EQ(0, VSIFReadMultiRangeL(1, mr_ptrs, mr_off, mr_sz, fp));
-  EXPECT_EQ(0, memcmp(mr_buf, "234", 3));
-  VSIFCloseL(fp);
+    char mr_buf[5] = {};
+    void* mr_ptrs[1] = {mr_buf};
+    vsi_l_offset mr_off[1] = {1};
+    size_t mr_sz[1] = {3};
+    EXPECT_EQ(0, VSIFReadMultiRangeL(1, mr_ptrs, mr_off, mr_sz, fp));
+    EXPECT_EQ(0, memcmp(mr_buf, "234", 3));
+  }
 
   // MaxSize too small.
   EXPECT_FALSE(VSIIngestFile(nullptr, kIngestFile, &ret_buf, &sz, 2));
 
   // Normal ingest via filename.
   EXPECT_TRUE(VSIIngestFile(nullptr, kIngestFile, &ret_buf, &sz, 10));
+  std::unique_ptr<GByte, decltype(&VSIFree)> ret_buf_guard(ret_buf, VSIFree);
   ASSERT_NE(nullptr, ret_buf);
   EXPECT_EQ(5U, sz);
   EXPECT_STREQ("12345", reinterpret_cast<char*>(ret_buf));
-  VSIFree(ret_buf);
+  ret_buf_guard.reset();
 
   // VSIOverwriteFile.
-  const char* kOverwriteTarget = "/vsimem/overwrite_target.bin";
-  VSILFILE* fp_target = VSIFOpenExL(kOverwriteTarget, "wb+", true);
-  ASSERT_NE(nullptr, fp_target);
-  EXPECT_TRUE(VSIOverwriteFile(fp_target, kIngestFile));
-  EXPECT_FALSE(VSIOverwriteFile(fp_target, "/vsimem/nonexistent_src"));
-  VSIFCloseL(fp_target);
-
-  VSIUnlink(kIngestFile);
-  VSIUnlink(kOverwriteTarget);
+  {
+    VSILFILE* fp_target = VSIFOpenExL(kOverwriteTarget, "wb+", true);
+    ASSERT_NE(nullptr, fp_target);
+    absl::Cleanup close_target = [fp_target] {
+      EXPECT_EQ(0, VSIFCloseL(fp_target));
+    };
+    EXPECT_TRUE(VSIOverwriteFile(fp_target, kIngestFile));
+    EXPECT_FALSE(VSIOverwriteFile(fp_target, "/vsimem/nonexistent_src"));
+  }
 }
 
 // TODO(schwehr): Test the rest of cpl_vsil.cpp.
 
 }  // namespace
+}  // namespace autotest2

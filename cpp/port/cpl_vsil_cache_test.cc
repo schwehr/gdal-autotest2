@@ -21,18 +21,19 @@
 #include <cstring>
 #include <memory>
 #include <string>
-#include <vector>
+#include <utility>
 
 #include "testing/base/public/gunit.h"
 #include "third_party/absl/cleanup/cleanup.h"
-#include "third_party/absl/strings/str_cat.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/autotest2/cpp/util/vsimem.h"
 #include "third_party/gdal/port/cpl_conv.h"
+#include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_string.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 #include "third_party/gdal/port/cpl_vsi_virtual.h"
 
+namespace autotest2 {
 namespace {
 
 // A customizable base handle to test forwarding methods and error conditions
@@ -124,7 +125,7 @@ TEST(CplVsilCacheTest, CachedFilesystemHandlerAnalyzeFilenameAndOperations) {
   const std::string mem_file = "/vsimem/cache_dir/test.bin";
   ASSERT_EQ(0, VSIMkdir("/vsimem/cache_dir", 0755));
   absl::Cleanup rm_dir = [] { VSIRmdirRecursive("/vsimem/cache_dir"); };
-  autotest2::VsiMemTempWrapper wrapper(mem_file, "0123456789abcdefghij");
+  VsiMemTempWrapper wrapper(mem_file, "0123456789abcdefghij");
 
   // Missing 'file' option, unsupported option, and invalid chunk_size /
   // cache_size values.
@@ -143,20 +144,17 @@ TEST(CplVsilCacheTest, CachedFilesystemHandlerAnalyzeFilenameAndOperations) {
     EXPECT_EQ(nullptr,
               VSIFOpenL("/vsicached?file=/vsimem/x&cache_size=xyz", "rb"));
     // Write access mode fails (test both bSetError=true and false).
-    EXPECT_EQ(nullptr,
-              VSIFOpenExL(absl::StrCat("/vsicached?file=", mem_file).c_str(),
-                          "wb", TRUE));
-    EXPECT_EQ(nullptr,
-              VSIFOpenExL(absl::StrCat("/vsicached?file=", mem_file).c_str(),
-                          "wb", FALSE));
+    const std::string cached_file = "/vsicached?file=" + mem_file;
+    EXPECT_EQ(nullptr, VSIFOpenExL(cached_file.c_str(), "wb", TRUE));
+    EXPECT_EQ(nullptr, VSIFOpenExL(cached_file.c_str(), "wb", FALSE));
     // Non-existent underlying file fails.
     EXPECT_EQ(nullptr,
               VSIFOpenL("/vsicached?file=/vsimem/does_not_exist.bin", "rb"));
   }
 
   // Valid open with KB and MB suffixes and an unknown option warning.
-  std::string valid_url = absl::StrCat(
-      "/vsicached?file=", mem_file, "&chunk_size=4KB&cache_size=1MB&foo=bar");
+  std::string valid_url =
+      "/vsicached?file=" + mem_file + "&chunk_size=4KB&cache_size=1MB&foo=bar";
   VSILFILE* fp = nullptr;
   {
     WithQuietHandler quiet;
@@ -169,8 +167,7 @@ TEST(CplVsilCacheTest, CachedFilesystemHandlerAnalyzeFilenameAndOperations) {
   EXPECT_EQ(0, VSIFCloseL(fp));
 
   // Stat and ReadDirEx via /vsicached?.
-  ASSERT_EQ(0, VSIStatL(absl::StrCat("/vsicached?file=", mem_file).c_str(),
-                        &stat_buf));
+  ASSERT_EQ(0, VSIStatL(("/vsicached?file=" + mem_file).c_str(), &stat_buf));
   EXPECT_EQ(20, stat_buf.st_size);
 
   CPLStringList dir_list(VSIReadDirEx("/vsicached?file=/vsimem/cache_dir", 0));
@@ -290,3 +287,4 @@ TEST(CplVsilCacheTest, GetCacheMaxConfigOptionsAndLoadBlocksPaths) {
 }
 
 }  // namespace
+}  // namespace autotest2

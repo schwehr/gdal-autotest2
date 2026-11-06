@@ -20,6 +20,7 @@
 
 #include "testing/base/public/gunit.h"
 
+namespace autotest2 {
 namespace {
 
 // Tests creating and destroying a list with a single nullptr element.
@@ -55,7 +56,7 @@ TEST(CplListTest, TwoElement) {
   ASSERT_EQ(&second, CPLListGetLast(list)->pData);
   ASSERT_EQ(&second, CPLListGetNext(list)->pData);
 
-  CPLList *elem2 = CPLListGetNext(list);
+  CPLList* elem2 = CPLListGetNext(list);
   list = CPLListRemove(list, 0);
   // The second element becomes the first and is the pointer
   // representing the list.
@@ -134,7 +135,7 @@ TEST(CplListTest, CplListRemove) {
   list = CPLListAppend(list, &third);
   ASSERT_EQ(3, CPLListCount(list));
 
-  CPLList *item2 = CPLListGet(list, 1);
+  CPLList* item2 = CPLListGet(list, 1);
   list = CPLListRemove(list, 0);
   ASSERT_EQ(item2, list);
   ASSERT_EQ(2, CPLListCount(list));
@@ -148,3 +149,4 @@ TEST(CplListTest, CplListRemove) {
 }
 
 }  // namespace
+}  // namespace autotest2

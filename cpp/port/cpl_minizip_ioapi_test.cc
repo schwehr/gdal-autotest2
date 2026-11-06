@@ -1,8 +1,4 @@
-// Tests for cpl_minizip_ioapi:
-//   https://github.com/OSGeo/gdal/blob/master/port/cpl_minizip_ioapi.h
-//   https://github.com/OSGeo/gdal/blob/master/port/cpl_minizip_ioapi.cpp
-//
-// Copyright 2026 Google Inc. All Rights Reserved.
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,12 +11,15 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Tests for cpl_minizip_ioapi:
+//   https://github.com/OSGeo/gdal/blob/master/port/cpl_minizip_ioapi.h
+//   https://github.com/OSGeo/gdal/blob/master/port/cpl_minizip_ioapi.cpp
 
 #include "third_party/gdal/port/cpl_minizip_ioapi.h"
 
-#include <cstring>
-
 #include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 
 namespace autotest2 {
@@ -38,16 +37,17 @@ TEST(CplMinizipIoapiTest, FileFuncOperations) {
   ASSERT_NE(nullptr, filefunc.zerror_file);
   EXPECT_EQ(nullptr, filefunc.opaque);
 
-  const char* filename = "/vsimem/cpl_minizip_ioapi_test.bin";
+  constexpr char kFilename[] = "/vsimem/cpl_minizip_ioapi_test.bin";
+  absl::Cleanup unlink_cleanup = [&kFilename] { VSIUnlink(kFilename); };
 
   // Invalid mode or null filename.
   EXPECT_EQ(nullptr,
             filefunc.zopen_file(nullptr, nullptr, ZLIB_FILEFUNC_MODE_CREATE));
-  EXPECT_EQ(nullptr, filefunc.zopen_file(nullptr, filename, 0));
+  EXPECT_EQ(nullptr, filefunc.zopen_file(nullptr, kFilename, 0));
 
   // Create file and write.
   voidpf stream =
-      filefunc.zopen_file(nullptr, filename, ZLIB_FILEFUNC_MODE_CREATE);
+      filefunc.zopen_file(nullptr, kFilename, ZLIB_FILEFUNC_MODE_CREATE);
   ASSERT_NE(nullptr, stream);
   EXPECT_EQ(5u, filefunc.zwrite_file(nullptr, stream, "hello", 5));
   EXPECT_EQ(5u, filefunc.ztell_file(nullptr, stream));
@@ -55,7 +55,7 @@ TEST(CplMinizipIoapiTest, FileFuncOperations) {
   EXPECT_EQ(0, filefunc.zclose_file(nullptr, stream));
 
   // Open existing (r+b) and seek/write.
-  stream = filefunc.zopen_file(nullptr, filename, ZLIB_FILEFUNC_MODE_EXISTING);
+  stream = filefunc.zopen_file(nullptr, kFilename, ZLIB_FILEFUNC_MODE_EXISTING);
   ASSERT_NE(nullptr, stream);
   EXPECT_EQ(0, filefunc.zseek_file(nullptr, stream, 0, ZLIB_FILEFUNC_SEEK_END));
   EXPECT_EQ(5u, filefunc.ztell_file(nullptr, stream));
@@ -63,7 +63,7 @@ TEST(CplMinizipIoapiTest, FileFuncOperations) {
   EXPECT_EQ(0, filefunc.zclose_file(nullptr, stream));
 
   // Open read-only (rb) and test seek modes + read.
-  stream = filefunc.zopen_file(nullptr, filename, ZLIB_FILEFUNC_MODE_READ);
+  stream = filefunc.zopen_file(nullptr, kFilename, ZLIB_FILEFUNC_MODE_READ);
   ASSERT_NE(nullptr, stream);
   EXPECT_EQ(0, filefunc.zseek_file(nullptr, stream, 6, ZLIB_FILEFUNC_SEEK_SET));
   char buf[6] = {};
@@ -78,7 +78,6 @@ TEST(CplMinizipIoapiTest, FileFuncOperations) {
   EXPECT_EQ(-1, filefunc.zseek_file(nullptr, stream, 0, 9999));
 
   EXPECT_EQ(0, filefunc.zclose_file(nullptr, stream));
-  EXPECT_EQ(0, VSIUnlink(filename));
 }
 
 }  // namespace

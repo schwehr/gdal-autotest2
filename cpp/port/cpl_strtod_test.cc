@@ -1,8 +1,4 @@
-// Tests for GDAL's C strtod API.
-//
-//   https://github.com/OSGeo/gdal/blob/master/port/cpl_strtod.cpp
-//
-// Copyright 2015 Google Inc. All Rights Reserved.
+// Copyright 2015 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +11,9 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Tests for GDAL's C strtod API:
+//   https://github.com/OSGeo/gdal/blob/master/port/cpl_strtod.cpp
 
 #include <cmath>
 #include <cstring>
@@ -33,241 +32,176 @@ TEST(CplStrtodTest, CPLAtof) { EXPECT_DOUBLE_EQ(-1.2, CPLAtof("-1.2")); }
 
 TEST(CplStrtodTest, AtofM) {
   // Test conversion to double using multi-lingual / locale processing.
-  double value = CPLAtofM("0");
-  EXPECT_EQ(0.0, value);
-
-  value = CPLAtofM("6");
-  EXPECT_EQ(6, value);
-
-  value = CPLAtofM("1.");
-  EXPECT_EQ(1.0, value);
-
-  value = CPLAtofM("1.2");
-  EXPECT_EQ(1.2, value);
-
-  value = CPLAtofM("+1.3");
-  EXPECT_EQ(1.3, value);
-
-  value = CPLAtofM("-2");
-  EXPECT_EQ(-2.0, value);
-
-  value = CPLAtofM("-3,");
-  EXPECT_EQ(-3.0, value);
-
-  value = CPLAtofM("-4,5");
-  EXPECT_EQ(-4.5, value);
-
-  value = CPLAtofM("1,");
-  EXPECT_EQ(1.0, value);
-
-  value = CPLAtofM("1,2");
-  EXPECT_EQ(1.2, value);
-
-  value = CPLAtofM("+1,3");
-  EXPECT_EQ(1.3, value);
-
-  value = CPLAtofM("-3,");
-  EXPECT_EQ(-3.0, value);
-
-  value = CPLAtofM("-4,5");
-  EXPECT_EQ(-4.5, value);
-
-  value = CPLAtofM("1.23456789123456789");
-  EXPECT_EQ(1.23456789123456789, value);
-
-  // String with >= 50 characters before any '.' or ',' or '\0'.
-  value = CPLAtofM("                                                  1.5");
-  EXPECT_DOUBLE_EQ(1.5, value);
+  struct TestCase {
+    const char* input;
+    double expected;
+  };
+  constexpr TestCase kCases[] = {
+      {.input = "0", .expected = 0.0},
+      {.input = "6", .expected = 6.0},
+      {.input = "1.", .expected = 1.0},
+      {.input = "1.2", .expected = 1.2},
+      {.input = "+1.3", .expected = 1.3},
+      {.input = "-2", .expected = -2.0},
+      {.input = "-3,", .expected = -3.0},
+      {.input = "-4,5", .expected = -4.5},
+      {.input = "1,", .expected = 1.0},
+      {.input = "1,2", .expected = 1.2},
+      {.input = "+1,3", .expected = 1.3},
+      {.input = "1.23456789123456789", .expected = 1.23456789123456789},
+      // String with >= 50 characters before any '.' or ',' or '\0'.
+      {.input = "                                                  1.5",
+       .expected = 1.5},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.input);
+    EXPECT_EQ(tc.expected, CPLAtofM(tc.input));
+  }
 }
 
 TEST(CplStrtodTest, StrtodM) {
-  char* end = nullptr;
-  EXPECT_DOUBLE_EQ(1.25, CPLStrtodM("1.25abc", &end));
-  ASSERT_NE(nullptr, end);
-  EXPECT_STREQ("abc", end);
-
-  end = nullptr;
-  EXPECT_DOUBLE_EQ(1.25, CPLStrtodM("1,25xyz", &end));
-  ASSERT_NE(nullptr, end);
-  EXPECT_STREQ("xyz", end);
-
-  end = nullptr;
-  EXPECT_DOUBLE_EQ(42.0, CPLStrtodM("42", &end));
-  ASSERT_NE(nullptr, end);
-  EXPECT_STREQ("", end);
-
-  // String with >= 50 characters before any '.' or ',' or '\0'.
-  end = nullptr;
-  EXPECT_DOUBLE_EQ(
-      2.5,
-      CPLStrtodM("                                                  2.5tail",
-                 &end));
-  ASSERT_NE(nullptr, end);
-  EXPECT_STREQ("tail", end);
+  struct TestCase {
+    const char* input;
+    double expected;
+    const char* expected_tail;
+  };
+  constexpr TestCase kCases[] = {
+      {.input = "1.25abc", .expected = 1.25, .expected_tail = "abc"},
+      {.input = "1,25xyz", .expected = 1.25, .expected_tail = "xyz"},
+      {.input = "42", .expected = 42.0, .expected_tail = ""},
+      // String with >= 50 characters before any '.' or ',' or '\0'.
+      {.input = "                                                  2.5tail",
+       .expected = 2.5,
+       .expected_tail = "tail"},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.input);
+    char* end = nullptr;
+    EXPECT_EQ(tc.expected, CPLStrtodM(tc.input, &end));
+    ASSERT_NE(nullptr, end);
+    EXPECT_STREQ(tc.expected_tail, end);
+  }
 }
 
 TEST(CplStrtodTest, StrtodDelim) {
-  double value = CPLStrtodDelim("0", nullptr, '.');
-  EXPECT_EQ(0.0, value);
-
-  value = CPLStrtodDelim("1", nullptr, '.');
-  EXPECT_EQ(1, value);
-
-  value = CPLStrtodDelim("2z3", nullptr, 'z');
-  EXPECT_EQ(2.3, value);
-
-  // Insane, but works.
-  value = CPLStrtodDelim("405", nullptr, '0');
-  EXPECT_EQ(4.5, value);
+  struct DelimCase {
+    const char* input;
+    char delim;
+    double expected;
+  };
+  constexpr DelimCase kDelimCases[] = {
+      {.input = "0", .delim = '.', .expected = 0.0},
+      {.input = "1", .delim = '.', .expected = 1.0},
+      {.input = "2z3", .delim = 'z', .expected = 2.3},
+      // Insane, but works.
+      {.input = "405", .delim = '0', .expected = 4.5},
+      {.input = "1.23456789123456789",
+       .delim = '.',
+       .expected = 1.23456789123456789},
+  };
+  for (const auto& tc : kDelimCases) {
+    SCOPED_TRACE(tc.input);
+    EXPECT_EQ(tc.expected, CPLStrtodDelim(tc.input, nullptr, tc.delim));
+  }
 
   char str[] = "12.34abc";
   char* end = nullptr;
-  value = CPLStrtodDelim(str, &end, '.');
-  EXPECT_EQ(12.34, value);
+  EXPECT_EQ(12.34, CPLStrtodDelim(str, &end, '.'));
   EXPECT_EQ('a', *end);
-
-  value = CPLStrtodDelim("1.#QNAN", nullptr, '.');
-  EXPECT_TRUE(isnan(value));
-
-  value = CPLStrtodDelim("-1.#QNAN", nullptr, '.');
-  EXPECT_TRUE(isnan(value));
-
-  value = CPLStrtodDelim("-1.#QNAN0000000", nullptr, '.');
-  EXPECT_TRUE(isnan(value));
-
-  value = CPLStrtodDelim("1.#QNAN", nullptr, '.');
-  EXPECT_TRUE(isnan(value));
-
-  value = CPLStrtodDelim("1.#QNAN0000000", nullptr, '.');
-  EXPECT_TRUE(isnan(value));
-
-  value = CPLStrtodDelim("-1.#IND", nullptr, '.');
-  EXPECT_TRUE(isnan(value));
-
-  value = CPLStrtodDelim("-1.#IND0000000", nullptr, '.');
-  EXPECT_TRUE(isnan(value));
-
-  value = CPLStrtodDelim("inf", nullptr, '.');
-  EXPECT_TRUE(isinf(value));
-  EXPECT_LE(0, value);
-
-  value = CPLStrtodDelim("-inf", nullptr, '.');
-  EXPECT_TRUE(isinf(value));
-  EXPECT_GE(0, value);
-
-  value = CPLStrtodDelim("1.#INF", nullptr, '.');
-  EXPECT_TRUE(isinf(value));
-  EXPECT_LE(0, value);
-
-  value = CPLStrtodDelim("1.23456789123456789", nullptr, '.');
-  EXPECT_EQ(1.23456789123456789, value);
 
   // Leading spaces and locale decimal point in input when using custom point.
   end = nullptr;
-  value = CPLStrtodDelim("   1,25.99", &end, ',');
-  EXPECT_DOUBLE_EQ(1.25, value);
+  EXPECT_EQ(1.25, CPLStrtodDelim("   1,25.99", &end, ','));
   ASSERT_NE(nullptr, end);
   EXPECT_STREQ(".99", end);
 
-  // Special values with non-null endptr.
-  const char* s_neg_qnan = "-1.#QNAN";
-  end = nullptr;
-  EXPECT_TRUE(std::isnan(CPLStrtodDelim(s_neg_qnan, &end, '.')));
-  EXPECT_EQ(s_neg_qnan + strlen(s_neg_qnan), end);
+  constexpr const char* kNanStrings[] = {
+      "1.#QNAN", "-1.#QNAN",       "-1.#QNAN0000000", "1.#QNAN0000000",
+      "-1.#IND", "-1.#IND0000000", "1.#SNAN",         "nan",
+  };
+  for (const char* s : kNanStrings) {
+    SCOPED_TRACE(s);
+    EXPECT_TRUE(std::isnan(CPLStrtodDelim(s, nullptr, '.')));
+    end = nullptr;
+    EXPECT_TRUE(std::isnan(CPLStrtodDelim(s, &end, '.')));
+    EXPECT_EQ(s + std::strlen(s), end);
+  }
 
-  const char* s_neg_inf = "-inf";
-  end = nullptr;
-  value = CPLStrtodDelim(s_neg_inf, &end, '.');
-  EXPECT_TRUE(std::isinf(value));
-  EXPECT_LT(value, 0.0);
-  EXPECT_EQ(s_neg_inf + strlen(s_neg_inf), end);
+  struct InfCase {
+    const char* input;
+    bool negative;
+  };
+  constexpr InfCase kInfCases[] = {
+      {.input = "inf", .negative = false},
+      {.input = "-inf", .negative = true},
+      {.input = "1.#INF", .negative = false},
+  };
+  for (const auto& tc : kInfCases) {
+    SCOPED_TRACE(tc.input);
+    const double val_null = CPLStrtodDelim(tc.input, nullptr, '.');
+    EXPECT_TRUE(std::isinf(val_null));
+    EXPECT_EQ(tc.negative, val_null < 0.0);
 
-  const char* s_pos_snan = "1.#SNAN";
-  end = nullptr;
-  EXPECT_TRUE(std::isnan(CPLStrtodDelim(s_pos_snan, &end, '.')));
-  EXPECT_EQ(s_pos_snan + strlen(s_pos_snan), end);
-
-  const char* s_pos_1inf = "1.#INF";
-  end = nullptr;
-  value = CPLStrtodDelim(s_pos_1inf, &end, '.');
-  EXPECT_TRUE(std::isinf(value));
-  EXPECT_GT(value, 0.0);
-  EXPECT_EQ(s_pos_1inf + strlen(s_pos_1inf), end);
-
-  const char* s_pos_inf = "inf";
-  end = nullptr;
-  value = CPLStrtodDelim(s_pos_inf, &end, '.');
-  EXPECT_TRUE(std::isinf(value));
-  EXPECT_GT(value, 0.0);
-  EXPECT_EQ(s_pos_inf + strlen(s_pos_inf), end);
-
-  const char* s_nan = "nan";
-  end = nullptr;
-  EXPECT_TRUE(std::isnan(CPLStrtodDelim(s_nan, &end, '.')));
-  EXPECT_EQ(s_nan + strlen(s_nan), end);
-  EXPECT_TRUE(std::isnan(CPLStrtodDelim("nan", nullptr, '.')));
+    end = nullptr;
+    const double val_end = CPLStrtodDelim(tc.input, &end, '.');
+    EXPECT_TRUE(std::isinf(val_end));
+    EXPECT_EQ(tc.negative, val_end < 0.0);
+    EXPECT_EQ(tc.input + std::strlen(tc.input), end);
+  }
 }
 
 TEST(CplStrtodTest, Strtod) {
   // CPLStrtod is StrtoDelim with '.' as the delimiter.
-  double value = CPLStrtod("0", nullptr);
-  EXPECT_EQ(0.0, value);
-
-  value = CPLStrtod("-1.0", nullptr);
-  EXPECT_EQ(-1.0, value);
-
-  value = CPLStrtod("2.3", nullptr);
-  EXPECT_EQ(2.3, value);
-
-  value = CPLStrtod("-123456789.123456789123456789", nullptr);
-  EXPECT_EQ(-123456789.123456789123456789, value);
-
-  // Bogus strings do what?
-
-  value = CPLStrtod("-9:8", nullptr);
-  EXPECT_EQ(-9.0, value);
-
-  value = CPLStrtod("-8,7", nullptr);
-  EXPECT_EQ(-8.0, value);
-
-  value = CPLStrtod("bad wolf", nullptr);
-  EXPECT_EQ(0.0, value);
+  struct TestCase {
+    const char* input;
+    double expected;
+  };
+  constexpr TestCase kCases[] = {
+      {.input = "0", .expected = 0.0},
+      {.input = "-1.0", .expected = -1.0},
+      {.input = "2.3", .expected = 2.3},
+      {.input = "-123456789.123456789123456789",
+       .expected = -123456789.123456789123456789},
+      {.input = "-9:8", .expected = -9.0},
+      {.input = "-8,7", .expected = -8.0},
+      {.input = "bad wolf", .expected = 0.0},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.input);
+    EXPECT_EQ(tc.expected, CPLStrtod(tc.input, nullptr));
+  }
 }
 
 TEST(CplStrtodTest, CPLStrtofDelim) {
-  float value = CPLStrtofDelim("0", nullptr, '.');
-  EXPECT_EQ(0.0, value);
+  struct TestCase {
+    const char* input;
+    char delim;
+    float expected;
+  };
+  constexpr TestCase kCases[] = {
+      {.input = "0", .delim = '.', .expected = 0.0f},
+      {.input = "1.2", .delim = '.', .expected = 1.2f},
+      {.input = "-3a4", .delim = 'a', .expected = -3.4f},
+      {.input = "-3", .delim = '-', .expected = 0.3f},
+      {.input = "5+6", .delim = '+', .expected = 5.6f},
+      {.input = "789", .delim = '8', .expected = 7.9f},
+      {.input = "2 9", .delim = ' ', .expected = 2.9f},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.input);
+    EXPECT_FLOAT_EQ(tc.expected, CPLStrtofDelim(tc.input, nullptr, tc.delim));
+  }
 
-  value = CPLStrtofDelim("1.2", nullptr, '.');
-  EXPECT_EQ(1.2f, value);
-
-  value = CPLStrtofDelim("-3a4", nullptr, 'a');
-  EXPECT_EQ(-3.4f, value);
-
-  value = CPLStrtofDelim("-3", nullptr, '-');
-  EXPECT_EQ(0.3f, value);
-
-  value = CPLStrtofDelim("5+6", nullptr, '+');
-  EXPECT_EQ(5.6f, value);
-
-  value = CPLStrtofDelim("789", nullptr, '8');
-  EXPECT_EQ(7.9f, value);
-
-  value = CPLStrtofDelim("2 9", nullptr, ' ');
-  EXPECT_EQ(2.9f, value);
-
-  value = CPLStrtod("-123456789.123456789123456789", nullptr);
+  const float value = CPLStrtof("-123456789.123456789123456789", nullptr);
   EXPECT_EQ(-123456789.123456789123456789f, value);
 
   char* end = nullptr;
-  value = CPLStrtofDelim("3,5rest", &end, ',');
-  EXPECT_FLOAT_EQ(3.5f, value);
+  EXPECT_FLOAT_EQ(3.5f, CPLStrtofDelim("3,5rest", &end, ','));
   ASSERT_NE(nullptr, end);
   EXPECT_STREQ("rest", end);
 
   end = nullptr;
-  value = CPLStrtof("4.25end", &end);
-  EXPECT_FLOAT_EQ(4.25f, value);
+  EXPECT_FLOAT_EQ(4.25f, CPLStrtof("4.25end", &end));
   ASSERT_NE(nullptr, end);
   EXPECT_STREQ("end", end);
 }

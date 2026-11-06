@@ -26,17 +26,18 @@
 #include "third_party/gdal/port/cpl_float.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
-#include <cstring>
+#include <cstdint>
 #include <limits>
 
 #include "testing/base/public/gunit.h"
-#include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 
 namespace autotest2 {
 namespace {
 
-TEST(CplFloat16Test, Coversions) {
+TEST(CplFloat16Test, Conversions) {
   for (int i = -2048; i <= +2048; ++i) {
     EXPECT_EQ(GFloat16(i), static_cast<double>(i));
     if (i >= -128 && i <= 127) {
@@ -218,26 +219,21 @@ TEST(CplFloat16Test, FloatToHalfFunctions) {
   EXPECT_EQ(0x3C00, CPLConvertFloatToHalf(1.0f));
 
   // Overflow beyond float16 range triggers warning once when bHasWarned=false
-  CPLPushErrorHandler(CPLQuietErrorHandler);
+  WithQuietHandler quiet;
   has_warned = false;
-  GUInt32 big_pos = 0;
-  float f_big = 100000.0f;
-  std::memcpy(&big_pos, &f_big, 4);
+  const uint32_t big_pos = std::bit_cast<uint32_t>(100000.0f);
   EXPECT_EQ(0x7C00, CPLFloatToHalf(big_pos, has_warned));
   EXPECT_TRUE(has_warned);
   // Second call with has_warned=true does not warn again.
   EXPECT_EQ(0x7C00, CPLFloatToHalf(big_pos, has_warned));
 
   has_warned = false;
-  float f_neg_big = -100000.0f;
-  GUInt32 big_neg = 0;
-  std::memcpy(&big_neg, &f_neg_big, 4);
+  const uint32_t big_neg = std::bit_cast<uint32_t>(-100000.0f);
   EXPECT_EQ(0xFC00, CPLFloatToHalf(big_neg, has_warned));
-  CPLPopErrorHandler();
 }
 
 TEST(CplFloat16Test, GreatestCommonDivisor) {
-  CPLPushErrorHandler(CPLQuietErrorHandler);
+  WithQuietHandler quiet;
 
   // Zero or non-finite inputs return 0.
   EXPECT_DOUBLE_EQ(0.0, CPLGreatestCommonDivisor(0.0, 1.0));
@@ -265,8 +261,6 @@ TEST(CplFloat16Test, GreatestCommonDivisor) {
   // approximation on first or second argument.
   EXPECT_DOUBLE_EQ(0.0, CPLGreatestCommonDivisor(2.3e19, 1.0e19));
   EXPECT_DOUBLE_EQ(0.0, CPLGreatestCommonDivisor(1.0e19, 2.3e19));
-
-  CPLPopErrorHandler();
 }
 
 }  // namespace

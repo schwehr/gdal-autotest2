@@ -20,16 +20,15 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <cstdio>
 #include <cstring>
 #include <filesystem>  // NOLINT
+#include <format>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "testing/base/public/gunit.h"
-#include "third_party/absl/log/check.h"
-#include "third_party/absl/log/die_if_null.h"
+#include "third_party/absl/cleanup/cleanup.h"
 #include "third_party/gdal/autotest2/cpp/util/cpl_cstringlist.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/autotest2/cpp/util/vsimem.h"
@@ -40,16 +39,6 @@ namespace autotest2 {
 namespace {
 
 constexpr int kSuccess = 0;
-
-// TODO(schwehr): Move CplVsiLFileCloser to utils.
-class CplVsiLFileCloser {
- public:
-  CplVsiLFileCloser(VSILFILE* file) : file_(ABSL_DIE_IF_NULL(file)) {}
-  ~CplVsiLFileCloser() { CHECK_EQ(kSuccess, VSIFCloseL(file_)); }
-
- private:
-  VSILFILE* file_;
-};
 
 const std::filesystem::path kTestDataPath(
     "google3/third_party/gdal/autotest2/cpp/port/testdata/tar");
@@ -63,9 +52,8 @@ TEST(CplVsiTarTest, ReadEmpty) {
   const std::string vsi_path = "/vsitar/" + std::string(filepath);
 
   EXPECT_EQ(kSuccess, access(filepath.c_str(), F_OK));
-  char** string_list = VSIReadDir(vsi_path.c_str());
-  auto entries = CslToVector(string_list);
-  CSLDestroy(string_list);
+  StringListPtr string_list(VSIReadDir(vsi_path.c_str()), CSLDestroy);
+  auto entries = CslToVector(string_list.get());
   EXPECT_TRUE(entries.empty());
 }
 
@@ -74,9 +62,8 @@ TEST(CplVsiTarTest, ReadVariety) {
   const std::string vsi_path = "/vsitar/" + std::string(filepath);
 
   EXPECT_EQ(kSuccess, access(filepath.c_str(), F_OK));
-  char** string_list = VSIReadDir(vsi_path.c_str());
-  auto entries = CslToVector(string_list);
-  CSLDestroy(string_list);
+  StringListPtr string_list(VSIReadDir(vsi_path.c_str()), CSLDestroy);
+  auto entries = CslToVector(string_list.get());
   ASSERT_EQ(21, entries.size());
   EXPECT_EQ("1", entries[0]);
   EXPECT_EQ("10k-ff.gz", entries[1]);
@@ -104,9 +91,8 @@ TEST(CplVsiTarTest, ReadVariety) {
 
   const std::string long_path =
       vsi_path + "/1/2/3/4/5/6/7/8/9/10/11/12/13/14/15/16/17/18/19/20";
-  string_list = VSIReadDir(long_path.c_str());
-  entries = CslToVector(string_list);
-  CSLDestroy(string_list);
+  string_list.reset(VSIReadDir(long_path.c_str()));
+  entries = CslToVector(string_list.get());
   ASSERT_EQ(1, entries.size());
   EXPECT_EQ("ok", entries[0]);
 }
@@ -121,7 +107,7 @@ TEST(CplVsiTarTest, ReadVarietyFileContents) {
   char buf[kBufSize] = {};
   VSILFILE* file = VSIFOpenL(vsi_path.c_str(), "rb");
   ASSERT_NE(nullptr, file);
-  CplVsiLFileCloser closer(file);
+  absl::Cleanup closer = [file] { EXPECT_EQ(kSuccess, VSIFCloseL(file)); };
   EXPECT_EQ(kFileSize, VSIFReadL(buf, 1, kBufSize - 1, file));
   EXPECT_STREQ("abc\n", buf);
 }
@@ -134,9 +120,8 @@ TEST(CplVsiTarTest, ReadTarGz) {
   const std::string vsi_path = "/vsitar/" + std::string(filepath);
 
   EXPECT_EQ(kSuccess, access(filepath.c_str(), F_OK));
-  char** string_list = VSIReadDir(vsi_path.c_str());
-  auto entries = CslToVector(string_list);
-  CSLDestroy(string_list);
+  StringListPtr string_list(VSIReadDir(vsi_path.c_str()), CSLDestroy);
+  auto entries = CslToVector(string_list.get());
   ASSERT_EQ(1, entries.size());
   EXPECT_EQ("bar", entries[0]);
 
@@ -147,7 +132,7 @@ TEST(CplVsiTarTest, ReadTarGz) {
   char buf[kBufSize] = {};
   VSILFILE* file = VSIFOpenL(vsi_path.c_str(), "rb");
   ASSERT_NE(nullptr, file);
-  CplVsiLFileCloser closer(file);
+  absl::Cleanup closer = [file] { EXPECT_EQ(kSuccess, VSIFCloseL(file)); };
   EXPECT_EQ(kFileSize, VSIFReadL(buf, 1, kBufSize - 1, file));
   EXPECT_STREQ("foo\n", buf);
 }
@@ -177,11 +162,9 @@ TEST(CplVsiTarTest, LongLinkAndUstarPrefix) {
   const std::string long_name = "dir_long/subdir/long_filename_entry.txt";
   const std::string long_name_padded =
       long_name + std::string(512 - long_name.size(), '\0');
-  char size_buf[12] = {};
-  snprintf(size_buf, sizeof(size_buf), "%011o",
-           static_cast<unsigned int>(long_name.size() + 1));
+  const std::string size_str = std::format("{:011o}", long_name.size() + 1);
   std::string tar_data =
-      MakeTarHeader("././@LongLink", size_buf, "00000000000", 'L') +
+      MakeTarHeader("././@LongLink", size_str, "00000000000", 'L') +
       long_name_padded;
 
   const std::string content1 = "hello";

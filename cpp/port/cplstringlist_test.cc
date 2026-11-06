@@ -1,8 +1,4 @@
-// Tests for GDAL's VSI virtual file system.
-//
-//   https://github.com/OSGeo/gdal/blob/master/port/cplstringlist.cpp
-//
-// Copyright 2014 Google Inc. All Rights Reserved.
+// Copyright 2014 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,22 +11,28 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Tests for GDAL's CPLStringList class:
+//   https://github.com/OSGeo/gdal/blob/master/port/cplstringlist.cpp
 
-#include <stddef.h>
-#include <stdlib.h>
-#include <string.h>
-
+#include <cstddef>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "testing/base/public/gunit.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_cstringlist.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_memory.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
+#include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_string.h"
 
+namespace autotest2 {
 namespace {
 
 // Tests the CPLStringList class basic operations.
@@ -47,10 +49,10 @@ TEST(CplStringList, Basic) {
   list.Clear();
   ASSERT_EQ(0, list.size());
   list.AddString("zero");
-  list.AddStringDirectly(strdup("two"));
+  list.AddStringDirectly(CPLStrdup("two"));
 
   // Use a locally managed string to check for double free.
-  std::unique_ptr<std::string> unique_str(new std::string("three"));
+  auto unique_str = std::make_unique<std::string>("three");
   list.AddString(unique_str->c_str());
   ASSERT_EQ(2, list.FindString("three"));
   ASSERT_EQ(2, list.PartialFindString("re"));
@@ -61,14 +63,13 @@ TEST(CplStringList, Basic) {
   list.InsertString(0, "new zero");
   ASSERT_EQ(0, list.FindString("new zero"));
 
-  list.InsertStringDirectly(1, strdup("new one"));
+  list.InsertStringDirectly(1, CPLStrdup("new one"));
   ASSERT_EQ(1, list.FindString("new one"));
 
-  // This test must me last.
+  // This test must be last.
   // Make sure memory is not double freed.
-  char* str = strdup("check free");
-  list.AddString(str);
-  free(str);
+  std::unique_ptr<char, CplFreeDeleter> str(CPLStrdup("check free"));
+  list.AddString(str.get());
 }
 
 // Tests the name=value operations.
@@ -78,16 +79,12 @@ TEST(CplStringList, NameAndSort) {
   list.AddNameValue("FILENAME_0", "a");
   ASSERT_EQ(0, list.FindString("FILENAME_0=a"));
 
-  // TODO(schwehr): Test multiple calls to AddNameValue with the same name.
-
   list.SetNameValue("FILENAME_1", "b");
   ASSERT_EQ(1, list.FindString("FILENAME_1=b"));
 
   list.SetNameValue("FILENAME_1", "c");
   ASSERT_STREQ("c", list.FetchNameValue("FILENAME_1"));
   ASSERT_EQ(1, list.FindString("FILENAME_1=c"));
-
-  // TODO(schwehr): Make sure there is only one.
 
   list.AddNameValue("FILENAME_8", "d");
   ASSERT_EQ(2, list.FindString("FILENAME_8=d"));
@@ -116,50 +113,47 @@ TEST(CplStringList, NameAndSort) {
 TEST(CplStringList, Boolean) {
   CPLStringList list;
 
-  ASSERT_TRUE(list.FetchBoolean("does_not_exist", true));
-  ASSERT_FALSE(list.FetchBoolean("does_not_exist", false));
+  EXPECT_TRUE(list.FetchBoolean("does_not_exist", true));
+  EXPECT_FALSE(list.FetchBoolean("does_not_exist", false));
 
   list.AddString("a");
   // This contradicts the comments for FetchBoolean.
-  ASSERT_TRUE(list.FetchBoolean("a", true));
-  ASSERT_FALSE(list.FetchBoolean("a", false));
+  EXPECT_TRUE(list.FetchBoolean("a", true));
+  EXPECT_FALSE(list.FetchBoolean("a", false));
 
-  // Only these 4 values are false.
-  list.SetNameValue("b", "NO");
-  ASSERT_FALSE(list.FetchBoolean("b", true));
-  list.SetNameValue("c", "FALSE");
-  ASSERT_FALSE(list.FetchBoolean("c", true));
-  list.SetNameValue("d", "OFF");
-  ASSERT_FALSE(list.FetchBoolean("d", true));
-  list.SetNameValue("e", "0");
-  ASSERT_FALSE(list.FetchBoolean("e", true));
-
-  // But case does not matter.
-  list.SetNameValue("b", "no");
-  ASSERT_FALSE(list.FetchBoolean("b", true));
-  list.SetNameValue("c", "fAlse");
-  ASSERT_FALSE(list.FetchBoolean("c", true));
-  list.SetNameValue("d", "Off");
-  ASSERT_FALSE(list.FetchBoolean("d", true));
-
-  list.SetNameValue("f", "YES");
-  ASSERT_TRUE(list.FetchBoolean("f", false));
-  list.SetNameValue("g", "TRUE");
-  ASSERT_TRUE(list.FetchBoolean("g", false));
-  list.SetNameValue("h", "ON");
-  ASSERT_TRUE(list.FetchBoolean("h", false));
-  list.SetNameValue("i", "1");
-  ASSERT_TRUE(list.FetchBoolean("i", false));
-  list.SetNameValue("i", "-1");
-  ASSERT_TRUE(list.FetchBoolean("i", false));
-
-  list.SetNameValue("j", "");
-  ASSERT_TRUE(list.FetchBoolean("j", false));
-  list.SetNameValue("j", " ");
-  ASSERT_TRUE(list.FetchBoolean("j", false));
+  struct BoolCase {
+    const char* key;
+    const char* value;
+    bool default_val;
+    bool expected;
+  };
+  constexpr BoolCase kCases[] = {
+      // Only these 4 values are false (case-insensitive).
+      {.key = "b", .value = "NO", .default_val = true, .expected = false},
+      {.key = "c", .value = "FALSE", .default_val = true, .expected = false},
+      {.key = "d", .value = "OFF", .default_val = true, .expected = false},
+      {.key = "e", .value = "0", .default_val = true, .expected = false},
+      {.key = "b", .value = "no", .default_val = true, .expected = false},
+      {.key = "c", .value = "fAlse", .default_val = true, .expected = false},
+      {.key = "d", .value = "Off", .default_val = true, .expected = false},
+      // Any other value is true.
+      {.key = "f", .value = "YES", .default_val = false, .expected = true},
+      {.key = "g", .value = "TRUE", .default_val = false, .expected = true},
+      {.key = "h", .value = "ON", .default_val = false, .expected = true},
+      {.key = "i", .value = "1", .default_val = false, .expected = true},
+      {.key = "i", .value = "-1", .default_val = false, .expected = true},
+      {.key = "j", .value = "", .default_val = false, .expected = true},
+      {.key = "j", .value = " ", .default_val = false, .expected = true},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.key);
+    list.SetNameValue(tc.key, tc.value);
+    EXPECT_EQ(tc.expected, list.FetchBoolean(tc.key, tc.default_val))
+        << tc.key << "=" << tc.value;
+  }
 
   list.AddString("k=");
-  ASSERT_TRUE(list.FetchBoolean("k", false));
+  EXPECT_TRUE(list.FetchBoolean("k", false));
 }
 
 // Tests looking up by position index.
@@ -267,10 +261,9 @@ TEST(CplStringList, ConstructorsAndAssignment) {
   EXPECT_EQ(0, empty_assigned.Count());
 
   // StealList.
-  char** stolen = unowned2.StealList();
+  StringListPtr stolen(unowned2.StealList(), CSLDestroy);
   EXPECT_EQ(0, unowned2.Count());
-  EXPECT_EQ(4, CSLCount(stolen));
-  CSLDestroy(stolen);
+  EXPECT_EQ(4, CSLCount(stolen.get()));
 }
 
 TEST(CplStringList, ReallocAndEdgeCases) {
@@ -299,15 +292,14 @@ TEST(CplStringList, ReallocAndEdgeCases) {
   {
     WithQuietHandler quiet;
     CPLErrorReset();
-    char* not_inserted = CPLStrdup("bad");
-    uncounted2.InsertStringDirectly(-1, not_inserted);
+    std::unique_ptr<char, CplFreeDeleter> not_inserted(CPLStrdup("bad"));
+    uncounted2.InsertStringDirectly(-1, not_inserted.get());
     EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
     EXPECT_EQ(2, uncounted2.Count());
-    CPLFree(not_inserted);
   }
 
   // AddNameValue with nullptr key or value.
-  int before = uncounted2.Count();
+  const int before = uncounted2.Count();
   uncounted2.AddNameValue(nullptr, "val");
   uncounted2.AddNameValue("key", nullptr);
   EXPECT_EQ(before, uncounted2.Count());
@@ -351,7 +343,7 @@ TEST(CplStringList, Iterators) {
   for (const char* s : cpl::Iterate(list)) {
     items.push_back(s);
   }
-  ASSERT_EQ(4, items.size());
+  ASSERT_EQ(4u, items.size());
 
   auto wrapper = cpl::Iterate(list);
   auto it1 = wrapper.begin();
@@ -368,7 +360,7 @@ TEST(CplStringList, Iterators) {
   for (const auto& [k, v] : cpl::IterateNameValue(list, false)) {
     kv_pairs.emplace_back(k, v);
   }
-  ASSERT_EQ(2, kv_pairs.size());
+  ASSERT_EQ(2u, kv_pairs.size());
   EXPECT_EQ("k1", kv_pairs[0].first);
   EXPECT_EQ("v1", kv_pairs[0].second);
   EXPECT_EQ("k2", kv_pairs[1].first);
@@ -379,7 +371,7 @@ TEST(CplStringList, Iterators) {
   for (const auto& [k, v] : cpl::IterateNameValue(list, true)) {
     all_pairs.emplace_back(k ? k : "<null>", v);
   }
-  ASSERT_EQ(4, all_pairs.size());
+  ASSERT_EQ(4u, all_pairs.size());
   EXPECT_EQ("<null>", all_pairs[0].first);
   EXPECT_EQ("flag_only", all_pairs[0].second);
   EXPECT_EQ("<null>", all_pairs[3].first);
@@ -387,3 +379,4 @@ TEST(CplStringList, Iterators) {
 }
 
 }  // namespace
+}  // namespace autotest2

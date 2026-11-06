@@ -22,7 +22,6 @@
 
 #include "testing/base/public/gunit.h"
 #include "third_party/absl/cleanup/cleanup.h"
-#include "third_party/absl/strings/str_cat.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_vsi.h"
@@ -69,7 +68,7 @@ TEST(CplVsilStdinTest, HandlerCapabilitiesAndParseFilenameErrors) {
 TEST(CplVsilStdinTest, ReadSeekCacheLimitAndStat) {
   // Create a temporary file with 20,000 bytes to serve as CPL_VSISTDIN_FILE.
   const std::string temp_file =
-      absl::StrCat(::testing::TempDir(), "/vsistdin_test_input.bin");
+      std::string(::testing::TempDir()) + "/vsistdin_test_input.bin";
   std::string content(20000, '\0');
   for (size_t i = 0; i < content.size(); ++i) {
     content[i] = static_cast<char>('A' + (i % 26));
@@ -77,8 +76,8 @@ TEST(CplVsilStdinTest, ReadSeekCacheLimitAndStat) {
   {
     FILE* f = fopen(temp_file.c_str(), "wb");
     ASSERT_NE(nullptr, f);
+    absl::Cleanup close_f = [f] { EXPECT_EQ(0, fclose(f)); };
     ASSERT_EQ(content.size(), fwrite(content.data(), 1, content.size(), f));
-    ASSERT_EQ(0, fclose(f));
   }
   absl::Cleanup unlink_temp = [&temp_file] { VSIUnlink(temp_file.c_str()); };
 
@@ -95,6 +94,13 @@ TEST(CplVsilStdinTest, ReadSeekCacheLimitAndStat) {
     fp = VSIFOpenL("/vsistdin?buffer_limit=100&unknown_opt=1", "rb");
   }
   ASSERT_NE(nullptr, fp);
+  absl::Cleanup close_fp = [&fp] {
+    if (fp != nullptr) {
+      CPLConfigOptionSetter close_first("CPL_VSISTDIN_FILE_CLOSE", "YES",
+                                        false);
+      EXPECT_EQ(0, VSIFCloseL(fp));
+    }
+  };
 
   EXPECT_EQ(0, VSIFTellL(fp));
   EXPECT_EQ(0, VSIFEofL(fp));
@@ -155,6 +161,7 @@ TEST(CplVsilStdinTest, ReadSeekCacheLimitAndStat) {
   {
     CPLConfigOptionSetter close_first("CPL_VSISTDIN_FILE_CLOSE", "YES", false);
     EXPECT_EQ(0, VSIFCloseL(fp));
+    fp = nullptr;
   }
 
   // Now test larger buffer_limit via MB/GB suffixes in GetBufferLimit,
@@ -162,6 +169,10 @@ TEST(CplVsilStdinTest, ReadSeekCacheLimitAndStat) {
   {
     VSILFILE* fp2 = VSIFOpenL("/vsistdin/?buffer_limit=1MB", "rb");
     ASSERT_NE(nullptr, fp2);
+    absl::Cleanup close_fp2 = [fp2] {
+      CPLConfigOptionSetter close_opt("CPL_VSISTDIN_FILE_CLOSE", "YES", false);
+      EXPECT_EQ(0, VSIFCloseL(fp2));
+    };
 
     // Read 50 bytes, seek back to 30, then read 50 bytes (20 from cache + 30
     // fresh from file).
@@ -206,11 +217,6 @@ TEST(CplVsilStdinTest, ReadSeekCacheLimitAndStat) {
                                       false);
       EXPECT_EQ(0, VSIStatExL("/vsistdin/", &stat_buf, 0));
     }
-
-    // Closing with CPL_VSISTDIN_FILE_CLOSE=YES closes gStdinFile and resets
-    // state.
-    CPLConfigOptionSetter close_opt("CPL_VSISTDIN_FILE_CLOSE", "YES", false);
-    EXPECT_EQ(0, VSIFCloseL(fp2));
   }
 
   // Exercise GetBufferLimit with GB, huge MB/GB/bytes, and resetting back to

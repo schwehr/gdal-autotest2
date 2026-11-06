@@ -1,7 +1,4 @@
-// Test character set recoding and char/wchar_t conversions:
-//   https://github.com/OSGeo/gdal/blob/master/port/cpl_recode.cpp
-//
-// Copyright 2024 Google Inc. All Rights Reserved.
+// Copyright 2024 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,21 +11,25 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-#include <features.h>
+//
+// Test character set recoding and char/wchar_t conversions.
+// Note: google3 builds GDAL without iconv, so CPLRecode* falls back to the
+// stub implementation in cpl_recode_stub.cpp.
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/port/cpl_recode.cpp
+//   https://github.com/OSGeo/gdal/blob/master/port/cpl_recode_stub.cpp
 
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <format>  // NOLINT
+#include <memory>
 #include <string>
 
 #include "testing/base/public/gunit.h"
-#include "third_party/absl/cleanup/cleanup.h"
-#include "third_party/absl/strings/str_cat.h"
-#include "third_party/absl/strings/str_replace.h"
-#include "third_party/absl/strings/substitute.h"
+#include "third_party/gdal/autotest2/cpp/util/cpl_memory.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
-#include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_error.h"
 #include "third_party/gdal/port/cpl_string.h"
 
@@ -67,12 +68,12 @@ TEST_P(CplRecodeTest, RecodingToUtf8) {
   CPLErrorReset();
   CPLClearRecodeWarningFlags();
 
-  char* output = CPLRecode(tc.input, tc.input_encoding, CPL_ENC_UTF8);
-  absl::Cleanup cleanup = [output] { CPLFree(output); };
+  std::unique_ptr<char, CplFreeDeleter> output(
+      CPLRecode(tc.input, tc.input_encoding, CPL_ENC_UTF8));
 
   if (tc.expect_warning) {
-    std::string expected_warning = absl::Substitute(
-        "Recode from $0 to UTF-8 not supported, treated as ISO-8859-1 to "
+    const std::string expected_warning = std::format(
+        "Recode from {} to UTF-8 not supported, treated as ISO-8859-1 to "
         "UTF-8.",
         tc.input_encoding);
     EXPECT_STREQ(expected_warning.c_str(), CPLGetLastErrorMsg());
@@ -84,17 +85,17 @@ TEST_P(CplRecodeTest, RecodingToUtf8) {
     EXPECT_EQ(CE_None, CPLGetLastErrorType());
   }
 
-  EXPECT_STREQ(tc.expected, output);
+  EXPECT_STREQ(tc.expected, output.get());
 }
 
 // This means "Improving GDAL internationalization." in Russian.
-constexpr char utf_8_encoded[] = "Улучшаеминтернационализацию GDAL.";
+constexpr char kUtf8Encoded[] = "Улучшаеминтернационализацию GDAL.";
 
 // To generate the reference value, use
 // printf "$(printf "Улучшаеминтернационализацию GDAL." | \
 //   iconv -f UTF-8 -t ENCODING)\0" | \
 //   xxd --include
-constexpr char utf_16_encoded[] = {
+constexpr char kUtf16Encoded[] = {
     0xff, 0xfe, 0x23, 0x04, 0x3b, 0x04, 0x43, 0x04, 0x47, 0x04, 0x48, 0x04,
     0x30, 0x04, 0x35, 0x04, 0x3c, 0x04, 0x38, 0x04, 0x3d, 0x04, 0x42, 0x04,
     0x35, 0x04, 0x40, 0x04, 0x3d, 0x04, 0x30, 0x04, 0x46, 0x04, 0x38, 0x04,
@@ -110,7 +111,7 @@ constexpr char utf_16_encoded[] = {
 //   iconv -f UTF-8 -t ENCODING)\0" | \
 //   iconv -f ISO8859-1 -t UTF-8 | \
 //   xxd --include
-constexpr char utf_16_fallback[] = {
+constexpr char kUtf16Fallback[] = {
     0xc3, 0xbf, 0xc3, 0xbe, 0x23, 0x04, 0x3b, 0x04, 0x43, 0x04, 0x47, 0x04,
     0x48, 0x04, 0x30, 0x04, 0x35, 0x04, 0x3c, 0x04, 0x38, 0x04, 0x3d, 0x04,
     0x42, 0x04, 0x35, 0x04, 0x40, 0x04, 0x3d, 0x04, 0x30, 0x04, 0x46, 0x04,
@@ -118,7 +119,7 @@ constexpr char utf_16_fallback[] = {
     0x37, 0x04, 0x30, 0x04, 0x46, 0x04, 0x38, 0x04, 0x4e, 0x04, 0x20, 0x00,
     0x47, 0x00, 0x44, 0x00, 0x41, 0x00, 0x4c, 0x00, 0x2e, 0x00, 0x00};
 
-constexpr char utf_32_encoded[] = {
+constexpr char kUtf32Encoded[] = {
     0xff, 0xfe, 0x00, 0x00, 0x23, 0x04, 0x00, 0x00, 0x3b, 0x04, 0x00, 0x00,
     0x43, 0x04, 0x00, 0x00, 0x47, 0x04, 0x00, 0x00, 0x48, 0x04, 0x00, 0x00,
     0x30, 0x04, 0x00, 0x00, 0x35, 0x04, 0x00, 0x00, 0x3c, 0x04, 0x00, 0x00,
@@ -132,7 +133,7 @@ constexpr char utf_32_encoded[] = {
     0x44, 0x00, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00, 0x4c, 0x00, 0x00, 0x00,
     0x2e, 0x00, 0x00, 0x00, 0x00};
 
-constexpr char utf_32_fallback[] = {
+constexpr char kUtf32Fallback[] = {
     0xc3, 0xbf, 0xc3, 0xbe, 0x00, 0x00, 0x23, 0x04, 0x00, 0x00, 0x3b, 0x04,
     0x00, 0x00, 0x43, 0x04, 0x00, 0x00, 0x47, 0x04, 0x00, 0x00, 0x48, 0x04,
     0x00, 0x00, 0x30, 0x04, 0x00, 0x00, 0x35, 0x04, 0x00, 0x00, 0x3c, 0x04,
@@ -146,13 +147,13 @@ constexpr char utf_32_fallback[] = {
     0x00, 0x00, 0x44, 0x00, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00, 0x4c, 0x00,
     0x00, 0x00, 0x2e, 0x00, 0x00, 0x00, 0x00};
 
-constexpr char koi8_r_encoded[] = {
+constexpr char kKoi8rEncoded[] = {
     0xf5, 0xcc, 0xd5, 0xde, 0xdb, 0xc1, 0xc5, 0xcd, 0xc9, 0xce, 0xd4, 0xc5,
     0xd2, 0xce, 0xc1, 0xc3, 0xc9, 0xcf, 0xce, 0xc1, 0xcc, 0xc9, 0xda, 0xc1,
     0xc3, 0xc9, 0xc0, 0x20, 0x47, 0x44, 0x41, 0x4c, 0x2e, 0x00,
 };
 
-constexpr char koi8_r_fallback[] = {
+constexpr char kKoi8rFallback[] = {
     0xc3, 0xb5, 0xc3, 0x8c, 0xc3, 0x95, 0xc3, 0x9e, 0xc3, 0x9b, 0xc3,
     0x81, 0xc3, 0x85, 0xc3, 0x8d, 0xc3, 0x89, 0xc3, 0x8e, 0xc3, 0x94,
     0xc3, 0x85, 0xc3, 0x92, 0xc3, 0x8e, 0xc3, 0x81, 0xc3, 0x83, 0xc3,
@@ -160,12 +161,17 @@ constexpr char koi8_r_fallback[] = {
     0xc3, 0x9a, 0xc3, 0x81, 0xc3, 0x83, 0xc3, 0x89, 0xc3, 0x80, 0x20,
     0x47, 0x44, 0x41, 0x4c, 0x2e, 0x00};
 
-constexpr char cp1251_encoded[] = {
+constexpr char kCp1251Encoded[] = {
     0xd3, 0xeb, 0xf3, 0xf7, 0xf8, 0xe0, 0xe5, 0xec, 0xe8, 0xed, 0xf2, 0xe5,
     0xf0, 0xed, 0xe0, 0xf6, 0xe8, 0xee, 0xed, 0xe0, 0xeb, 0xe8, 0xe7, 0xe0,
     0xf6, 0xe8, 0xfe, 0x20, 0x47, 0x44, 0x41, 0x4c, 0x2e, 0x00};
 
-constexpr char ucs_2_encoded[] = {
+// Note: CPLRecode takes a NUL-terminated const char*, so kUcs2Encoded and
+// kUcs2BeEncoded are truncated at the first 0x00 byte (the space character)
+// and kUcs4Encoded starts with 0x00 (empty C string, pinning the unsupported
+// encoding warning path). Because all leading non-zero bytes are <= 0x7F, the
+// ISO-8859-1 fallback returns identical bytes up to the first 0x00.
+constexpr char kUcs2Encoded[] = {
     0x23, 0x04, 0x3b, 0x04, 0x43, 0x04, 0x47, 0x04, 0x48, 0x04, 0x30, 0x04,
     0x35, 0x04, 0x3c, 0x04, 0x38, 0x04, 0x3d, 0x04, 0x42, 0x04, 0x35, 0x04,
     0x40, 0x04, 0x3d, 0x04, 0x30, 0x04, 0x46, 0x04, 0x38, 0x04, 0x3e, 0x04,
@@ -173,15 +179,7 @@ constexpr char ucs_2_encoded[] = {
     0x46, 0x04, 0x38, 0x04, 0x4e, 0x04, 0x20, 0x00, 0x47, 0x00, 0x44, 0x00,
     0x41, 0x00, 0x4c, 0x00, 0x2e, 0x00, 0x00};
 
-constexpr char ucs_2_fallback[] = {
-    0x23, 0x04, 0x3b, 0x04, 0x43, 0x04, 0x47, 0x04, 0x48, 0x04, 0x30, 0x04,
-    0x35, 0x04, 0x3c, 0x04, 0x38, 0x04, 0x3d, 0x04, 0x42, 0x04, 0x35, 0x04,
-    0x40, 0x04, 0x3d, 0x04, 0x30, 0x04, 0x46, 0x04, 0x38, 0x04, 0x3e, 0x04,
-    0x3d, 0x04, 0x30, 0x04, 0x3b, 0x04, 0x38, 0x04, 0x37, 0x04, 0x30, 0x04,
-    0x46, 0x04, 0x38, 0x04, 0x4e, 0x04, 0x20, 0x00, 0x47, 0x00, 0x44, 0x00,
-    0x41, 0x00, 0x4c, 0x00, 0x2e, 0x00, 0x00};
-
-constexpr char ucs_2be_encoded[] = {
+constexpr char kUcs2BeEncoded[] = {
     0x04, 0x23, 0x04, 0x3b, 0x04, 0x43, 0x04, 0x47, 0x04, 0x48, 0x04, 0x30,
     0x04, 0x35, 0x04, 0x3c, 0x04, 0x38, 0x04, 0x3d, 0x04, 0x42, 0x04, 0x35,
     0x04, 0x40, 0x04, 0x3d, 0x04, 0x30, 0x04, 0x46, 0x04, 0x38, 0x04, 0x3e,
@@ -189,57 +187,7 @@ constexpr char ucs_2be_encoded[] = {
     0x04, 0x46, 0x04, 0x38, 0x04, 0x4e, 0x00, 0x20, 0x00, 0x47, 0x00, 0x44,
     0x00, 0x41, 0x00, 0x4c, 0x00, 0x2e, 0x00};
 
-constexpr char ucs_2be_fallback[] = {
-    0x04, 0x23, 0x04, 0x3b, 0x04, 0x43, 0x04, 0x47, 0x04, 0x48, 0x04, 0x30,
-    0x04, 0x35, 0x04, 0x3c, 0x04, 0x38, 0x04, 0x3d, 0x04, 0x42, 0x04, 0x35,
-    0x04, 0x40, 0x04, 0x3d, 0x04, 0x30, 0x04, 0x46, 0x04, 0x38, 0x04, 0x3e,
-    0x04, 0x3d, 0x04, 0x30, 0x04, 0x3b, 0x04, 0x38, 0x04, 0x37, 0x04, 0x30,
-    0x04, 0x46, 0x04, 0x38, 0x04, 0x4e, 0x00, 0x20, 0x00, 0x47, 0x00, 0x44,
-    0x00, 0x41, 0x00, 0x4c, 0x00, 0x2e, 0x00};
-
-constexpr char ucs_4_encoded[] = {
-    0x00, 0x00, 0x04, 0x23, 0x00, 0x00, 0x04, 0x3b, 0x00, 0x00, 0x04, 0x43,
-    0x00, 0x00, 0x04, 0x47, 0x00, 0x00, 0x04, 0x48, 0x00, 0x00, 0x04, 0x30,
-    0x00, 0x00, 0x04, 0x35, 0x00, 0x00, 0x04, 0x3c, 0x00, 0x00, 0x04, 0x38,
-    0x00, 0x00, 0x04, 0x3d, 0x00, 0x00, 0x04, 0x42, 0x00, 0x00, 0x04, 0x35,
-    0x00, 0x00, 0x04, 0x40, 0x00, 0x00, 0x04, 0x3d, 0x00, 0x00, 0x04, 0x30,
-    0x00, 0x00, 0x04, 0x46, 0x00, 0x00, 0x04, 0x38, 0x00, 0x00, 0x04, 0x3e,
-    0x00, 0x00, 0x04, 0x3d, 0x00, 0x00, 0x04, 0x30, 0x00, 0x00, 0x04, 0x3b,
-    0x00, 0x00, 0x04, 0x38, 0x00, 0x00, 0x04, 0x37, 0x00, 0x00, 0x04, 0x30,
-    0x00, 0x00, 0x04, 0x46, 0x00, 0x00, 0x04, 0x38, 0x00, 0x00, 0x04, 0x4e,
-    0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x47, 0x00, 0x00, 0x00, 0x44,
-    0x00, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00, 0x4c, 0x00, 0x00, 0x00, 0x2e,
-    0x00};
-
-constexpr char ucs_4_fallback[] = {
-    0x00, 0x00, 0x04, 0x23, 0x00, 0x00, 0x04, 0x3b, 0x00, 0x00, 0x04, 0x43,
-    0x00, 0x00, 0x04, 0x47, 0x00, 0x00, 0x04, 0x48, 0x00, 0x00, 0x04, 0x30,
-    0x00, 0x00, 0x04, 0x35, 0x00, 0x00, 0x04, 0x3c, 0x00, 0x00, 0x04, 0x38,
-    0x00, 0x00, 0x04, 0x3d, 0x00, 0x00, 0x04, 0x42, 0x00, 0x00, 0x04, 0x35,
-    0x00, 0x00, 0x04, 0x40, 0x00, 0x00, 0x04, 0x3d, 0x00, 0x00, 0x04, 0x30,
-    0x00, 0x00, 0x04, 0x46, 0x00, 0x00, 0x04, 0x38, 0x00, 0x00, 0x04, 0x3e,
-    0x00, 0x00, 0x04, 0x3d, 0x00, 0x00, 0x04, 0x30, 0x00, 0x00, 0x04, 0x3b,
-    0x00, 0x00, 0x04, 0x38, 0x00, 0x00, 0x04, 0x37, 0x00, 0x00, 0x04, 0x30,
-    0x00, 0x00, 0x04, 0x46, 0x00, 0x00, 0x04, 0x38, 0x00, 0x00, 0x04, 0x4e,
-    0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x47, 0x00, 0x00, 0x00, 0x44,
-    0x00, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00, 0x4c, 0x00, 0x00, 0x00, 0x2e,
-    0x00};
-
-constexpr char ucs_4be_encoded[] = {
-    0x00, 0x00, 0x04, 0x23, 0x00, 0x00, 0x04, 0x3b, 0x00, 0x00, 0x04, 0x43,
-    0x00, 0x00, 0x04, 0x47, 0x00, 0x00, 0x04, 0x48, 0x00, 0x00, 0x04, 0x30,
-    0x00, 0x00, 0x04, 0x35, 0x00, 0x00, 0x04, 0x3c, 0x00, 0x00, 0x04, 0x38,
-    0x00, 0x00, 0x04, 0x3d, 0x00, 0x00, 0x04, 0x42, 0x00, 0x00, 0x04, 0x35,
-    0x00, 0x00, 0x04, 0x40, 0x00, 0x00, 0x04, 0x3d, 0x00, 0x00, 0x04, 0x30,
-    0x00, 0x00, 0x04, 0x46, 0x00, 0x00, 0x04, 0x38, 0x00, 0x00, 0x04, 0x3e,
-    0x00, 0x00, 0x04, 0x3d, 0x00, 0x00, 0x04, 0x30, 0x00, 0x00, 0x04, 0x3b,
-    0x00, 0x00, 0x04, 0x38, 0x00, 0x00, 0x04, 0x37, 0x00, 0x00, 0x04, 0x30,
-    0x00, 0x00, 0x04, 0x46, 0x00, 0x00, 0x04, 0x38, 0x00, 0x00, 0x04, 0x4e,
-    0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x47, 0x00, 0x00, 0x00, 0x44,
-    0x00, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00, 0x4c, 0x00, 0x00, 0x00, 0x2e,
-    0x00};
-
-constexpr char ucs_4be_fallback[] = {
+constexpr char kUcs4Encoded[] = {
     0x00, 0x00, 0x04, 0x23, 0x00, 0x00, 0x04, 0x3b, 0x00, 0x00, 0x04, 0x43,
     0x00, 0x00, 0x04, 0x47, 0x00, 0x00, 0x04, 0x48, 0x00, 0x00, 0x04, 0x30,
     0x00, 0x00, 0x04, 0x35, 0x00, 0x00, 0x04, 0x3c, 0x00, 0x00, 0x04, 0x38,
@@ -256,124 +204,92 @@ constexpr char ucs_4be_fallback[] = {
 INSTANTIATE_TEST_SUITE_P(
     CplRecodeTestSuite, CplRecodeTest,
     testing::ValuesIn<CplRecodeTestCase>({
-        {
-            static_cast<const char*>(utf_8_encoded),
-            CPL_ENC_UTF8,
-            static_cast<const char*>(utf_8_encoded),
-            /*expect_warning=*/false,
-        },
-        {
-            static_cast<const char*>(utf_16_encoded),
-            CPL_ENC_UTF16,
-            static_cast<const char*>(utf_16_fallback),
-            /*expect_warning=*/true,
-        },
-        {
-            static_cast<const char*>(utf_32_encoded),
-            "UTF-32",
-            static_cast<const char*>(utf_32_fallback),
-            /*expect_warning=*/true,
-        },
-        {
-            static_cast<const char*>(koi8_r_encoded),
-            "KOI8-R",
-            static_cast<const char*>(koi8_r_fallback),
-            /*expect_warning=*/true,
-        },
-        {
-            static_cast<const char*>(cp1251_encoded),
-            "CP1251",
-            static_cast<const char*>(utf_8_encoded),
-            /*expect_warning=*/false,
-        },
-        {
-            static_cast<const char*>(ucs_2_encoded),
-            CPL_ENC_UCS2,
-            static_cast<const char*>(ucs_2_fallback),
-            /*expect_warning=*/true,
-        },
-        {
-            static_cast<const char*>(ucs_2_encoded),
-            "UCS-2LE",
-            static_cast<const char*>(ucs_2_fallback),
-            /*expect_warning=*/true,
-        },
-        {
-            static_cast<const char*>(ucs_2be_encoded),
-            "UCS-2BE",
-            static_cast<const char*>(ucs_2be_fallback),
-            /*expect_warning=*/true,
-        },
-        {
-            static_cast<const char*>(ucs_4_encoded),
-            CPL_ENC_UCS4,
-            static_cast<const char*>(ucs_4_fallback),
-            /*expect_warning=*/true,
-        },
-        {
-            static_cast<const char*>(ucs_4_encoded),
-            "UCS-4LE",
-            static_cast<const char*>(ucs_4_fallback),
-            /*expect_warning=*/true,
-        },
-        {
-            static_cast<const char*>(ucs_4be_encoded),
-            "UCS-4BE",
-            static_cast<const char*>(ucs_4be_fallback),
-            /*expect_warning=*/true,
-        },
+        {.input = kUtf8Encoded,
+         .input_encoding = CPL_ENC_UTF8,
+         .expected = kUtf8Encoded,
+         .expect_warning = false},
+        {.input = kUtf16Encoded,
+         .input_encoding = CPL_ENC_UTF16,
+         .expected = kUtf16Fallback,
+         .expect_warning = true},
+        {.input = kUtf32Encoded,
+         .input_encoding = "UTF-32",
+         .expected = kUtf32Fallback,
+         .expect_warning = true},
+        {.input = kKoi8rEncoded,
+         .input_encoding = "KOI8-R",
+         .expected = kKoi8rFallback,
+         .expect_warning = true},
+        {.input = kCp1251Encoded,
+         .input_encoding = "CP1251",
+         .expected = kUtf8Encoded,
+         .expect_warning = false},
+        {.input = kUcs2Encoded,
+         .input_encoding = CPL_ENC_UCS2,
+         .expected = kUcs2Encoded,
+         .expect_warning = true},
+        {.input = kUcs2Encoded,
+         .input_encoding = "UCS-2LE",
+         .expected = kUcs2Encoded,
+         .expect_warning = true},
+        {.input = kUcs2BeEncoded,
+         .input_encoding = "UCS-2BE",
+         .expected = kUcs2BeEncoded,
+         .expect_warning = true},
+        {.input = kUcs4Encoded,
+         .input_encoding = CPL_ENC_UCS4,
+         .expected = kUcs4Encoded,
+         .expect_warning = true},
+        {.input = kUcs4Encoded,
+         .input_encoding = "UCS-4LE",
+         .expected = kUcs4Encoded,
+         .expect_warning = true},
+        {.input = kUcs4Encoded,
+         .input_encoding = "UCS-4BE",
+         .expected = kUcs4Encoded,
+         .expect_warning = true},
     }),
     [](const testing::TestParamInfo<CplRecodeTest::ParamType>& info) {
-      std::string cleaned =
-          absl::StrReplaceAll(info.param.input_encoding, {{"-", ""}});
-      return absl::StrCat(cleaned, "ToUtf8");
+      std::string cleaned = info.param.input_encoding;
+      std::erase(cleaned, '-');
+      return std::format("{}ToUtf8", cleaned);
     });
 
 TEST(CplRecodeTestWithRealloc, CanReallocWhenConverting) {
   // Test that conversion from a more compact (in terms of number of bytes)
   // encoding to a less compact encoding, requiring allocation, works.
-  size_t num_chars = 32800;
+  constexpr size_t kNumChars = 32800;
+  const std::string src(kNumChars, '\xa1');
+  const std::string expected_dst = [&] {
+    std::string out;
+    out.reserve(kNumChars * 2);
+    for (size_t i = 0; i < kNumChars; ++i) {
+      out += "\xc2\xa1";
+    }
+    return out;
+  }();
 
-  static char* iso_8859_1_encoded =
-      static_cast<char*>(CPLMalloc(num_chars + 1));
-  absl::Cleanup cleanup_iso_8859_1_encoded = [] {
-    CPLFree(iso_8859_1_encoded);
-  };
-  for (size_t i = 0; i < num_chars; ++i) {
-    iso_8859_1_encoded[i] = 0xa1;
-  }
-  iso_8859_1_encoded[num_chars] = 0;
-
-  static char* utf_8_encoded = static_cast<char*>(CPLMalloc(2 * num_chars + 1));
-  absl::Cleanup cleanup_utf_8_encoded = [] { CPLFree(utf_8_encoded); };
-  for (size_t i = 0; i < num_chars; ++i) {
-    utf_8_encoded[2 * i] = 0xc2;
-    utf_8_encoded[2 * i + 1] = 0xa1;
-  }
-  utf_8_encoded[2 * num_chars] = 0;
-
-  static char* recoded =
-      CPLRecode(iso_8859_1_encoded, "ISO-8859-1", CPL_ENC_UTF8);
-  absl::Cleanup cleanup_recoded = [] { CPLFree(recoded); };
-  EXPECT_STREQ(recoded, utf_8_encoded);
+  std::unique_ptr<char, CplFreeDeleter> recoded(
+      CPLRecode(src.c_str(), "ISO-8859-1", CPL_ENC_UTF8));
+  EXPECT_STREQ(recoded.get(), expected_dst.c_str());
 }
 
 TEST(RecodeTest, NullInputsAndAsciiToUtf8) {
   WithQuietHandler error_handler;
-  char* empty = CPLRecode(nullptr, CPL_ENC_UTF8, CPL_ENC_UTF8);
-  ASSERT_NE(nullptr, empty);
-  EXPECT_STREQ("", empty);
-  CPLFree(empty);
+  std::unique_ptr<char, CplFreeDeleter> empty(
+      CPLRecode(nullptr, CPL_ENC_UTF8, CPL_ENC_UTF8));
+  ASSERT_NE(nullptr, empty.get());
+  EXPECT_STREQ("", empty.get());
 
-  char* dst = CPLRecode("hello", CPL_ENC_ASCII, CPL_ENC_UTF8);
-  ASSERT_NE(nullptr, dst);
-  EXPECT_STREQ("hello", dst);
-  CPLFree(dst);
+  std::unique_ptr<char, CplFreeDeleter> dst(
+      CPLRecode("hello", CPL_ENC_ASCII, CPL_ENC_UTF8));
+  ASSERT_NE(nullptr, dst.get());
+  EXPECT_STREQ("hello", dst.get());
 
-  char* dst2 = CPLRecode("hello", CPL_ENC_ASCII, CPL_ENC_ISO8859_1);
-  ASSERT_NE(nullptr, dst2);
-  EXPECT_STREQ("hello", dst2);
-  CPLFree(dst2);
+  std::unique_ptr<char, CplFreeDeleter> dst2(
+      CPLRecode("hello", CPL_ENC_ASCII, CPL_ENC_ISO8859_1));
+  ASSERT_NE(nullptr, dst2.get());
+  EXPECT_STREQ("hello", dst2.get());
 }
 
 TEST(RecodeTest, RecodeWChar) {
@@ -382,37 +298,38 @@ TEST(RecodeTest, RecodeWChar) {
   // implementation in cpl_recode_stub.cpp.
 
   // The stub accepts any Unicode source encoding for wchar_t input.
-  char* from_utf16 = CPLRecodeFromWChar(L"hello", "UTF-16", CPL_ENC_UTF8);
-  ASSERT_NE(nullptr, from_utf16);
-  EXPECT_STREQ("hello", from_utf16);
-  CPLFree(from_utf16);
+  std::unique_ptr<char, CplFreeDeleter> from_utf16(
+      CPLRecodeFromWChar(L"hello", "UTF-16", CPL_ENC_UTF8));
+  ASSERT_NE(nullptr, from_utf16.get());
+  EXPECT_STREQ("hello", from_utf16.get());
 
-  char* utf8 = CPLRecodeFromWChar(L"hello", CPL_ENC_UCS2, CPL_ENC_UTF8);
-  ASSERT_NE(nullptr, utf8);
-  EXPECT_STREQ("hello", utf8);
-  CPLFree(utf8);
+  std::unique_ptr<char, CplFreeDeleter> utf8(
+      CPLRecodeFromWChar(L"hello", CPL_ENC_UCS2, CPL_ENC_UTF8));
+  ASSERT_NE(nullptr, utf8.get());
+  EXPECT_STREQ("hello", utf8.get());
 
   // ... and any Unicode destination encoding for wchar_t output.
-  wchar_t* to_utf16 = CPLRecodeToWChar("hello", CPL_ENC_UTF8, "UTF-16");
-  ASSERT_NE(nullptr, to_utf16);
-  EXPECT_STREQ(L"hello", to_utf16);
-  CPLFree(to_utf16);
+  std::unique_ptr<wchar_t, CplFreeDeleter> to_utf16(
+      CPLRecodeToWChar("hello", CPL_ENC_UTF8, "UTF-16"));
+  ASSERT_NE(nullptr, to_utf16.get());
+  EXPECT_STREQ(L"hello", to_utf16.get());
 
-  wchar_t* wstr = CPLRecodeToWChar("hello", CPL_ENC_UTF8, CPL_ENC_UCS2);
-  ASSERT_NE(nullptr, wstr);
-  EXPECT_STREQ(L"hello", wstr);
-  CPLFree(wstr);
+  std::unique_ptr<wchar_t, CplFreeDeleter> wstr(
+      CPLRecodeToWChar("hello", CPL_ENC_UTF8, CPL_ENC_UCS2));
+  ASSERT_NE(nullptr, wstr.get());
+  EXPECT_STREQ(L"hello", wstr.get());
 
   // Unknown 8-bit encodings are passed through unchanged by CPLRecodeStub
   // (with a one-time warning), so the round trip is the identity.
-  char* from_unk = CPLRecodeFromWChar(L"hello", CPL_ENC_UCS2, "UNKNOWN_ENC");
-  ASSERT_NE(nullptr, from_unk);
-  EXPECT_STREQ("hello", from_unk);
-  CPLFree(from_unk);
-  wchar_t* to_unk = CPLRecodeToWChar("hello", "UNKNOWN_ENC", CPL_ENC_UCS2);
-  ASSERT_NE(nullptr, to_unk);
-  EXPECT_STREQ(L"hello", to_unk);
-  CPLFree(to_unk);
+  std::unique_ptr<char, CplFreeDeleter> from_unk(
+      CPLRecodeFromWChar(L"hello", CPL_ENC_UCS2, "UNKNOWN_ENC"));
+  ASSERT_NE(nullptr, from_unk.get());
+  EXPECT_STREQ("hello", from_unk.get());
+
+  std::unique_ptr<wchar_t, CplFreeDeleter> to_unk(
+      CPLRecodeToWChar("hello", "UNKNOWN_ENC", CPL_ENC_UCS2));
+  ASSERT_NE(nullptr, to_unk.get());
+  EXPECT_STREQ(L"hello", to_unk.get());
 
   // A non-Unicode encoding on the wchar_t side is rejected by the stub.
   EXPECT_EQ(nullptr,
@@ -421,18 +338,17 @@ TEST(RecodeTest, RecodeWChar) {
 }
 
 TEST(RecodeTest, ForceToASCII) {
-  char* res1 = CPLForceToASCII("hello\x80world", -1, '?');
-  ASSERT_NE(nullptr, res1);
-  EXPECT_STREQ("hello?world", res1);
-  CPLFree(res1);
+  std::unique_ptr<char, CplFreeDeleter> res1(
+      CPLForceToASCII("hello\x80world", -1, '?'));
+  ASSERT_NE(nullptr, res1.get());
+  EXPECT_STREQ("hello?world", res1.get());
 
-  char* res2 = CPLForceToASCII(
-      "ab\xFF"
-      "cd",
-      4, '_');
-  ASSERT_NE(nullptr, res2);
-  EXPECT_STREQ("ab_c", res2);
-  CPLFree(res2);
+  std::unique_ptr<char, CplFreeDeleter> res2(
+      CPLForceToASCII("ab\xFF"
+                      "cd",
+                      4, '_'));
+  ASSERT_NE(nullptr, res2.get());
+  EXPECT_STREQ("ab_c", res2.get());
 }
 
 TEST(RecodeTest, UTF8ForceToASCII) {
@@ -440,25 +356,34 @@ TEST(RecodeTest, UTF8ForceToASCII) {
   // multi-char Latin replacement (\xC3\x86 -> AE, \xC3\x9F -> SS, \xC5\x92 ->
   // OE), unmapped multi-byte UTF-8 (\xE2\x82\xAC Euro -> ?), and truncated
   // trailing UTF-8 byte (\xC3).
-  char* res = CPLUTF8ForceToASCII(
-      "abc\xC3\x80\xC3\x86\xC3\x9F\xC5\x92\xE2\x82\xAC\xC3", '?');
-  ASSERT_NE(nullptr, res);
-  EXPECT_STREQ("abcAAESSOE?", res);
-  CPLFree(res);
+  std::unique_ptr<char, CplFreeDeleter> res(CPLUTF8ForceToASCII(
+      "abc\xC3\x80\xC3\x86\xC3\x9F\xC5\x92\xE2\x82\xAC\xC3", '?'));
+  ASSERT_NE(nullptr, res.get());
+  EXPECT_STREQ("abcAAESSOE?", res.get());
 }
 
 TEST(RecodeTest, EncodingCharSizeAndStrlenUTF8AndCanRecode) {
   WithQuietHandler error_handler;
-  EXPECT_EQ(1, CPLEncodingCharSize(CPL_ENC_UTF8));
-  EXPECT_EQ(2, CPLEncodingCharSize(CPL_ENC_UTF16));
-  EXPECT_EQ(2, CPLEncodingCharSize("UTF-16LE"));
-  EXPECT_EQ(2, CPLEncodingCharSize(CPL_ENC_UCS2));
-  EXPECT_EQ(2, CPLEncodingCharSize("UCS-2LE"));
-  EXPECT_EQ(4, CPLEncodingCharSize(CPL_ENC_UCS4));
-  EXPECT_EQ(-1, CPLEncodingCharSize("UCS-4LE"));
-  EXPECT_EQ(1, CPLEncodingCharSize(CPL_ENC_ASCII));
-  EXPECT_EQ(1, CPLEncodingCharSize(CPL_ENC_ISO8859_1));
-  EXPECT_EQ(-1, CPLEncodingCharSize("UNKNOWN_ENCODING"));
+  struct CharSizeCase {
+    const char* encoding;
+    int expected;
+  };
+  constexpr CharSizeCase kCases[] = {
+      {.encoding = CPL_ENC_UTF8, .expected = 1},
+      {.encoding = CPL_ENC_UTF16, .expected = 2},
+      {.encoding = "UTF-16LE", .expected = 2},
+      {.encoding = CPL_ENC_UCS2, .expected = 2},
+      {.encoding = "UCS-2LE", .expected = 2},
+      {.encoding = CPL_ENC_UCS4, .expected = 4},
+      {.encoding = "UCS-4LE", .expected = -1},
+      {.encoding = CPL_ENC_ASCII, .expected = 1},
+      {.encoding = CPL_ENC_ISO8859_1, .expected = 1},
+      {.encoding = "UNKNOWN_ENCODING", .expected = -1},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.encoding);
+    EXPECT_EQ(tc.expected, CPLEncodingCharSize(tc.encoding));
+  }
 
   EXPECT_EQ(0, CPLStrlenUTF8(""));
   EXPECT_EQ(3, CPLStrlenUTF8("a\xC3\xA9"

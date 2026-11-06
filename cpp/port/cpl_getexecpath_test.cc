@@ -14,9 +14,10 @@
 
 #include <limits.h>
 
+#include <string_view>
+
 #include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
-#include "third_party/absl/strings/match.h"
 #include "third_party/gdal/port/cpl_conv.h"
 
 namespace autotest2 {
@@ -28,12 +29,12 @@ TEST(CPLGetExecPathTest, BufferTooSmall) {
 }
 
 TEST(CPLGetExecPathTest, Basic) {
-  const char kTestName[] = "cpl_getexecpath_test";
+  constexpr char kTestName[] = "cpl_getexecpath_test";
   char buf[PATH_MAX + 1] = {};
   EXPECT_TRUE(CPLGetExecPath(buf, PATH_MAX));
   // On a CAS filesystem, the result will look like:
   // /build/cas/668/66816bbffceb8b1de618d84f436ff590
-  if (!absl::StartsWith(buf, "/build/cas")) {
+  if (!std::string_view(buf).starts_with("/build/cas")) {
     EXPECT_THAT(buf, testing::EndsWith(kTestName));
   }
 }

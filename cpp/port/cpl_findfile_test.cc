@@ -19,9 +19,11 @@
 #include <string>
 
 #include "testing/base/public/gunit.h"
+#include "third_party/absl/cleanup/cleanup.h"
 #include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 
+namespace autotest2 {
 namespace {
 
 // Tests the default file finder with and without a location.
@@ -31,6 +33,7 @@ TEST(CplFindFileTest, CPLDefaultFileFind) {
   // nothing was registered using CPLPushFinderLocation, but it is
   // better to be sure.
   CPLFinderClean();
+  absl::Cleanup finder_cleanup = [] { CPLFinderClean(); };
 
   EXPECT_EQ(nullptr, CPLDefaultFindFile(nullptr, nullptr));
   EXPECT_EQ(nullptr, CPLDefaultFindFile("", ""));
@@ -43,6 +46,7 @@ TEST(CplFindFileTest, CPLDefaultFileFind) {
   const std::string filename(temp_dir + "/baz.txt");
   VSILFILE* file = VSIFOpenL(filename.c_str(), "w");
   ASSERT_NE(nullptr, file);
+  absl::Cleanup unlink_cleanup = [&filename] { VSIUnlink(filename.c_str()); };
   ASSERT_EQ(3, VSIFWriteL("012", 1, 3, file));
   ASSERT_EQ(0, VSIFCloseL(file));
 
@@ -58,9 +62,6 @@ TEST(CplFindFileTest, CPLDefaultFileFind) {
                CPLDefaultFindFile("", filename.c_str()));
 
   EXPECT_STREQ(nullptr, CPLDefaultFindFile("", "does_not_exist.txt"));
-
-  ASSERT_EQ(0, VSIUnlink(filename.c_str()));
-  CPLFinderClean();
 }
 
 const char* CustomFinder(const char* /*pszClass*/, const char* pszBasename) {
@@ -73,11 +74,13 @@ const char* CustomFinder(const char* /*pszClass*/, const char* pszBasename) {
 
 TEST(CplFindFileTest, FinderStackAndLocations) {
   CPLFinderClean();
+  absl::Cleanup finder_cleanup = [] { CPLFinderClean(); };
 
   const std::string temp_dir(::testing::TempDir());
   const std::string filename(temp_dir + "/findme.txt");
   VSILFILE* file = VSIFOpenL(filename.c_str(), "w");
   ASSERT_NE(nullptr, file);
+  absl::Cleanup unlink_cleanup = [&filename] { VSIUnlink(filename.c_str()); };
   ASSERT_EQ(3, VSIFWriteL("abc", 1, 3, file));
   ASSERT_EQ(0, VSIFCloseL(file));
 
@@ -102,9 +105,7 @@ TEST(CplFindFileTest, FinderStackAndLocations) {
   CPLPopFinderLocation();
   CPLPopFinderLocation();
   CPLPopFinderLocation();
-
-  ASSERT_EQ(0, VSIUnlink(filename.c_str()));
-  CPLFinderClean();
 }
 
 }  // namespace
+}  // namespace autotest2

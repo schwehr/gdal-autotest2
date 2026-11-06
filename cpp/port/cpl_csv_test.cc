@@ -1,9 +1,4 @@
-// Tests for GDAL's C String List (CSL) API.
-// Yes, there is also a cplstring.cc tested in cplstring_test.cc.
-//
-//   https://github.com/OSGeo/gdal/blob/master/port/cpl_csv.cpp
-//
-// Copyright 2016 Google Inc. All Rights Reserved.
+// Copyright 2016 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +11,9 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Tests for GDAL's CSV API:
+//   https://github.com/OSGeo/gdal/blob/master/port/cpl_csv.cpp
 
 // Both of these includes define functions in cpl_csv.cpp.
 #include "third_party/gdal/port/cpl_csv.h"
@@ -30,65 +28,60 @@
 #include "third_party/gdal/autotest2/cpp/util/cpl_cstringlist.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/autotest2/cpp/util/vsimem.h"
-#include "third_party/gdal/port/cpl_conv.h"
 #include "third_party/gdal/port/cpl_multiproc.h"
 #include "third_party/gdal/port/cpl_string.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 #include "third_party/gdal/port/gdal_csv.h"
 
-using testing::EndsWith;
-using testing::IsNull;
-using testing::NotNull;
-using testing::StartsWith;
-
 namespace autotest2 {
 namespace {
 
-// TODO(schwehr): Test CSVDeaccess.
-// TODO(schwehr): Test CSVDetectSeperator.
+using ::testing::EndsWith;
+using ::testing::IsNull;
+using ::testing::NotNull;
+using ::testing::StartsWith;
 
 TEST(CplCsvTest, CSVDetectSeperator) {
-  // Default to comma.
-  // nullptr not allowed as an arg.
-  EXPECT_EQ(',', CSVDetectSeperator(""));
-  EXPECT_EQ(',', CSVDetectSeperator("a"));
-  EXPECT_EQ(',', CSVDetectSeperator("a\na"));
-
-  EXPECT_EQ(',', CSVDetectSeperator("a,b;c\td e"));
-
-  EXPECT_EQ(';', CSVDetectSeperator(";"));
-  EXPECT_EQ(';', CSVDetectSeperator("a;b"));
-  EXPECT_EQ(';', CSVDetectSeperator(";b"));
-  EXPECT_EQ(';', CSVDetectSeperator("a\nb;c"));
-  EXPECT_EQ(',', CSVDetectSeperator("a;b,c\td e"));
+  struct SepCase {
+    const char* line;
+    char expected;
+  };
+  constexpr SepCase kCases[] = {
+      {.line = "", .expected = ','},
+      {.line = "a", .expected = ','},
+      {.line = "a\na", .expected = ','},
+      {.line = "a,b;c\td e", .expected = ','},
+      {.line = ";", .expected = ';'},
+      {.line = "a;b", .expected = ';'},
+      {.line = ";b", .expected = ';'},
+      {.line = "a\nb;c", .expected = ';'},
+      {.line = "a;b,c\td e", .expected = ','},
+  };
+  for (const auto& tc : kCases) {
+    SCOPED_TRACE(tc.line);
+    EXPECT_EQ(tc.expected, CSVDetectSeperator(tc.line));
+  }
 }
 
-// TODO(schwehr): Test CSVReadParseLineL.
-
 TEST(CplCsvTest, CSVReadParseLine2LEmpty) {
-  const char filename[] = "/vsimem/CSVReadParseLine2L.csv";
+  constexpr char kFilename[] = "/vsimem/CSVReadParseLine2L.csv";
+  VsiMemTempWrapper tmp_file(kFilename, "");
 
-  // Create an empty file.
-  {
-    VSILFILE* file = VSIFOpenL(filename, "wb");
-    VSIFCloseL(file);
-  }
-
-  VSILFILE* file = VSIFOpenL(filename, "rb");
+  VSILFILE* file = VSIFOpenL(kFilename, "rb");
+  ASSERT_NE(nullptr, file);
+  absl::Cleanup close_file = [file] { EXPECT_EQ(0, VSIFCloseL(file)); };
 
   StringListPtr fields(CSVReadParseLine2L(file, ','), CSLDestroy);
   EXPECT_THAT(fields, IsNull());
-
-  VSIFCloseL(file);
-  VSIUnlink(filename);
 }
 
 TEST(CplCsvTest, CSVReadParseLine2LOneLine) {
-  const char filename[] = "/vsimem/CSVReadParseLine2L.csv";
+  constexpr char kFilename[] = "/vsimem/CSVReadParseLine2L.csv";
+  VsiMemTempWrapper tmp_file(kFilename, "a,b,\n");
 
-  VsiMemTempWrapper tmp_file(filename, "a,b,\n");
-
-  VSILFILE* file = VSIFOpenL(filename, "rb");
+  VSILFILE* file = VSIFOpenL(kFilename, "rb");
+  ASSERT_NE(nullptr, file);
+  absl::Cleanup close_file = [file] { EXPECT_EQ(0, VSIFCloseL(file)); };
   {
     StringListPtr fields(CSVReadParseLine2L(file, ','), CSLDestroy);
     ASSERT_THAT(fields, NotNull());
@@ -102,95 +95,72 @@ TEST(CplCsvTest, CSVReadParseLine2LOneLine) {
   ASSERT_THAT(fields, NotNull());
   const auto values = CslToVector(fields.get());
   EXPECT_THAT(values, testing::ElementsAre("a,b,"));
-
-  VSIFCloseL(file);
 }
-
-// TODO(schwehr): Test CSVReadParseLine2L quote parsing.
-// TODO(schwehr): Test CSVScanLinesL.
-// TODO(schwehr): Test CSVScanLinesIndexed.
-// TODO(schwehr): Test CSVScanLinesIngested.
-// TODO(schwehr): Test CSVGetNextLine.
-// TODO(schwehr): Test CSVScanFile.
 
 // Do not test deprecated CSVGetFieldId (no VSI support).
 
 TEST(CplCsvTest, CSVGetFieldIdLBasic) {
-  const char filename[] = "/vsimem/CSVGetFieldIdLBasic.csv";
+  constexpr char kFilename[] = "/vsimem/CSVGetFieldIdLBasic.csv";
+  VsiMemTempWrapper tmp_file(kFilename, "a,b,c\n");
 
-  const char data[] = "a,b,c\n";
-  VsiMemTempWrapper tmp_file(filename, data);
-
-  VSILFILE* file = VSIFOpenL(filename, "rb");
+  VSILFILE* file = VSIFOpenL(kFilename, "rb");
+  ASSERT_NE(nullptr, file);
+  absl::Cleanup close_file = [file] { EXPECT_EQ(0, VSIFCloseL(file)); };
   EXPECT_EQ(0, CSVGetFieldIdL(file, "a"));
   EXPECT_EQ(1, CSVGetFieldIdL(file, "b"));
   EXPECT_EQ(2, CSVGetFieldIdL(file, "c"));
   EXPECT_EQ(-1, CSVGetFieldIdL(file, "DoesNotExist"));
   EXPECT_EQ(-1, CSVGetFieldIdL(file, "a "));
   EXPECT_EQ(-1, CSVGetFieldIdL(file, ""));
-  VSIFCloseL(file);
 }
 
-TEST(CplCsvTest, CSVGetFieldIdLEmptyOrSmale) {
-  const char filename[] = "/vsimem/CSVGetFieldIdLEmptyOrSpace.csv";
+TEST(CplCsvTest, CSVGetFieldIdLEmptyOrSpace) {
+  constexpr char kFilename[] = "/vsimem/CSVGetFieldIdLEmptyOrSpace.csv";
+  VsiMemTempWrapper tmp_file(kFilename, " ,,abc \n");
 
-  const char data[] = " ,,abc \n";
-  VsiMemTempWrapper tmp_file(filename, data);
-
-  VSILFILE* file = VSIFOpenL(filename, "rb");
+  VSILFILE* file = VSIFOpenL(kFilename, "rb");
+  ASSERT_NE(nullptr, file);
+  absl::Cleanup close_file = [file] { EXPECT_EQ(0, VSIFCloseL(file)); };
   EXPECT_EQ(0, CSVGetFieldIdL(file, " "));
   EXPECT_EQ(1, CSVGetFieldIdL(file, ""));
   EXPECT_EQ(2, CSVGetFieldIdL(file, "abc "));
   EXPECT_EQ(-1, CSVGetFieldIdL(file, "abc"));
   EXPECT_EQ(-1, CSVGetFieldIdL(file, "a"));
   EXPECT_EQ(-1, CSVGetFieldIdL(file, "c "));
-  VSIFCloseL(file);
 }
 
-// TODO(schwehr): Test CSVGetFieldIdL with invalid CSV.
-
 TEST(CplCsvTest, CSVGetFileFieldIdBasic) {
-  const char filename[] = "/vsimem/CSVGetFieldIdBasic.csv";
+  constexpr char kFilename[] = "/vsimem/CSVGetFieldIdBasic.csv";
+  VsiMemTempWrapper tmp_file(kFilename, "a,b,c\n");
 
-  const char data[] = "a,b,c\n";
-  VsiMemTempWrapper tmp_file(filename, data);
-
-  EXPECT_EQ(0, CSVGetFileFieldId(filename, "a"));
-  EXPECT_EQ(1, CSVGetFileFieldId(filename, "b"));
-  EXPECT_EQ(2, CSVGetFileFieldId(filename, "c"));
-  EXPECT_EQ(-1, CSVGetFileFieldId(filename, "DoesNotExist"));
-  EXPECT_EQ(-1, CSVGetFileFieldId(filename, "a "));
-  EXPECT_EQ(-1, CSVGetFileFieldId(filename, ""));
+  EXPECT_EQ(0, CSVGetFileFieldId(kFilename, "a"));
+  EXPECT_EQ(1, CSVGetFileFieldId(kFilename, "b"));
+  EXPECT_EQ(2, CSVGetFileFieldId(kFilename, "c"));
+  EXPECT_EQ(-1, CSVGetFileFieldId(kFilename, "DoesNotExist"));
+  EXPECT_EQ(-1, CSVGetFileFieldId(kFilename, "a "));
+  EXPECT_EQ(-1, CSVGetFileFieldId(kFilename, ""));
 }
 
 TEST(CplCsvTest, CSVGetFileFieldIdMore) {
-  const char filename[] = "/vsimem/CSVGetFieldIdMore.csv";
+  constexpr char kFilename[] = "/vsimem/CSVGetFieldIdMore.csv";
+  VsiMemTempWrapper tmp_file(kFilename, "1,\"2\",\"c\",with space,-,#,\n");
 
-  const char data[] = "1,\"2\",\"c\",with space,-,#,\n";
-  VsiMemTempWrapper tmp_file(filename, data);
-
-  EXPECT_EQ(0, CSVGetFileFieldId(filename, "1"));
-  EXPECT_EQ(1, CSVGetFileFieldId(filename, "2"));
-  EXPECT_EQ(2, CSVGetFileFieldId(filename, "c"));
-  EXPECT_EQ(3, CSVGetFileFieldId(filename, "with space"));
-  EXPECT_EQ(4, CSVGetFileFieldId(filename, "-"));
-  EXPECT_EQ(5, CSVGetFileFieldId(filename, "#"));
-  EXPECT_EQ(6, CSVGetFileFieldId(filename, ""));
+  EXPECT_EQ(0, CSVGetFileFieldId(kFilename, "1"));
+  EXPECT_EQ(1, CSVGetFileFieldId(kFilename, "2"));
+  EXPECT_EQ(2, CSVGetFileFieldId(kFilename, "c"));
+  EXPECT_EQ(3, CSVGetFileFieldId(kFilename, "with space"));
+  EXPECT_EQ(4, CSVGetFileFieldId(kFilename, "-"));
+  EXPECT_EQ(5, CSVGetFileFieldId(kFilename, "#"));
+  EXPECT_EQ(6, CSVGetFileFieldId(kFilename, ""));
 }
 
 TEST(CplCsvTest, CSVGetFileFieldIdEmptyAndSpace) {
-  const char filename[] = "/vsimem/CSVGetFieldIdEmptyAndSpace.csv";
+  constexpr char kFilename[] = "/vsimem/CSVGetFieldIdEmptyAndSpace.csv";
+  VsiMemTempWrapper tmp_file(kFilename, ", \n");
 
-  const char data[] = ", \n";
-  VsiMemTempWrapper tmp_file(filename, data);
-
-  EXPECT_EQ(0, CSVGetFileFieldId(filename, ""));
-  EXPECT_EQ(1, CSVGetFileFieldId(filename, " "));
+  EXPECT_EQ(0, CSVGetFileFieldId(kFilename, ""));
+  EXPECT_EQ(1, CSVGetFileFieldId(kFilename, " "));
 }
-
-// TODO(schwehr): Test CSVGetFileFieldId with invalid CSV.
-// TODO(schwehr): Test CSVScanFileByName.
-// TODO(schwehr): Test CSVGetField.
 
 TEST(CplCsvTest, GDALDefaultCSVFilename) {
   // Files that do not exist.
@@ -214,15 +184,15 @@ TEST(CplCsvTest, GDALDefaultCSVFilename) {
   EXPECT_STREQ("datum.csv", GDALDefaultCSVFilename("datum.csv"));
 
   // Use full path in the memory filesystem.
-  const char filename[] = "/vsimem/somefilename.txt";
+  constexpr char kFilename[] = "/vsimem/somefilename.txt";
 
   // Does not exist.
-  EXPECT_STREQ(filename, GDALDefaultCSVFilename(filename));
+  EXPECT_STREQ(kFilename, GDALDefaultCSVFilename(kFilename));
 
-  VsiMemTempWrapper tmp_file(filename, "foo");
+  VsiMemTempWrapper tmp_file(kFilename, "foo");
 
-  EXPECT_THAT(GDALDefaultCSVFilename(filename), StartsWith("/"));
-  EXPECT_THAT(GDALDefaultCSVFilename(filename), EndsWith(filename));
+  EXPECT_THAT(GDALDefaultCSVFilename(kFilename), StartsWith("/"));
+  EXPECT_THAT(GDALDefaultCSVFilename(kFilename), EndsWith(kFilename));
 }
 
 TEST(CplCsvTest, DetectSeparatorAndParseEdgeCases) {
@@ -241,7 +211,7 @@ TEST(CplCsvTest, DetectSeparatorAndParseEdgeCases) {
   // bKeepLeadingAndClosingQuotes=true, bMergeDelimiter=true, quotes in middle
   // of field, doubled quotes, multiline quotes, empty line, and unbalanced
   // quotes.
-  const char kParseFile[] = "/vsimem/csv_parse_edges.csv";
+  constexpr char kParseFile[] = "/vsimem/csv_parse_edges.csv";
   const std::string content =
       "\xEF\xBB\xBF"
       "a,,b\n"
@@ -254,45 +224,45 @@ TEST(CplCsvTest, DetectSeparatorAndParseEdgeCases) {
 
   VSILFILE* fp = VSIFOpenL(kParseFile, "rb");
   ASSERT_NE(nullptr, fp);
-  absl::Cleanup close_fp = [fp] { VSIFCloseL(fp); };
+  absl::Cleanup close_fp = [fp] { EXPECT_EQ(0, VSIFCloseL(fp)); };
 
   // Line 1: BOM + merge delimiters + nMaxLineSize > 0
-  char** l1 = CSVReadParseLine3L(fp, 1024, ",", true, false, true, true);
-  ASSERT_NE(nullptr, l1);
-  EXPECT_EQ(2, CSLCount(l1));
-  EXPECT_STREQ("a", l1[0]);
-  EXPECT_STREQ("b", l1[1]);
-  CSLDestroy(l1);
+  StringListPtr l1(CSVReadParseLine3L(fp, 1024, ",", true, false, true, true),
+                   CSLDestroy);
+  ASSERT_NE(nullptr, l1.get());
+  EXPECT_EQ(2, CSLCount(l1.get()));
+  EXPECT_STREQ("a", l1.get()[0]);
+  EXPECT_STREQ("b", l1.get()[1]);
 
   // Line 2: bHonourStrings = false
-  char** l2 = CSVReadParseLine3L(fp, 0, ",", false, false, false, false);
-  ASSERT_NE(nullptr, l2);
-  EXPECT_EQ(3, CSLCount(l2));
-  CSLDestroy(l2);
+  StringListPtr l2(CSVReadParseLine3L(fp, 0, ",", false, false, false, false),
+                   CSLDestroy);
+  ASSERT_NE(nullptr, l2.get());
+  EXPECT_EQ(3, CSLCount(l2.get()));
 
   // Line 3: bKeepLeadingAndClosingQuotes = true, quote in middle, doubled
   // quotes
-  char** l3 = CSVReadParseLine3L(fp, 0, ",", true, true, false, false);
-  ASSERT_NE(nullptr, l3);
-  EXPECT_EQ(4, CSLCount(l3));
-  EXPECT_STREQ("\"keep\"", l3[0]);
-  EXPECT_STREQ("50\"N", l3[2]);
-  EXPECT_STREQ("\"he\"llo\"", l3[3]);
-  CSLDestroy(l3);
+  StringListPtr l3(CSVReadParseLine3L(fp, 0, ",", true, true, false, false),
+                   CSLDestroy);
+  ASSERT_NE(nullptr, l3.get());
+  EXPECT_EQ(4, CSLCount(l3.get()));
+  EXPECT_STREQ("\"keep\"", l3.get()[0]);
+  EXPECT_STREQ("50\"N", l3.get()[2]);
+  EXPECT_STREQ("\"he\"llo\"", l3.get()[3]);
 
   // Line 4: multiline quoted string
-  char** l4 = CSVReadParseLine3L(fp, 0, ",", true, false, false, false);
-  ASSERT_NE(nullptr, l4);
-  EXPECT_EQ(2, CSLCount(l4));
-  EXPECT_STREQ("multi\nline", l4[0]);
-  EXPECT_STREQ("end", l4[1]);
-  CSLDestroy(l4);
+  StringListPtr l4(CSVReadParseLine3L(fp, 0, ",", true, false, false, false),
+                   CSLDestroy);
+  ASSERT_NE(nullptr, l4.get());
+  EXPECT_EQ(2, CSLCount(l4.get()));
+  EXPECT_STREQ("multi\nline", l4.get()[0]);
+  EXPECT_STREQ("end", l4.get()[1]);
 
   // Line 5: empty line
-  char** l5 = CSVReadParseLine3L(fp, 0, ",", true, false, false, false);
-  ASSERT_NE(nullptr, l5);
-  EXPECT_EQ(0, CSLCount(l5));
-  CSLDestroy(l5);
+  StringListPtr l5(CSVReadParseLine3L(fp, 0, ",", true, false, false, false),
+                   CSLDestroy);
+  ASSERT_NE(nullptr, l5.get());
+  EXPECT_EQ(0, CSLCount(l5.get()));
 
   // Line 6: unbalanced quotes at EOF -> nullptr
   EXPECT_EQ(nullptr, CSVReadParseLine3L(fp, 0, ",", true, false, false, false));
@@ -309,12 +279,12 @@ TEST(CplCsvTest, ClassicFileApisAndScanLines) {
 
   EXPECT_EQ(nullptr, CSVReadParseLine2(nullptr, ','));
 
-  const char* csv_text =
+  constexpr char kCsvText[] =
       "id,name,score\n"
       "only_one_field\n"
       "10,Alpha,100\n"
       "20,Beta,200\n";
-  fwrite(csv_text, 1, strlen(csv_text), fp);
+  fwrite(kCsvText, 1, strlen(kCsvText), fp);
   fflush(fp);
 
   EXPECT_EQ(1, CSVGetFieldId(fp, "NAME"));
@@ -322,20 +292,18 @@ TEST(CplCsvTest, ClassicFileApisAndScanLines) {
 
   // Rewind and skip header to test CSVScanLines
   VSIRewind(fp);
-  char** hdr = CSVReadParseLine(fp);
-  CSLDestroy(hdr);
+  CSLDestroy(CSVReadParseLine(fp));
 
-  char** row_exact = CSVScanLines(fp, 1, "Beta", CC_ExactString);
-  ASSERT_NE(nullptr, row_exact);
-  EXPECT_STREQ("20", row_exact[0]);
-  CSLDestroy(row_exact);
+  StringListPtr row_exact(CSVScanLines(fp, 1, "Beta", CC_ExactString),
+                          CSLDestroy);
+  ASSERT_NE(nullptr, row_exact.get());
+  EXPECT_STREQ("20", row_exact.get()[0]);
 
   VSIRewind(fp);
   CSLDestroy(CSVReadParseLine(fp));
-  char** row_int = CSVScanLines(fp, 0, "10", CC_Integer);
-  ASSERT_NE(nullptr, row_int);
-  EXPECT_STREQ("Alpha", row_int[1]);
-  CSLDestroy(row_int);
+  StringListPtr row_int(CSVScanLines(fp, 0, "10", CC_Integer), CSLDestroy);
+  ASSERT_NE(nullptr, row_int.get());
+  EXPECT_STREQ("Alpha", row_int.get()[1]);
 
   VSIRewind(fp);
   CSLDestroy(CSVReadParseLine(fp));
@@ -344,23 +312,22 @@ TEST(CplCsvTest, ClassicFileApisAndScanLines) {
   // Also test CSVScanLinesL on VSILFILE
   VSILFILE* vfp = VSIFOpenL(path.c_str(), "rb");
   ASSERT_NE(nullptr, vfp);
+  absl::Cleanup close_vfp = [vfp] { EXPECT_EQ(0, VSIFCloseL(vfp)); };
   CSLDestroy(CSVReadParseLineL(vfp));
-  char** vrow1 = CSVScanLinesL(vfp, 1, "beta", CC_ApproxString);
-  ASSERT_NE(nullptr, vrow1);
-  EXPECT_STREQ("20", vrow1[0]);
-  CSLDestroy(vrow1);
+  StringListPtr vrow1(CSVScanLinesL(vfp, 1, "beta", CC_ApproxString),
+                      CSLDestroy);
+  ASSERT_NE(nullptr, vrow1.get());
+  EXPECT_STREQ("20", vrow1.get()[0]);
 
   VSIRewindL(vfp);
   CSLDestroy(CSVReadParseLineL(vfp));
-  char** vrow2 = CSVScanLinesL(vfp, 0, "20", CC_Integer);
-  ASSERT_NE(nullptr, vrow2);
-  EXPECT_STREQ("Beta", vrow2[1]);
-  CSLDestroy(vrow2);
+  StringListPtr vrow2(CSVScanLinesL(vfp, 0, "20", CC_Integer), CSLDestroy);
+  ASSERT_NE(nullptr, vrow2.get());
+  EXPECT_STREQ("Beta", vrow2.get()[1]);
 
   VSIRewindL(vfp);
   CSLDestroy(CSVReadParseLineL(vfp));
   EXPECT_EQ(nullptr, CSVScanLinesL(vfp, 1, "Missing", CC_ExactString));
-  VSIFCloseL(vfp);
 }
 
 const char* CustomCSVHook(const char* basename) {
@@ -379,8 +346,8 @@ TEST(CplCsvTest, IngestedIndexedAndUnindexedTablesAndDeaccess) {
   };
   WithQuietHandler quiet;
 
-  const char kIndexedFile[] = "/vsimem/csv_indexed_table.csv";
-  const char kIndexedData[] =
+  constexpr char kIndexedFile[] = "/vsimem/csv_indexed_table.csv";
+  constexpr char kIndexedData[] =
       "id,name,val\n"
       "# comment row ignored by ingest\n"
       "10,\"Ten\nMultiline\",A\n"
@@ -389,8 +356,8 @@ TEST(CplCsvTest, IngestedIndexedAndUnindexedTablesAndDeaccess) {
       "30,Thirty,C\n";
   VsiMemTempWrapper wrap1(kIndexedFile, kIndexedData);
 
-  const char kUnindexedFile[] = "/vsimem/csv_unindexed_table.csv";
-  const char kUnindexedData[] =
+  constexpr char kUnindexedFile[] = "/vsimem/csv_unindexed_table.csv";
+  constexpr char kUnindexedData[] =
       "id,name,val\n"
       "30,Thirty,300\n"
       "short_row\n"
@@ -462,6 +429,8 @@ TEST(CplCsvTest, IngestedIndexedAndUnindexedTablesAndDeaccess) {
   // `cleanup`) has a non-empty table list to free.
   EXPECT_EQ(0, CSVGetFileFieldId(kIndexedFile, "id"));
 }
+
+// TODO: b/335317901 - Cover CSVScanLinesIndexed, CSVScanLinesIngested.
 
 }  // namespace
 }  // namespace autotest2

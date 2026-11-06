@@ -15,10 +15,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "third_party/gdal/port/cpl_mem_cache.h"
+
 #include <features.h>
 
 #include "testing/base/public/gunit.h"
-#include "third_party/gdal/port/cpl_mem_cache.h"
 
 namespace autotest2 {
 namespace {
@@ -55,7 +56,7 @@ TEST(LruCache11, SuccessfulRetrievalByPointer) {
 
   cache.insert(0, 1);
 
-  int *ptr = cache.getPtr(0);
+  int* ptr = cache.getPtr(0);
   ASSERT_NE(nullptr, ptr);
   EXPECT_EQ(1, *ptr);
 }
@@ -106,7 +107,7 @@ TEST(LruCache11, Cwalk) {
 
   bool visited = false;
 
-  auto lambda = [&visited](const lru11::KeyValuePair<int, int>&kv) {
+  auto lambda = [&visited](const lru11::KeyValuePair<int, int>& kv) {
     if (kv.key == 0 && kv.value == 1) {
       visited = true;
     }
@@ -197,11 +198,9 @@ TEST(LruCache11, CacheDoesNotUseCopyConstructorCopyAssignment) {
   struct NoCopyObj {
     int test_v;
 
-    NoCopyObj(int v): test_v(v) {};
+    NoCopyObj(int v) : test_v(v) {};
 
-    NoCopyObj(const NoCopyObj&) : test_v(-1) {
-      ADD_FAILURE();
-    };
+    NoCopyObj(const NoCopyObj&) : test_v(-1) { ADD_FAILURE(); };
 
     NoCopyObj& operator=(const NoCopyObj&) {
       ADD_FAILURE();
@@ -217,7 +216,7 @@ TEST(LruCache11, CacheDoesNotUseCopyConstructorCopyAssignment) {
   EXPECT_EQ(0, cache.insert(0, NoCopyObj(0)).test_v);
 
   {
-    NoCopyObj *ptr = cache.getPtr(0);
+    NoCopyObj* ptr = cache.getPtr(0);
     EXPECT_EQ(0, ptr->test_v);
   }
 

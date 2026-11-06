@@ -19,14 +19,16 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <format>  // NOLINT
 #include <limits>
+#include <memory>
 #include <string>
 
 #include "testing/base/public/gunit.h"
-#include "third_party/absl/strings/str_cat.h"
+#include "third_party/absl/cleanup/cleanup.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 #include "third_party/gdal/autotest2/cpp/util/vsimem.h"
-#include "third_party/gdal/port/cpl_string.h"
+#include "third_party/gdal/port/cpl_port.h"
 #include "third_party/gdal/port/cpl_vsi.h"
 #include "third_party/gdal/port/cpl_vsi_virtual.h"
 
@@ -100,8 +102,8 @@ TEST(CplVsilSubfileTest, DecomposePathAndHandlerErrors) {
 
   // Overflow in offset + size.
   std::string overflow_path =
-      absl::StrCat("/vsisubfile/", std::numeric_limits<vsi_l_offset>::max() - 5,
-                   "_10,", "/vsimem/foo");
+      std::format("/vsisubfile/{}_10,/vsimem/foo",
+                  std::numeric_limits<vsi_l_offset>::max() - 5);
   EXPECT_EQ(nullptr, VSIFOpenL(overflow_path.c_str(), "rb"));
 
   // Non-existent underlying file.
@@ -125,7 +127,7 @@ TEST(CplVsilSubfileTest, ReadWriteSeekTellAndStatWithBoundedSubregion) {
   VsiMemTempWrapper wrapper(mem_file, "0123456789abcdefghij");
 
   // Subregion at offset 5, size 10 ("56789abcde").
-  const std::string subfile = absl::StrCat("/vsisubfile/5_10,", mem_file);
+  const std::string subfile = "/vsisubfile/5_10," + mem_file;
 
   VSIStatBufL stat_buf;
   ASSERT_EQ(0, VSIStatL(subfile.c_str(), &stat_buf));
@@ -133,16 +135,14 @@ TEST(CplVsilSubfileTest, ReadWriteSeekTellAndStatWithBoundedSubregion) {
 
   // Also test Open in read-only mode when offset + size > file size (clamps
   // size) and when offset > file size (fails).
-  const std::string clamped_subfile =
-      absl::StrCat("/vsisubfile/15_20,", mem_file);
+  const std::string clamped_subfile = "/vsisubfile/15_20," + mem_file;
   VSILFILE* fp_clamped = VSIFOpenL(clamped_subfile.c_str(), "rb");
   ASSERT_NE(nullptr, fp_clamped);
   EXPECT_EQ(0, VSIFSeekL(fp_clamped, 0, SEEK_END));
   EXPECT_EQ(5, VSIFTellL(fp_clamped));
   EXPECT_EQ(0, VSIFCloseL(fp_clamped));
 
-  const std::string past_end_subfile =
-      absl::StrCat("/vsisubfile/25_5,", mem_file);
+  const std::string past_end_subfile = "/vsisubfile/25_5," + mem_file;
   EXPECT_EQ(nullptr, VSIFOpenL(past_end_subfile.c_str(), "rb"));
   ASSERT_EQ(0, VSIStatL(past_end_subfile.c_str(), &stat_buf));
   EXPECT_EQ(5, stat_buf.st_size);
@@ -218,10 +218,9 @@ TEST(CplVsilSubfileTest, UnboundedSubregionAndUnderlyingErrors) {
   VsiMemTempWrapper wrapper(mem_file, "0123456789abcdefghij");
 
   // Size -1 (or omitted) means size 0 (unbounded up to underlying file end).
-  const std::string subfile_neg1 = absl::StrCat("/vsisubfile/5_-1,", mem_file);
-  const std::string subfile_no_size = absl::StrCat("/vsisubfile/5,", mem_file);
-  const std::string subfile_past_end =
-      absl::StrCat("/vsisubfile/50,", mem_file);
+  const std::string subfile_neg1 = "/vsisubfile/5_-1," + mem_file;
+  const std::string subfile_no_size = "/vsisubfile/5," + mem_file;
+  const std::string subfile_past_end = "/vsisubfile/50," + mem_file;
 
   VSIStatBufL stat_buf;
   ASSERT_EQ(0, VSIStatL(subfile_neg1.c_str(), &stat_buf));
@@ -244,8 +243,11 @@ TEST(CplVsilSubfileTest, UnboundedSubregionAndUnderlyingErrors) {
   EXPECT_EQ(0, VSIFCloseL(fp));
 
   // Install controllable handler to test underlying seek/read failures.
-  auto* ctrl_handler = new ControllableHandler();
-  VSIFileManager::InstallHandler("/vsictrl_subfile/", ctrl_handler);
+  auto ctrl_handler = std::make_unique<ControllableHandler>();
+  VSIFileManager::InstallHandler("/vsictrl_subfile/", ctrl_handler.get());
+  absl::Cleanup remove_handler = [] {
+    VSIFileManager::RemoveHandler("/vsictrl_subfile/");
+  };
 
   ctrl_handler->fail_seek_end_ = true;
   EXPECT_EQ(nullptr, VSIFOpenL("/vsisubfile/5_10,/vsictrl_subfile/a", "rb"));
