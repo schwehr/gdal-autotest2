@@ -125,8 +125,8 @@ void RegisterCustomTypes(HFAHandle hfa, const char* defn_text) {
     hfa->poDictionary->osDictionaryText.pop_back();
   }
   hfa->poDictionary->osDictionaryText += defn_text;
-  if (hfa->poDictionary->osDictionaryText.back() != '.') {
-    hfa->poDictionary->osDictionaryText += ".";
+  if (!hfa->poDictionary->osDictionaryText.ends_with('.')) {
+    hfa->poDictionary->osDictionaryText += '.';
   }
   hfa->poDictionary->bDictionaryTextDirty = true;
 }

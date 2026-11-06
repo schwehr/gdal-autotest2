@@ -245,3 +245,4 @@ TEST(JpegxlDriverCoreTest, IdentifyCases) {
 
 // TODO: b/335317901 - DeclareDeferredJPEGXLPlugin is gated on #ifdef
 // PLUGIN_FILENAME, so it cannot be tested in google3 static builds.
+
