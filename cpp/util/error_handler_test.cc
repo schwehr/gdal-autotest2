@@ -6,7 +6,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,12 +14,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "autotest2/cpp/util/error_handler.h"
+#include "third_party/gdal/autotest2/cpp/util/error_handler.h"
 
 #include <string>
 
-#include "gunit.h"
-#include "port/cpl_error.h"
+#include "testing/base/public/gunit.h"
+#include "third_party/gdal/port/cpl_error.h"
 
 namespace {
 // Tests a log handler that uses the gUnit LOG calls.
@@ -33,11 +33,13 @@ TEST(ErrorHandlerTest, CPLGoogleLogErrorHandlerTest) {
   SUCCEED();
 }
 
+// #if !defined(ABSL_HAVE_ADDRESS_SANITIZER)
 // Tests CHECK of the message pointer.
 TEST(ErrorHandlerDeathTest, CPLGoogleLogErrorHandlerNullptrTest) {
   EXPECT_DEATH(
       CPLGoogleLogErrorHandler(static_cast<CPLErr>(-1), 999, nullptr), "");
 }
+// #endif
 
 TEST(ErrorHandlerDeathTest, CPLGoogleLogErrorHandlerFatalTest) {
   const std::string fatal_msg("CE_Failure gives FATAL and die");
@@ -46,6 +48,7 @@ TEST(ErrorHandlerDeathTest, CPLGoogleLogErrorHandlerFatalTest) {
       fatal_msg);
 }
 
+#if !defined(UNDEFINED_BEHAVIOR_SANITIZER)
 TEST(ErrorHandlerDeathTest, CPLGoogleLogErrorHandlerInvalidTest) {
   const std::string invalid_msg("Invalid should give FATAL and die");
   EXPECT_DEATH(
@@ -53,5 +56,6 @@ TEST(ErrorHandlerDeathTest, CPLGoogleLogErrorHandlerInvalidTest) {
           static_cast<CPLErr>(-1), 5, invalid_msg.c_str()),
       invalid_msg);
 }
+#endif
 
 }  // namespace

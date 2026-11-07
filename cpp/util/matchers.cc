@@ -1,8 +1,8 @@
-#include "autotest2/cpp/util/matchers.h"
+#include "third_party/gdal/autotest2/cpp/util/matchers.h"
 
 #include <iosfwd>
 
-#include "ogr/ogr_spatialref.h"
+#include "third_party/gdal/ogr/ogr_spatialref.h"
 
 void PrintTo(const OGRSpatialReference& srs, std::ostream* os) {
   char* pretty_wkt = nullptr;
