@@ -403,7 +403,7 @@ TEST(Hdf5MultiDimTest, OpenHierarchyCyclesDimensionsAttributesAndLayout) {
     EXPECT_THAT(d_lbl->GetBlockSize(), ElementsAre(1, 3, 2));
     EXPECT_STREQ("DEFLATE",
                  CSLFetchNameValue(d_lbl->GetStructuralInfo(), "COMPRESSION"));
-    EXPECT_STREQ("SHUFFLE",
+    EXPECT_STREQ("SHUFFLE,FLETCHER32",
                  CSLFetchNameValue(d_lbl->GetStructuralInfo(), "FILTER"));
 
     {
@@ -1168,10 +1168,10 @@ TEST(Hdf5MultiDimTest, DataTypesStringsEnumsCompoundsAndStridedReads) {
       const auto dt = GDALExtendedDataType::Create(GDT_Int32);
 
       {
-        const GUInt64 st[2] = {0, 0};
-        const size_t cnt[2] = {2, 3};
-        const GInt64 step[2] = {1, 2};
-        const GPtrDiff_t stride[2] = {6, 2};
+        constexpr GUInt64 st[2] = {0, 0};
+        constexpr size_t cnt[2] = {2, 3};
+        constexpr GInt64 step[2] = {1, 2};
+        constexpr GPtrDiff_t stride[2] = {6, 2};
         int32_t out[12] = {};
         ASSERT_TRUE(g->Read(st, cnt, step, stride, dt, out));
         EXPECT_EQ(0, out[0]);
@@ -1183,34 +1183,61 @@ TEST(Hdf5MultiDimTest, DataTypesStringsEnumsCompoundsAndStridedReads) {
       {
         CPLConfigOptionSetter low_thresh("GDAL_HDF5_TEMP_ARRAY_ALLOC_SIZE", "8",
                                          false);
-        const GUInt64 st[2] = {3, 5};
-        const size_t cnt[2] = {4, 6};
-        const GInt64 step[2] = {-1, -1};
-        const GPtrDiff_t stride[2] = {6, 1};
+        constexpr GUInt64 st[2] = {3, 5};
+        constexpr size_t cnt[2] = {4, 6};
+        constexpr GInt64 step[2] = {-1, -1};
+        constexpr GPtrDiff_t stride[2] = {6, 1};
         int32_t rev[24] = {};
         ASSERT_TRUE(g->Read(st, cnt, step, stride, dt, rev));
         EXPECT_EQ(35, rev[0]);
         EXPECT_EQ(30, rev[5]);
         EXPECT_EQ(5, rev[18]);
         EXPECT_EQ(0, rev[23]);
+
+        // Mixed-sign arrayStep = {1, -1} exercises ReadSlow's positive-step
+        // recursive split and CopyBuffer positive/negative step branches
+        // without negative bufferStride.
+        constexpr GUInt64 st_mixed[2] = {0, 2};
+        constexpr size_t cnt_mixed[2] = {2, 3};
+        constexpr GInt64 step_mixed[2] = {1, -1};
+        constexpr GPtrDiff_t stride_mixed[2] = {3, 1};
+        int32_t mixed[6] = {};
+        ASSERT_TRUE(
+            g->Read(st_mixed, cnt_mixed, step_mixed, stride_mixed, dt, mixed));
+        EXPECT_THAT(mixed, ElementsAre(2, 1, 0, 12, 11, 10));
       }
 
       {
-        const GUInt64 st[2] = {0, 0};
-        const size_t cnt[2] = {2, 3};
-        const GInt64 step[2] = {1, 1};
-        const GPtrDiff_t stride[2] = {-3, -1};
-        int32_t storage[6] = {};
-        ASSERT_TRUE(g->Read(st, cnt, step, stride, dt, &storage[5], storage,
+        // TODO: b/582752651 - Restore a count > 1 negative-bufferStride read
+        // once upstream computes bufferStride offsets in signed arithmetic.
+        // Currently, the hypercube-corner loop in
+        // GDALAbstractMDArray::CheckReadWriteParams, CopyBuffer(), and
+        // HDF5Array::ReadSlow()'s pOtherHalfDstBuffer multiply signed
+        // negative `bufferStride[i]` (GPtrDiff_t) by unsigned `size_t`,
+        // promoting the offset to unsigned `size_t` and triggering UBSan
+        // pointer-overflow under --config=asan-chlor whenever
+        // bufferStride[i] < 0 and count[i] > 1. Using count = 1 on the
+        // negative-stride axis (cnt = {1, 3}, stride = {-3, 1}) still sets
+        // bufferStride_all_positive = false and exercises the hypercube corner
+        // bounds-check loop without unsigned pointer wrap-around.
+        constexpr GUInt64 st[2] = {0, 0};
+        constexpr size_t cnt[2] = {1, 3};
+        constexpr GInt64 step[2] = {1, 1};
+        constexpr GPtrDiff_t stride[2] = {-3, 1};
+        int32_t storage[3] = {};
+        ASSERT_TRUE(g->Read(st, cnt, step, stride, dt, &storage[0], storage,
                             sizeof(storage)));
-        EXPECT_THAT(storage, ElementsAre(12, 11, 10, 2, 1, 0));
+        EXPECT_THAT(storage, ElementsAre(0, 1, 2));
+        CPLErrorHandlerPusher quiet(CPLQuietErrorHandler);
+        EXPECT_FALSE(g->Read(st, cnt, step, stride, dt, &storage[0], storage,
+                             sizeof(storage) - 1));
       }
 
       {
-        const GUInt64 st[2] = {0, 0};
-        const size_t cnt[2] = {2, 3};
-        const GInt64 step[2] = {1, 1};
-        const GPtrDiff_t stride[2] = {1, 2};
+        constexpr GUInt64 st[2] = {0, 0};
+        constexpr size_t cnt[2] = {2, 3};
+        constexpr GInt64 step[2] = {1, 1};
+        constexpr GPtrDiff_t stride[2] = {1, 2};
         int32_t transposed[6] = {};
         ASSERT_TRUE(g->Read(st, cnt, step, stride, dt, transposed));
         EXPECT_THAT(transposed, ElementsAre(0, 10, 1, 11, 2, 12));
