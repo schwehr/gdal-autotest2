@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,17 +14,17 @@
 //
 // Tests degrib myerror.c.
 //
-// https://trac.osgeo.org/gdal/browser/trunk/gdal/frmts/grib/degrib/degrib/clock.cpp
+// https://github.com/OSGeo/gdal/blob/master/frmts/grib/degrib/degrib/clock.c
 //
 // See also:
 //   https://www.weather.gov/mdl/degrib_home
-//   http://www.gdal.org/frmt_grib.html
+//   https://gdal.org/drivers/raster/grib.html
 //   https://github.com/OSGeo/gdal/blob/master/autotest/gdrivers/grib.py
 
-#include "frmts/grib/degrib/degrib/clock.h"
+#include "third_party/gdal/frmts/grib/degrib/degrib/clock.h"
 
-#include "gmock.h"
-#include "gunit.h"
+#include "testing/base/public/gmock.h"
+#include "testing/base/public/gunit.h"
 
 namespace {
 

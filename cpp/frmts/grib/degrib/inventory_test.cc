@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,29 +15,47 @@
 // Tests degrib within the GRIB raster driver.
 //
 // See also:
-//   http://www.gdal.org/frmt_grib.html
+//   https://gdal.org/drivers/raster/grib.html
 //   https://github.com/OSGeo/gdal/blob/master/autotest/gdrivers/grib.py
 //   https://github.com/OSGeo/gdal/tree/master/gdal/frmts/grib/degrib/degrib
-#include "port/cpl_vsi.h"
-#include "frmts/grib/degrib/degrib/inventory.h"
 
-#include <string>
+#include <cstdlib>
+#include <filesystem>  // NOLINT
+#include <string_view>
 
-#include "logging.h"
-#include "file/base/path.h"
-#include "gunit.h"
+#include "testing/base/public/gunit.h"
 #include "third_party/absl/cleanup/cleanup.h"
-#include "third_party/absl/flags/flag.h"
-#include "third_party/absl/memory/memory.h"
-#include "frmts/grib/gribdataset.h"
+#include "third_party/gdal/frmts/grib/degrib/degrib/type.h"
+#include "third_party/gdal/frmts/grib/gribdataset.h"
+#include "third_party/gdal/port/cpl_vsi.h"
+#include "third_party/gdal/frmts/grib/degrib/degrib/inventory.h"
 
 namespace autotest2 {
 namespace {
 
-using gdal::grib::InventoryWrapper;
+const std::filesystem::path kTestDataPath(
+    "google3/third_party/gdal/autotest2/cpp/frmts/grib/degrib/testdata");
 
-const char kTestData[] =
-    "/google3/third_party/gdal/autotest2/cpp/frmts/grib/degrib/testdata/";
+std::filesystem::path GetTestFilePath(const std::string_view filename) {
+  return std::filesystem::path(::testing::SrcDir()) / kTestDataPath / filename;
+}
+
+// Code taken from gribdataset.cpp that made this private.
+class InventoryWrapperGrib : public gdal::grib::InventoryWrapper {
+ public:
+  explicit InventoryWrapperGrib(VSILFILE *fp) : gdal::grib::InventoryWrapper() {
+    result_ = GRIB2Inventory(fp, &inv_, &inv_len_, 0 /* all messages */,
+                             &num_messages_);
+  }
+
+  ~InventoryWrapperGrib() override {
+    if (inv_ == nullptr) return;
+    for (uInt4 i = 0; i < inv_len_; i++) {
+      GRIB2InventoryFree(inv_ + i);
+    }
+    free(inv_);
+  }
+};
 
 // TODO(schwehr): Try nullptr for file.
 // TODO(schwehr): Try an empty file.
@@ -46,8 +64,7 @@ const char kTestData[] =
 // TODO(schwehr): Request fewer messages.  Does 2 or more work?
 
 TEST(InventoryTest, RequestOnlyOneMessage) {
-  const std::string filepath = file::JoinPath(
-      absl::GetFlag(FLAGS_test_srcdir), kTestData, "constant_field.grib2");
+  const auto filepath = GetTestFilePath("constant_field.grib2");
   auto grib = VSIFOpenL(filepath.c_str(), "r");
   auto done = absl::MakeCleanup([grib] { VSIFCloseL(grib); });
 
@@ -85,38 +102,34 @@ TEST(InventoryTest, RequestOnlyOneMessage) {
 }
 
 TEST(InventoryTest, AllWithOnlyOne) {
-  const std::string filepath = file::JoinPath(
-      absl::GetFlag(FLAGS_test_srcdir), kTestData, "constant_field.grib2");
+  const auto filepath = GetTestFilePath("constant_field.grib2");
   auto file = VSIFOpenL(filepath.c_str(), "r");
   auto done = absl::MakeCleanup([file] { VSIFCloseL(file); });
-  InventoryWrapper inventories(file);
+  InventoryWrapperGrib inventories(file);
   ASSERT_EQ(1, inventories.length());
   ASSERT_EQ(1, inventories.num_messages());
 }
 
 TEST(InventoryTest, AllWith2By2) {
-  const std::string filepath = file::JoinPath(absl::GetFlag(FLAGS_test_srcdir),
-                                              kTestData, "test_uuid.grib2");
+  const auto filepath = GetTestFilePath("test_uuid.grib2");
   auto file = VSIFOpenL(filepath.c_str(), "r");
   auto done = absl::MakeCleanup([file] { VSIFCloseL(file); });
-  InventoryWrapper inventories(file);
+  InventoryWrapperGrib inventories(file);
   ASSERT_EQ(2, inventories.length());
   ASSERT_EQ(2, inventories.num_messages());
 }
 
 TEST(InventoryTest, AllWith21By1) {
-  const std::string filepath = file::JoinPath(absl::GetFlag(FLAGS_test_srcdir),
-                                              kTestData, "multi_created.grib2");
+  const auto filepath = GetTestFilePath("multi_created.grib2");
   auto file = VSIFOpenL(filepath.c_str(), "r");
   auto done = absl::MakeCleanup([file] { VSIFCloseL(file); });
-  InventoryWrapper inventories(file);
+  InventoryWrapperGrib inventories(file);
   ASSERT_EQ(21, inventories.length());
   ASSERT_EQ(1, inventories.num_messages());
 }
 
 TEST(InventoryTest, RefTime) {
-  const std::string filepath = file::JoinPath(
-      absl::GetFlag(FLAGS_test_srcdir), kTestData, "constant_field.grib2");
+  const auto filepath = GetTestFilePath("constant_field.grib2");
 
   double ref_time = 0.0;
   EXPECT_EQ(0, GRIB2RefTime(filepath.c_str(), &ref_time));
@@ -124,12 +137,11 @@ TEST(InventoryTest, RefTime) {
 }
 
 TEST(GRIB2SectToBuffer, BadLargeSectionLength) {
-  const std::string filepath =
-      file::JoinPath(absl::GetFlag(FLAGS_test_srcdir), kTestData,
-                     "oom-95dd3e1fee6828f1eb40a8b15c178b7fb7e769ca");
+  const auto filepath =
+      GetTestFilePath("oom-95dd3e1fee6828f1eb40a8b15c178b7fb7e769ca");
   auto file = VSIFOpenL(filepath.c_str(), "r");
   auto done = absl::MakeCleanup([file] { VSIFCloseL(file); });
-  InventoryWrapper inventories(file);
+  InventoryWrapperGrib inventories(file);
   // TODO(schwehr): Add symbols upstream for the error codes.
   EXPECT_EQ(-4, inventories.result());
 }
