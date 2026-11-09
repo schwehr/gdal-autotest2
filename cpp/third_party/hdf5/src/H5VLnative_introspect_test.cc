@@ -1,0 +1,199 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// Tests native VOL connector optional operation introspection callbacks
+// (third_party/hdf5/src/H5VLnative_introspect.c).
+//
+// See also:
+//   https://github.com/HDFGroup/hdf5/blob/master/src/H5VLnative_introspect.c
+
+#include "third_party/hdf5/google/util/hdf5_internal_prelude.h"
+
+#include <array>
+#include <cstdint>
+
+#include "testing/base/public/gmock.h"
+#include "testing/base/public/gunit.h"
+#include "third_party/hdf5/google/util/scoped_hdf5.h"
+#include "third_party/hdf5/src/hdf5.h"
+
+extern "C" {
+#include "third_party/hdf5/src/H5VLnative_private.h"
+}  // extern "C"
+
+namespace hdf5 {
+namespace {
+
+struct OptQueryCase {
+  H5VL_subclass_t subcls;
+  int opt_type;
+  uint64_t expected_flags;
+};
+
+constexpr std::array<OptQueryCase, 46> kSupportedCases = {{
+    // Attribute optional operations.
+    {H5VL_SUBCLS_ATTR, H5VL_NATIVE_ATTR_ITERATE_OLD,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_NO_ASYNC},
+
+    // Dataset optional operations.
+    {H5VL_SUBCLS_DATASET, H5VL_NATIVE_DATASET_FORMAT_CONVERT,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_MODIFY_METADATA},
+    {H5VL_SUBCLS_DATASET, H5VL_NATIVE_DATASET_GET_CHUNK_INDEX_TYPE,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA},
+    {H5VL_SUBCLS_DATASET, H5VL_NATIVE_DATASET_GET_CHUNK_STORAGE_SIZE,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA},
+    {H5VL_SUBCLS_DATASET, H5VL_NATIVE_DATASET_GET_NUM_CHUNKS,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA},
+    {H5VL_SUBCLS_DATASET, H5VL_NATIVE_DATASET_GET_CHUNK_INFO_BY_IDX,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA},
+    {H5VL_SUBCLS_DATASET, H5VL_NATIVE_DATASET_GET_CHUNK_INFO_BY_COORD,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA},
+    {H5VL_SUBCLS_DATASET, H5VL_NATIVE_DATASET_GET_VLEN_BUF_SIZE,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA},
+    {H5VL_SUBCLS_DATASET, H5VL_NATIVE_DATASET_GET_OFFSET,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA},
+    {H5VL_SUBCLS_DATASET, H5VL_NATIVE_DATASET_CHUNK_READ,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_READ_DATA},
+    {H5VL_SUBCLS_DATASET, H5VL_NATIVE_DATASET_CHUNK_WRITE,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_WRITE_DATA},
+
+    // File optional operations.
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_CLEAR_ELINK_CACHE,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_MODIFY_METADATA},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_RESET_MDC_HIT_RATE,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_MODIFY_METADATA},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_SET_MDC_CONFIG,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_MODIFY_METADATA},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_GET_FILE_IMAGE,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA |
+         H5VL_OPT_QUERY_READ_DATA},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_GET_FREE_SECTIONS,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_GET_FREE_SPACE,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_GET_INFO,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_GET_MDC_CONF,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_GET_MDC_HR,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_GET_MDC_SIZE,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_GET_SIZE,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_GET_VFD_HANDLE,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_GET_METADATA_READ_RETRY_INFO,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_START_SWMR_WRITE,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_MODIFY_METADATA |
+         H5VL_OPT_QUERY_WRITE_DATA | H5VL_OPT_QUERY_NO_ASYNC},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_START_MDC_LOGGING,
+     H5VL_OPT_QUERY_SUPPORTED},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_STOP_MDC_LOGGING,
+     H5VL_OPT_QUERY_SUPPORTED},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_GET_MDC_LOGGING_STATUS,
+     H5VL_OPT_QUERY_SUPPORTED},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_FORMAT_CONVERT,
+     H5VL_OPT_QUERY_SUPPORTED},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_RESET_PAGE_BUFFERING_STATS,
+     H5VL_OPT_QUERY_SUPPORTED},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_GET_PAGE_BUFFERING_STATS,
+     H5VL_OPT_QUERY_SUPPORTED},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_GET_MDC_IMAGE_INFO,
+     H5VL_OPT_QUERY_SUPPORTED},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_GET_EOA, H5VL_OPT_QUERY_SUPPORTED},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_INCR_FILESIZE,
+     H5VL_OPT_QUERY_SUPPORTED},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_SET_LIBVER_BOUNDS,
+     H5VL_OPT_QUERY_SUPPORTED},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_GET_MIN_DSET_OHDR_FLAG,
+     H5VL_OPT_QUERY_SUPPORTED},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_SET_MIN_DSET_OHDR_FLAG,
+     H5VL_OPT_QUERY_SUPPORTED},
+    {H5VL_SUBCLS_FILE, H5VL_NATIVE_FILE_POST_OPEN, H5VL_OPT_QUERY_SUPPORTED},
+
+    // Group optional operations.
+    {H5VL_SUBCLS_GROUP, H5VL_NATIVE_GROUP_ITERATE_OLD,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_NO_ASYNC},
+    {H5VL_SUBCLS_GROUP, H5VL_NATIVE_GROUP_GET_OBJINFO,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA},
+
+    // Object optional operations.
+    {H5VL_SUBCLS_OBJECT, H5VL_NATIVE_OBJECT_GET_COMMENT,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA},
+    {H5VL_SUBCLS_OBJECT, H5VL_NATIVE_OBJECT_SET_COMMENT,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_MODIFY_METADATA},
+    {H5VL_SUBCLS_OBJECT, H5VL_NATIVE_OBJECT_DISABLE_MDC_FLUSHES,
+     H5VL_OPT_QUERY_SUPPORTED},
+    {H5VL_SUBCLS_OBJECT, H5VL_NATIVE_OBJECT_ENABLE_MDC_FLUSHES,
+     H5VL_OPT_QUERY_SUPPORTED},
+    {H5VL_SUBCLS_OBJECT, H5VL_NATIVE_OBJECT_ARE_MDC_FLUSHES_DISABLED,
+     H5VL_OPT_QUERY_SUPPORTED},
+    {H5VL_SUBCLS_OBJECT, H5VL_NATIVE_OBJECT_GET_NATIVE_INFO,
+     H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA},
+}};
+
+TEST(H5VLnativeIntrospectTest, QueryOptionalReturnsExpectedFlagsForSupportedOps) {
+  ScopedFile file = CreateInMemoryFile();
+  ASSERT_TRUE(file.valid());
+
+  for (const auto& tc : kSupportedCases) {
+    uint64_t flags = 0;
+    EXPECT_GE(H5VLquery_optional(file.get(), tc.subcls, tc.opt_type, &flags), 0)
+        << "subcls=" << tc.subcls << " opt_type=" << tc.opt_type;
+    EXPECT_EQ(flags, tc.expected_flags)
+        << "subcls=" << tc.subcls << " opt_type=" << tc.opt_type;
+  }
+
+  // Also invoke the internal entrypoint directly to ensure linkage.
+  uint64_t direct_flags = 0;
+  EXPECT_GE(H5VL__native_introspect_opt_query(
+                nullptr, H5VL_SUBCLS_OBJECT,
+                H5VL_NATIVE_OBJECT_GET_NATIVE_INFO, &direct_flags),
+            0);
+  EXPECT_EQ(direct_flags,
+            H5VL_OPT_QUERY_SUPPORTED | H5VL_OPT_QUERY_QUERY_METADATA);
+}
+
+TEST(H5VLnativeIntrospectTest, QueryOptionalRejectsUnsupportedSubclassesAndOps) {
+  ScopedFile file = CreateInMemoryFile();
+  ASSERT_TRUE(file.valid());
+
+  const std::array<std::pair<H5VL_subclass_t, int>, 13> unsupported_cases = {{
+      {H5VL_SUBCLS_NONE, 0},
+      {H5VL_SUBCLS_INFO, 0},
+      {H5VL_SUBCLS_WRAP, 0},
+      {H5VL_SUBCLS_DATATYPE, 0},
+      {H5VL_SUBCLS_LINK, 0},
+      {H5VL_SUBCLS_REQUEST, 0},
+      {H5VL_SUBCLS_BLOB, 0},
+      {H5VL_SUBCLS_TOKEN, 0},
+      {H5VL_SUBCLS_ATTR, 9999},
+      {H5VL_SUBCLS_DATASET, H5VL_NATIVE_DATASET_CHUNK_ITER},
+      {H5VL_SUBCLS_FILE, 9999},
+      {H5VL_SUBCLS_GROUP, 9999},
+      {H5VL_SUBCLS_OBJECT, 9999},
+  }};
+
+  ScopedErrorSilence silence;
+  for (const auto& [subcls, opt_type] : unsupported_cases) {
+    uint64_t flags = 0;
+    EXPECT_LT(H5VLquery_optional(file.get(), subcls, opt_type, &flags), 0)
+        << "subcls=" << subcls << " opt_type=" << opt_type;
+  }
+}
+
+}  // namespace
+}  // namespace hdf5
