@@ -171,8 +171,6 @@ TEST_F(GdalHomographyTest, SimilarTransformer) {
   EXPECT_EQ(TRUE, s_success);
   EXPECT_DOUBLE_EQ(110.0, sx);
   EXPECT_DOUBLE_EQ(220.0, sy);
-
-  GDALDestroyHomographyTransformer(hTransform);
 }
 
 TEST_F(GdalHomographyTest, ApplyHomography) {
