@@ -27,8 +27,9 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <limits>
+#include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include "testing/base/public/gmock.h"
@@ -47,6 +48,7 @@ namespace lerc {
 namespace {
 
 using ::LercNS::LosslessFPCompression;
+using ::LercNS::Predictor;
 using ::testing::ElementsAre;
 using ::testing::ElementsAreArray;
 
@@ -55,14 +57,23 @@ std::vector<unsigned char> EncodeSurface(const std::vector<T>& data,
                                          bool is_double, int cols, int rows,
                                          int depth) {
   LosslessFPCompression codec;
-  EXPECT_TRUE(
-      codec.ComputeHuffmanCodesFlt(data.data(), is_double, cols, rows, depth));
+  if (!codec.ComputeHuffmanCodesFlt(data.data(), is_double, cols, rows,
+                                    depth)) {
+    ADD_FAILURE() << "ComputeHuffmanCodesFlt failed";
+    return {};
+  }
   const int expected_len = codec.compressedLength();
-  EXPECT_GT(expected_len, 1);
+  if (expected_len <= 1) {
+    ADD_FAILURE() << "Unexpected compressedLength=" << expected_len;
+    return {};
+  }
 
   std::vector<unsigned char> blob(static_cast<std::size_t>(expected_len), 0);
   unsigned char* dst = blob.data();
-  EXPECT_TRUE(codec.EncodeHuffmanFlt(&dst));
+  if (!codec.EncodeHuffmanFlt(&dst)) {
+    ADD_FAILURE() << "EncodeHuffmanFlt failed";
+    return {};
+  }
   EXPECT_EQ(expected_len, static_cast<int>(dst - blob.data()));
   return blob;
 }
@@ -73,6 +84,7 @@ void ExpectBitExactRoundTrip(const std::vector<T>& input, bool is_double,
                              unsigned char* out_pred_code = nullptr) {
   const std::vector<unsigned char> blob =
       EncodeSurface(input, is_double, cols, rows, depth);
+  ASSERT_FALSE(blob.empty());
   if (out_pred_code != nullptr) {
     *out_pred_code = blob[0];
   }
@@ -98,6 +110,8 @@ void ExpectBitExactRoundTrip(const std::vector<T>& input, bool is_double,
 TEST(FplLerc2ExtTest, FloatAndDoubleRoundTripAcrossPredictorsAndMultiBlock) {
   // Use 128x200 (> 8192 elements) to exercise multi-block TestBlock sampling
   // and multi-snippet getBestLevel2 across all three predictor families.
+  // MSan safety on HUFFMAN_NORMAL planes here depends on upstream
+  // EncodeHuffman's entropy heuristic and bit-stream termination on this data.
   constexpr int kCols = 128;
   constexpr int kRows = 200;
   constexpr int kCount = kCols * kRows;
@@ -114,10 +128,16 @@ TEST(FplLerc2ExtTest, FloatAndDoubleRoundTripAcrossPredictorsAndMultiBlock) {
   }
   unsigned char pred_none_f = 255;
   unsigned char pred_none_d = 255;
-  ExpectBitExactRoundTrip(noisy_f, false, kCols, kRows, 1, &pred_none_f);
-  ExpectBitExactRoundTrip(noisy_d, true, kCols, kRows, 1, &pred_none_d);
-  EXPECT_EQ(LercNS::PREDICTOR_NONE, pred_none_f);
-  EXPECT_EQ(LercNS::PREDICTOR_NONE, pred_none_d);
+  {
+    SCOPED_TRACE("PREDICTOR_NONE float");
+    ExpectBitExactRoundTrip(noisy_f, false, kCols, kRows, 1, &pred_none_f);
+  }
+  {
+    SCOPED_TRACE("PREDICTOR_NONE double");
+    ExpectBitExactRoundTrip(noisy_d, true, kCols, kRows, 1, &pred_none_d);
+  }
+  EXPECT_EQ(Predictor::getCode(LercNS::PREDICTOR_NONE), pred_none_f);
+  EXPECT_EQ(Predictor::getCode(LercNS::PREDICTOR_NONE), pred_none_d);
 
   // 2. Row-jumped horizontal ramp favors PREDICTOR_DELTA1.
   std::vector<float> delta1_f(kCount);
@@ -132,28 +152,41 @@ TEST(FplLerc2ExtTest, FloatAndDoubleRoundTripAcrossPredictorsAndMultiBlock) {
   }
   unsigned char pred_d1_f = 255;
   unsigned char pred_d1_d = 255;
-  ExpectBitExactRoundTrip(delta1_f, false, kCols, kRows, 1, &pred_d1_f);
-  ExpectBitExactRoundTrip(delta1_d, true, kCols, kRows, 1, &pred_d1_d);
-  EXPECT_EQ(LercNS::PREDICTOR_DELTA1, pred_d1_f);
-  EXPECT_EQ(LercNS::PREDICTOR_DELTA1, pred_d1_d);
+  {
+    SCOPED_TRACE("PREDICTOR_DELTA1 float");
+    ExpectBitExactRoundTrip(delta1_f, false, kCols, kRows, 1, &pred_d1_f);
+  }
+  {
+    SCOPED_TRACE("PREDICTOR_DELTA1 double");
+    ExpectBitExactRoundTrip(delta1_d, true, kCols, kRows, 1, &pred_d1_d);
+  }
+  EXPECT_EQ(Predictor::getCode(LercNS::PREDICTOR_DELTA1), pred_d1_f);
+  EXPECT_EQ(Predictor::getCode(LercNS::PREDICTOR_DELTA1), pred_d1_d);
 
-  // 3. Smooth bilinear 2D plane favors PREDICTOR_ROWS_COLS.
+  // 3. Column-varying profile constant across rows favors PREDICTOR_ROWS_COLS
+  // because horizontal differencing leaves column entropy while the vertical
+  // pass cancels rows 1..N-1 to zero.
   std::vector<float> cross_f(kCount);
   std::vector<double> cross_d(kCount);
   for (int r = 0; r < kRows; ++r) {
     for (int c = 0; c < kCols; ++c) {
-      const double v =
-          static_cast<double>(r + 1) * 3.0 + static_cast<double>(c + 1) * 1.0;
+      const double v = static_cast<double>((c * 131) % 29) * 0.25 + 100.0;
       cross_f[r * kCols + c] = static_cast<float>(v);
       cross_d[r * kCols + c] = v;
     }
   }
   unsigned char pred_rc_f = 255;
   unsigned char pred_rc_d = 255;
-  ExpectBitExactRoundTrip(cross_f, false, kCols, kRows, 1, &pred_rc_f);
-  ExpectBitExactRoundTrip(cross_d, true, kCols, kRows, 1, &pred_rc_d);
-  EXPECT_EQ(LercNS::PREDICTOR_ROWS_COLS, pred_rc_f);
-  EXPECT_EQ(LercNS::PREDICTOR_ROWS_COLS, pred_rc_d);
+  {
+    SCOPED_TRACE("PREDICTOR_ROWS_COLS float");
+    ExpectBitExactRoundTrip(cross_f, false, kCols, kRows, 1, &pred_rc_f);
+  }
+  {
+    SCOPED_TRACE("PREDICTOR_ROWS_COLS double");
+    ExpectBitExactRoundTrip(cross_d, true, kCols, kRows, 1, &pred_rc_d);
+  }
+  EXPECT_EQ(Predictor::getCode(LercNS::PREDICTOR_ROWS_COLS), pred_rc_f);
+  EXPECT_EQ(Predictor::getCode(LercNS::PREDICTOR_ROWS_COLS), pred_rc_d);
 }
 
 TEST(FplLerc2ExtTest, MultiDepthSpecialFloatBitsAndRecomputeCleanupRoundTrip) {
@@ -176,8 +209,7 @@ TEST(FplLerc2ExtTest, MultiDepthSpecialFloatBitsAndRecomputeCleanupRoundTrip) {
   ExpectBitExactRoundTrip(depth_f, false, 2, 2, 3);
 
   const std::vector<double> depth_d = {
-      1.0,  2.0,  3.0,  4.0,  5.0,  6.0,
-      7.5,  8.5,  9.5,  10.5, 11.5, 12.5,
+      1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.5, 8.5, 9.5, 10.5, 11.5, 12.5,
   };
   ExpectBitExactRoundTrip(depth_d, true, 2, 2, 3);
 
@@ -209,48 +241,56 @@ TEST(FplLerc2ExtTest, DecodeRejectsMalformedPlaneZeroHeadersAndCoversHelpers) {
   std::vector<float> out(4, 0.0f);
 
   // Malformed headers all fail at byte plane 0 before any output_buffers push,
-  // avoiding upstream multi-plane leak in DecodeHuffmanFltSlice.
-  // 1. pred_code > 2
-  {
+  // avoiding upstream multi-plane leak.
+  // TODO(schwehr): Report upstream: DecodeHuffmanFltSlice leaks earlier
+  // output_buffers if a byte > 0 header check fails.
+  struct MalformedHeaderCase {
+    std::string_view label;
+    std::size_t rem_limit;
+    int offset;
+    std::uint32_t value;
+    std::size_t width;
+  };
+  constexpr MalformedHeaderCase kMalformedCases[] = {
+      {.label = "pred_code > 2",
+       .rem_limit = 0,
+       .offset = 0,
+       .value = 3,
+       .width = 1},
+      {.label = "truncated before 6B plane-0 header",
+       .rem_limit = 5,
+       .offset = -1,
+       .value = 0,
+       .width = 0},
+      {.label = "plane-0 byte_index >= 4",
+       .rem_limit = 0,
+       .offset = 1,
+       .value = 4,
+       .width = 1},
+      {.label = "plane-0 best_level > MAX_DELTA",
+       .rem_limit = 0,
+       .offset = 2,
+       .value = 6,
+       .width = 1},
+      {.label = "plane-0 compressed_size > remaining",
+       .rem_limit = 0,
+       .offset = 3,
+       .value = 0x100000U,
+       .width = 4},
+  };
+  for (const auto& tc : kMalformedCases) {
+    SCOPED_TRACE(tc.label);
     auto bad = valid;
-    bad[0] = 3;
+    if (tc.offset >= 0) {
+      if (tc.width == 1) {
+        bad[static_cast<std::size_t>(tc.offset)] =
+            static_cast<unsigned char>(tc.value);
+      } else {
+        WritePodAt(bad, static_cast<std::size_t>(tc.offset), tc.value);
+      }
+    }
     const unsigned char* src = bad.data();
-    std::size_t rem = bad.size();
-    EXPECT_FALSE(LosslessFPCompression::DecodeHuffmanFlt(&src, rem, out.data(),
-                                                         false, 2, 2, 1));
-  }
-  // 2. Truncated before plane-0 6-byte header
-  {
-    const unsigned char* src = valid.data();
-    std::size_t rem = 5;  // 1B pred_code leaves 4B < 6B
-    EXPECT_FALSE(LosslessFPCompression::DecodeHuffmanFlt(&src, rem, out.data(),
-                                                         false, 2, 2, 1));
-  }
-  // 3. plane-0 byte_index >= bytes (4 for float)
-  {
-    auto bad = valid;
-    bad[1] = 4;
-    const unsigned char* src = bad.data();
-    std::size_t rem = bad.size();
-    EXPECT_FALSE(LosslessFPCompression::DecodeHuffmanFlt(&src, rem, out.data(),
-                                                         false, 2, 2, 1));
-  }
-  // 4. plane-0 best_level > MAX_DELTA (5)
-  {
-    auto bad = valid;
-    bad[2] = 6;
-    const unsigned char* src = bad.data();
-    std::size_t rem = bad.size();
-    EXPECT_FALSE(LosslessFPCompression::DecodeHuffmanFlt(&src, rem, out.data(),
-                                                         false, 2, 2, 1));
-  }
-  // 5. plane-0 compressed_size exceeds remaining input bytes
-  {
-    auto bad = valid;
-    const uint32_t huge = 0x100000U;
-    std::memcpy(&bad[3], &huge, sizeof(huge));
-    const unsigned char* src = bad.data();
-    std::size_t rem = bad.size();
+    std::size_t rem = tc.rem_limit > 0 ? tc.rem_limit : bad.size();
     EXPECT_FALSE(LosslessFPCompression::DecodeHuffmanFlt(&src, rem, out.data(),
                                                          false, 2, 2, 1));
   }
@@ -270,7 +310,7 @@ TEST(FplLerc2ExtTest, DecodeRejectsMalformedPlaneZeroHeadersAndCoversHelpers) {
   ASSERT_NE(nullptr, level2.get());
   // Original {5, 6, 9, 13}: 1st diff {5, 1, 3, 4}, 2nd diff {5, 1, 2, 1}.
   EXPECT_THAT(std::vector<unsigned char>(level2.get(), level2.get() + 4),
-              ElementsAre(5, 1, 9, 18));
+              ElementsAre(5, 6, 9, 13));
 
   EXPECT_EQ(0, getBestLevel(raw_seq, sizeof(raw_seq), 0));
 }

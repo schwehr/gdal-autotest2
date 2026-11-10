@@ -32,6 +32,8 @@
 
 #include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
+#include "third_party/lerc/LercLib/Defines.h"
+#include "third_party/lerc/google/util/lerc_test_util.h"
 
 namespace lerc {
 namespace {
@@ -39,6 +41,13 @@ namespace {
 using ::LercNS::Byte;
 using ::LercNS::Huffman;
 using ::testing::ElementsAreArray;
+
+// DecodeOneValue reads 4-8B ahead via memcpy, so append at least 8 zero pad
+// bytes past any partially written uint32 word.
+[[nodiscard]] constexpr std::size_t ReadAheadPaddingBytes(
+    int bit_pos) noexcept {
+  return (bit_pos > 0 ? sizeof(std::uint32_t) : 0U) + 8U;
+}
 
 TEST(HuffmanTest, ComputeCodesAndSizeRejectInvalidHistograms) {
   Huffman huffman;
@@ -63,7 +72,7 @@ TEST(HuffmanTest, ComputeCodesAndSizeRejectInvalidHistograms) {
   // SetCodes validation and empty/oversized/zero-code code tables.
   EXPECT_FALSE(huffman.SetCodes({}));
   EXPECT_FALSE(huffman.SetCodes(
-      std::vector<std::pair<unsigned short, unsigned int>>(1U << 15, {1, 0})));
+      std::vector<std::pair<std::uint16_t, unsigned int>>(1U << 15, {1, 0})));
 
   ASSERT_TRUE(huffman.SetCodes({{0, 0}, {0, 0}}));
   std::array<Byte, 64> tmp{};
@@ -73,7 +82,8 @@ TEST(HuffmanTest, ComputeCodesAndSizeRejectInvalidHistograms) {
   EXPECT_FALSE(huffman.BuildTreeFromCodes(lut_bits));
   EXPECT_FALSE(huffman.ComputeCompressedSize({1, 2}, num_bytes, avg_bpp));
 
-  // Exceeding 32-bit maxCodeLength in SetCodes is rejected cleanly.
+  // SetCodes only checks size bounds; WriteCodeTable rejects lengths > 32 via
+  // GetRange.
   ASSERT_TRUE(huffman.SetCodes({{33, 0}, {1, 1}}));
   EXPECT_FALSE(huffman.WriteCodeTable(&dst, 4));
 
@@ -109,10 +119,12 @@ TEST(HuffmanTest, ShallowLutAndWrapAroundRoundTripVersions2And4) {
   const std::vector<int> symbols = {0, 1, 2, 253, 254, 255, 0, 255, 1, 254, 2};
 
   for (int version : {2, 4}) {
-    // WriteCodeTable writes 16B header + 2B BitStuffer2 header for <256 bins;
-    // align +2 bytes for version 2 so BitStuff_Before_Lerc2v3 is 4B-aligned.
+    // WriteCodeTable writes 16B header + 2B BitStuffer2 header for <256 bins
+    // (18B total); align +2B for version 2 so BitStuff_Before_Lerc2v3 is
+    // 4-byte aligned.
     std::vector<uint32_t> storage(256, 0U);
-    Byte* base = reinterpret_cast<Byte*>(storage.data()) + 2;
+    Byte* base = reinterpret_cast<Byte*>(storage.data()) +
+                 AlignPadTo4(16U + BitStuffer2HeaderBytes(histo.size() - 1U));
     Byte* dst = base;
     ASSERT_TRUE(encoder.WriteCodeTable(&dst, version));
 
@@ -122,7 +134,7 @@ TEST(HuffmanTest, ShallowLutAndWrapAroundRoundTripVersions2And4) {
                                      codes[sym].first));
     }
     // Include >= 8 bytes of zero tail after packed codes for LUT read-ahead.
-    dst += (bit_pos > 0 ? 4 : 0) + 8;
+    dst += ReadAheadPaddingBytes(bit_pos);
     const std::size_t total_len = static_cast<std::size_t>(dst - base);
 
     Huffman decoder;
@@ -132,7 +144,7 @@ TEST(HuffmanTest, ShallowLutAndWrapAroundRoundTripVersions2And4) {
 
     int num_bits_lut = 0;
     ASSERT_TRUE(decoder.BuildTreeFromCodes(num_bits_lut));
-    EXPECT_LE(num_bits_lut, 12);
+    EXPECT_EQ(5, num_bits_lut);
 
     std::vector<int> decoded;
     decoded.reserve(symbols.size());
@@ -192,7 +204,7 @@ TEST(HuffmanTest, DeepTreeHistogramUsesFallbackTreeAndWordCrossingDecode) {
     ASSERT_TRUE(
         Huffman::PushValue(&dst, bit_pos, codes[sym].second, codes[sym].first));
   }
-  dst += (bit_pos > 0 ? 4 : 0) + 16;  // >= 8B zero read-ahead padding.
+  dst += ReadAheadPaddingBytes(bit_pos);
   const std::size_t total_len = static_cast<std::size_t>(dst - stream.data());
 
   Huffman decoder;
@@ -281,6 +293,10 @@ TEST(HuffmanTest, ReadCodeTablePushAndDecodeRejectMalformedInputs) {
   EXPECT_TRUE(Huffman::PushValue(&dst, bit_pos, 0x1234567U, 28));
   EXPECT_TRUE(Huffman::PushValue(&dst, bit_pos, 0x89AU, 12));
   EXPECT_EQ(8, bit_pos);
+  EXPECT_EQ(bits_buf.data() + 8, dst);
+  EXPECT_EQ(0xABCDE123U, ReadPod<std::uint32_t>(bits_buf, 0));
+  EXPECT_EQ(0x12345678U, ReadPod<std::uint32_t>(bits_buf, 4));
+  EXPECT_EQ(0x9A000000U, ReadPod<std::uint32_t>(bits_buf, 8));
 
   // DecodeOneValue error checks: null/bad bitPos/short remaining buffer.
   ASSERT_TRUE(huffman.SetCodes({{2, 0U}, {2, 1U}, {2, 2U}}));

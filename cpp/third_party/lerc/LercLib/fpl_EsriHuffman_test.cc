@@ -22,20 +22,29 @@
 #include "third_party/lerc/LercLib/fpl_EsriHuffman.h"
 
 #include <cstddef>
+#include <utility>
 #include <vector>
 
 #include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
+#include "third_party/absl/types/span.h"
 #include "third_party/lerc/LercLib/Defines.h"
 #include "third_party/lerc/LercLib/Huffman.h"
 #include "third_party/lerc/google/util/lerc_test_util.h"
 
-// Global-namespace PackBits helpers defined in fpl_EsriHuffman.cpp.
+// Global-namespace PackBits helpers defined in fpl_EsriHuffman.cpp (using
+// upstream's `long` ABI signature).
+// Note: DecodeHuffman's HUFFMAN_PACKBITS branch calls lerc_assert; negative
+// PACKBITS decode cases are intentionally omitted here because this target
+// compiles without -fexceptions (lerc_assert coverage lives in
+// fpl_Lerc2Ext_test).
 bool decodePackBits(const unsigned char* ptr, std::size_t size,
                     std::size_t expected, unsigned char** output);
-long encodePackBits(const unsigned char* ptr, std::size_t size,
-                    unsigned char** output);
-long getPackBitsSize(const unsigned char* ptr, std::size_t size, long* limit);
+long encodePackBits(const unsigned char* ptr,  // NOLINT(runtime/int)
+                    std::size_t size, unsigned char** output);
+long getPackBitsSize(const unsigned char* ptr,  // NOLINT(runtime/int)
+                     std::size_t size,
+                     long* limit);  // NOLINT(runtime/int)
 
 namespace lerc {
 namespace {
@@ -43,27 +52,53 @@ namespace {
 using ::LercNS::fpl_EsriHuffman;
 using ::testing::ElementsAreArray;
 
+// Mirrors HuffmanFirstByte in fpl_EsriHuffman.cpp.
+enum class HuffmanMode : unsigned char {
+  kNormal = 0,
+  kRle = 1,
+  kNoEncoding = 2,
+  kPackBits = 3,
+};
+
+[[nodiscard]] int EncodeAndVerifyRoundTrip(
+    absl::Span<const char> input, bool use_rle, HuffmanMode expected_mode,
+    OwnedMallocBytes* out_encoded = nullptr) {
+  unsigned char* raw_encoded = nullptr;
+  const int enc_len = fpl_EsriHuffman::EncodeHuffman(input.data(), input.size(),
+                                                     &raw_encoded, use_rle);
+  OwnedMallocBytes encoded(raw_encoded);
+  if (enc_len <= 0 || encoded == nullptr) {
+    ADD_FAILURE() << "EncodeHuffman failed, enc_len=" << enc_len;
+    return -1;
+  }
+  EXPECT_EQ(static_cast<unsigned char>(expected_mode), encoded.get()[0]);
+
+  std::size_t rem = input.size();
+  unsigned char* raw_decoded = nullptr;
+  const bool ok = fpl_EsriHuffman::DecodeHuffman(
+      encoded.get(), static_cast<std::size_t>(enc_len), rem, &raw_decoded);
+  OwnedMallocBytes decoded(raw_decoded);
+  EXPECT_TRUE(ok);
+  if (ok && decoded != nullptr) {
+    EXPECT_THAT(std::vector<char>(decoded.get(), decoded.get() + input.size()),
+                ElementsAreArray(input));
+  }
+  if (out_encoded != nullptr) {
+    *out_encoded = std::move(encoded);
+  }
+  return enc_len;
+}
+
 TEST(FplEsriHuffmanTest, ConstantInputUsesRleMode) {
   const std::vector<char> constant(64, 0x2A);
   EXPECT_EQ(
       6, fpl_EsriHuffman::getCompressedSize(constant.data(), constant.size()));
 
-  unsigned char* raw_encoded = nullptr;
-  const int enc_len = fpl_EsriHuffman::EncodeHuffman(
-      constant.data(), constant.size(), &raw_encoded, /*use_rle=*/true);
-  OwnedMallocBytes encoded(raw_encoded);
+  OwnedMallocBytes encoded;
+  const int enc_len = EncodeAndVerifyRoundTrip(constant, /*use_rle=*/true,
+                                               HuffmanMode::kRle, &encoded);
   ASSERT_EQ(6, enc_len);
-  EXPECT_EQ(1, encoded.get()[0]);  // HUFFMAN_RLE
   EXPECT_EQ(0x2A, encoded.get()[1]);
-
-  std::size_t rem = constant.size();
-  unsigned char* raw_decoded = nullptr;
-  const bool ok = fpl_EsriHuffman::DecodeHuffman(
-      encoded.get(), static_cast<std::size_t>(enc_len), rem, &raw_decoded);
-  OwnedMallocBytes decoded(raw_decoded);
-  ASSERT_TRUE(ok);
-  EXPECT_THAT(std::vector<char>(decoded.get(), decoded.get() + constant.size()),
-              ElementsAreArray(constant));
 }
 
 TEST(FplEsriHuffmanTest, IncompressibleRunsSelectPackBitsOrNoEncodingMode) {
@@ -79,46 +114,20 @@ TEST(FplEsriHuffmanTest, IncompressibleRunsSelectPackBitsOrNoEncodingMode) {
       fpl_EsriHuffman::getCompressedSize(run_input.data(), run_input.size()));
 
   // 1. use_rle=true selects HUFFMAN_PACKBITS (flag 3).
-  unsigned char* raw_pb = nullptr;
-  const int pb_len = fpl_EsriHuffman::EncodeHuffman(
-      run_input.data(), run_input.size(), &raw_pb, /*use_rle=*/true);
-  OwnedMallocBytes pb_encoded(raw_pb);
+  const int pb_len = EncodeAndVerifyRoundTrip(run_input, /*use_rle=*/true,
+                                              HuffmanMode::kPackBits);
   ASSERT_GT(pb_len, 0);
-  ASSERT_LT(pb_len, static_cast<int>(run_input.size()));
-  EXPECT_EQ(3, pb_encoded.get()[0]);  // HUFFMAN_PACKBITS
-
-  std::size_t rem_pb = run_input.size();
-  unsigned char* raw_pb_out = nullptr;
-  const bool pb_ok = fpl_EsriHuffman::DecodeHuffman(
-      pb_encoded.get(), static_cast<std::size_t>(pb_len), rem_pb, &raw_pb_out);
-  OwnedMallocBytes pb_decoded(raw_pb_out);
-  ASSERT_TRUE(pb_ok);
-  EXPECT_THAT(
-      std::vector<char>(pb_decoded.get(), pb_decoded.get() + run_input.size()),
-      ElementsAreArray(run_input));
+  EXPECT_LT(pb_len, static_cast<int>(run_input.size()));
 
   // 2. use_rle=false falls back to HUFFMAN_NO_ENCODING (flag 2).
-  unsigned char* raw_asis = nullptr;
-  const int asis_len = fpl_EsriHuffman::EncodeHuffman(
-      run_input.data(), run_input.size(), &raw_asis, /*use_rle=*/false);
-  OwnedMallocBytes asis_encoded(raw_asis);
-  ASSERT_EQ(static_cast<int>(run_input.size()) + 1, asis_len);
-  EXPECT_EQ(2, asis_encoded.get()[0]);  // HUFFMAN_NO_ENCODING
-
-  std::size_t rem_asis = run_input.size();
-  unsigned char* raw_asis_out = nullptr;
-  const bool asis_ok = fpl_EsriHuffman::DecodeHuffman(
-      asis_encoded.get(), static_cast<std::size_t>(asis_len), rem_asis,
-      &raw_asis_out);
-  OwnedMallocBytes asis_decoded(raw_asis_out);
-  ASSERT_TRUE(asis_ok);
-  EXPECT_THAT(std::vector<char>(asis_decoded.get(),
-                                asis_decoded.get() + run_input.size()),
-              ElementsAreArray(run_input));
+  const int asis_len = EncodeAndVerifyRoundTrip(run_input, /*use_rle=*/false,
+                                                HuffmanMode::kNoEncoding);
+  EXPECT_EQ(static_cast<int>(run_input.size()) + 1, asis_len);
 }
 
 TEST(FplEsriHuffmanTest, SkewedBytesSelectNormalHuffmanAndDecodeRejectsErrors) {
-  // Alternating bytes defeat PackBits runs while skew yields strong Huffman.
+  // 9-zero runs keep getPackBitsSize exceeding limit = min(numBytes, len) so
+  // it returns -1 and HUFFMAN_NORMAL wins.
   std::vector<char> skewed(512);
   for (std::size_t i = 0; i < skewed.size(); ++i) {
     skewed[i] = static_cast<char>((i % 10 == 0) ? 1 : ((i % 25 == 0) ? 2 : 0));
@@ -128,24 +137,15 @@ TEST(FplEsriHuffmanTest, SkewedBytesSelectNormalHuffmanAndDecodeRejectsErrors) {
   EXPECT_GT(est_len, 0);
   EXPECT_LT(est_len, static_cast<int>(skewed.size()));
 
-  unsigned char* raw_huff = nullptr;
-  const int huff_len = fpl_EsriHuffman::EncodeHuffman(
-      skewed.data(), skewed.size(), &raw_huff, /*use_rle=*/true);
-  OwnedMallocBytes huff_encoded(raw_huff);
-  ASSERT_GT(huff_len, 0);
+  OwnedMallocBytes huff_encoded;
+  const int huff_len = EncodeAndVerifyRoundTrip(
+      skewed, /*use_rle=*/true, HuffmanMode::kNormal, &huff_encoded);
   ASSERT_EQ(est_len, huff_len);
-  EXPECT_EQ(0, huff_encoded.get()[0]);  // HUFFMAN_NORMAL
-
-  std::size_t rem = skewed.size();
-  unsigned char* raw_out = nullptr;
-  const bool dec_ok = fpl_EsriHuffman::DecodeHuffman(
-      huff_encoded.get(), static_cast<std::size_t>(huff_len), rem, &raw_out);
-  OwnedMallocBytes decoded(raw_out);
-  ASSERT_TRUE(dec_ok);
-  EXPECT_THAT(std::vector<char>(decoded.get(), decoded.get() + skewed.size()),
-              ElementsAreArray(skewed));
 
   // DecodeHuffman null input check and truncated HUFFMAN_NORMAL stream checks.
+  // TODO(schwehr): Report upstream: DecodeHuffman HUFFMAN_NORMAL ignores
+  // inCount and bounds ReadCodeTable/DecodeOneValue reads by
+  // nBytesRemainingInOut (expected output size), not subtracting the flag byte.
   std::size_t bad_rem = 10;
   unsigned char* raw_err = nullptr;
   EXPECT_FALSE(fpl_EsriHuffman::DecodeHuffman(nullptr, 10, bad_rem, &raw_err));
@@ -157,11 +157,13 @@ TEST(FplEsriHuffmanTest, SkewedBytesSelectNormalHuffmanAndDecodeRejectsErrors) {
   EXPECT_FALSE(short_tbl_ok);
 
   // Truncated bit payload right after the code table triggers DecodeOneValue
-  // failure without overreading the stream buffer.
+  // failure without overreading trunc_payload. DecodeHuffman always passes
+  // lerc2Version=5 to Huffman::ReadCodeTable. Keep bad_rem == trunc_payload
+  // size (<= tbl_bytes + 3) so ReadCodeTable/DecodeOneValue cannot overread.
   LercNS::Huffman probe;
   const LercNS::Byte* tbl_ptr = huff_encoded.get() + 1;
   std::size_t probe_rem = static_cast<std::size_t>(huff_len - 1);
-  ASSERT_TRUE(probe.ReadCodeTable(&tbl_ptr, probe_rem, 5));
+  ASSERT_TRUE(probe.ReadCodeTable(&tbl_ptr, probe_rem, /*lerc2Version=*/5));
   const std::size_t tbl_bytes =
       static_cast<std::size_t>(tbl_ptr - huff_encoded.get());
   std::vector<unsigned char> trunc_payload(huff_encoded.get(),
@@ -185,16 +187,19 @@ TEST(FplEsriHuffmanTest, PackBitsHelpersCoverMaxRunSplitsPreallocAndFailures) {
   data.push_back(0x12);
   data.push_back(0x34);
 
-  long no_limit = 0;
-  const long predicted = getPackBitsSize(data.data(), data.size(), &no_limit);
+  using PackBitsLong = decltype(encodePackBits(nullptr, 0, nullptr));
+  PackBitsLong no_limit = 0;
+  const PackBitsLong predicted =
+      getPackBitsSize(data.data(), data.size(), &no_limit);
   ASSERT_GT(predicted, 0);
 
-  long small_limit = 10;
+  PackBitsLong small_limit = 10;
   EXPECT_EQ(-1, getPackBitsSize(data.data(), data.size(), &small_limit));
 
   // Auto-allocated output buffer (nullptr) and caller-provided buffer.
   unsigned char* raw_packed = nullptr;
-  const long packed_len = encodePackBits(data.data(), data.size(), &raw_packed);
+  const PackBitsLong packed_len =
+      encodePackBits(data.data(), data.size(), &raw_packed);
   OwnedMallocBytes packed_owned(raw_packed);
   EXPECT_EQ(predicted, packed_len);
 

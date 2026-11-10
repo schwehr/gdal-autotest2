@@ -121,17 +121,22 @@ TEST(FplUnitTypesTest, FloatDerivativeBlockAndCrossRoundTripsAreBitExact) {
 
   // 1. 1-D setDerivative: nLevel=0 is a no-op; level 1 and 2 invert cleanly
   //    when interpreted as a single row by restoreBlockSequence.
-  auto line = std::vector<uint32_t>(original.begin(), original.begin() + kCols);
+  const std::vector<uint32_t> first_row(original.begin(),
+                                        original.begin() + kCols);
+  auto line = first_row;
   UnitTypes::setDerivative(UnitType::UNIT_TYPE_FLOAT, line.data(), kCols, 0);
+  EXPECT_THAT(line, ElementsAreArray(first_row));
   UnitTypes::restoreBlockSequence(0, line.data(), kCols, 1,
                                   UnitType::UNIT_TYPE_FLOAT);
-  EXPECT_THAT(line, ElementsAreArray(original.data(), kCols));
+  EXPECT_THAT(line, ElementsAreArray(first_row));
 
   UnitTypes::setDerivative(UnitType::UNIT_TYPE_FLOAT, line.data(), kCols, 1, 1);
+  EXPECT_NE(line, first_row);
   UnitTypes::setDerivative(UnitType::UNIT_TYPE_FLOAT, line.data(), kCols, 2, 2);
+  EXPECT_NE(line, first_row);
   UnitTypes::restoreBlockSequence(2, line.data(), kCols, 1,
                                   UnitType::UNIT_TYPE_FLOAT);
-  EXPECT_THAT(line, ElementsAreArray(original.data(), kCols));
+  EXPECT_THAT(line, ElementsAreArray(first_row));
 
   // 2. setRowsDerivative / setBlockDerivative + restoreBlockSequence across
   //    phase 0, phase 1 -> phase 2, and level 0 no-op.
@@ -150,6 +155,7 @@ TEST(FplUnitTypesTest, FloatDerivativeBlockAndCrossRoundTripsAreBitExact) {
 
     UnitTypes::setBlockDerivative(UnitType::UNIT_TYPE_FLOAT, grid.data(), kCols,
                                   kRows, 1, 1);
+    EXPECT_NE(grid, original);
     auto phase1 = grid;
     UnitTypes::restoreBlockSequence(1, phase1.data(), kCols, kRows,
                                     UnitType::UNIT_TYPE_FLOAT);
@@ -157,6 +163,7 @@ TEST(FplUnitTypesTest, FloatDerivativeBlockAndCrossRoundTripsAreBitExact) {
 
     UnitTypes::setBlockDerivative(UnitType::UNIT_TYPE_FLOAT, grid.data(), kCols,
                                   kRows, 2, 2);
+    EXPECT_NE(grid, original);
     UnitTypes::restoreBlockSequence(2, grid.data(), kCols, kRows,
                                     UnitType::UNIT_TYPE_FLOAT);
     EXPECT_THAT(grid, ElementsAreArray(original));
@@ -168,6 +175,7 @@ TEST(FplUnitTypesTest, FloatDerivativeBlockAndCrossRoundTripsAreBitExact) {
     auto grid = original;
     UnitTypes::setCrossDerivative(UnitType::UNIT_TYPE_FLOAT, grid.data(), kCols,
                                   kRows, 2, 0);
+    EXPECT_NE(grid, original);
     UnitTypes::restoreCrossBytes(0, grid.data(), kCols, kRows,
                                  UnitType::UNIT_TYPE_FLOAT);
     EXPECT_NE(grid, original);
@@ -177,6 +185,7 @@ TEST(FplUnitTypesTest, FloatDerivativeBlockAndCrossRoundTripsAreBitExact) {
 
     UnitTypes::setCrossDerivative(UnitType::UNIT_TYPE_FLOAT, grid.data(), kCols,
                                   kRows, 2, 1);
+    EXPECT_NE(grid, original);
     auto row_only = grid;
     UnitTypes::restoreCrossBytes(1, row_only.data(), kCols, kRows,
                                  UnitType::UNIT_TYPE_FLOAT);
@@ -184,6 +193,7 @@ TEST(FplUnitTypesTest, FloatDerivativeBlockAndCrossRoundTripsAreBitExact) {
 
     UnitTypes::setCrossDerivative(UnitType::UNIT_TYPE_FLOAT, grid.data(), kCols,
                                   kRows, 2, 2);
+    EXPECT_NE(grid, original);
     UnitTypes::restoreCrossBytes(2, grid.data(), kCols, kRows,
                                  UnitType::UNIT_TYPE_FLOAT);
     EXPECT_THAT(grid, ElementsAreArray(original));
@@ -202,53 +212,74 @@ TEST(FplUnitTypesTest, DoubleDerivativeBlockAndCrossRoundTripsAreBitExact) {
   }
 
   // 1. 1-D setDerivative and single-row restore.
-  auto line = std::vector<uint64_t>(original.begin(), original.begin() + kCols);
+  const std::vector<uint64_t> first_row(original.begin(),
+                                        original.begin() + kCols);
+  auto line = first_row;
   UnitTypes::setDerivative(UnitType::UNIT_TYPE_DOUBLE, line.data(), kCols, 2,
                            1);
+  EXPECT_NE(line, first_row);
   UnitTypes::restoreBlockSequence(2, line.data(), kCols, 1,
                                   UnitType::UNIT_TYPE_DOUBLE);
-  EXPECT_THAT(line, ElementsAreArray(original.data(), kCols));
+  EXPECT_THAT(line, ElementsAreArray(first_row));
 
-  // 2. Multi-row setRowsDerivative (phases 0, 1, 2) + restoreBlockSequence.
-  auto grid = original;
-  UnitTypes::setRowsDerivative(UnitType::UNIT_TYPE_DOUBLE, grid.data(), kCols,
-                               kRows, 2, 0);
-  UnitTypes::restoreBlockSequence(2, grid.data(), kCols, kRows,
-                                  UnitType::UNIT_TYPE_DOUBLE);
-  EXPECT_THAT(grid, ElementsAreArray(original));
+  // 2. Multi-row setRowsDerivative (phases 0, 1, 2) + restoreBlockSequence,
+  //    using fresh grids per phase so phase checks stay independent.
+  {
+    auto grid = original;
+    UnitTypes::setRowsDerivative(UnitType::UNIT_TYPE_DOUBLE, grid.data(), kCols,
+                                 kRows, 2, 0);
+    EXPECT_NE(grid, original);
+    UnitTypes::restoreBlockSequence(2, grid.data(), kCols, kRows,
+                                    UnitType::UNIT_TYPE_DOUBLE);
+    EXPECT_THAT(grid, ElementsAreArray(original));
+  }
 
-  UnitTypes::setRowsDerivative(UnitType::UNIT_TYPE_DOUBLE, grid.data(), kCols,
-                               kRows, 2, 1);
-  auto row_delta1 = grid;
-  UnitTypes::restoreBlockSequence(1, row_delta1.data(), kCols, kRows,
-                                  UnitType::UNIT_TYPE_DOUBLE);
-  EXPECT_THAT(row_delta1, ElementsAreArray(original));
+  {
+    auto grid = original;
+    UnitTypes::setRowsDerivative(UnitType::UNIT_TYPE_DOUBLE, grid.data(), kCols,
+                                 kRows, 2, 1);
+    EXPECT_NE(grid, original);
+    auto row_delta1 = grid;
+    UnitTypes::restoreBlockSequence(1, row_delta1.data(), kCols, kRows,
+                                    UnitType::UNIT_TYPE_DOUBLE);
+    EXPECT_THAT(row_delta1, ElementsAreArray(original));
 
-  UnitTypes::setRowsDerivative(UnitType::UNIT_TYPE_DOUBLE, grid.data(), kCols,
-                               kRows, 2, 2);
-  UnitTypes::restoreBlockSequence(2, grid.data(), kCols, kRows,
-                                  UnitType::UNIT_TYPE_DOUBLE);
-  EXPECT_THAT(grid, ElementsAreArray(original));
+    UnitTypes::setRowsDerivative(UnitType::UNIT_TYPE_DOUBLE, grid.data(), kCols,
+                                 kRows, 2, 2);
+    EXPECT_NE(grid, original);
+    UnitTypes::restoreBlockSequence(2, grid.data(), kCols, kRows,
+                                    UnitType::UNIT_TYPE_DOUBLE);
+    EXPECT_THAT(grid, ElementsAreArray(original));
+  }
 
   // 3. Multi-row setCrossDerivative (phases 0, 1, 2) + restoreCrossBytes.
-  UnitTypes::setCrossDerivative(UnitType::UNIT_TYPE_DOUBLE, grid.data(), kCols,
-                                kRows, 2, 0);
-  UnitTypes::restoreCrossBytes(2, grid.data(), kCols, kRows,
-                               UnitType::UNIT_TYPE_DOUBLE);
-  EXPECT_THAT(grid, ElementsAreArray(original));
+  {
+    auto grid = original;
+    UnitTypes::setCrossDerivative(UnitType::UNIT_TYPE_DOUBLE, grid.data(),
+                                  kCols, kRows, 2, 0);
+    EXPECT_NE(grid, original);
+    UnitTypes::restoreCrossBytes(2, grid.data(), kCols, kRows,
+                                 UnitType::UNIT_TYPE_DOUBLE);
+    EXPECT_THAT(grid, ElementsAreArray(original));
+  }
 
-  UnitTypes::setCrossDerivative(UnitType::UNIT_TYPE_DOUBLE, grid.data(), kCols,
-                                kRows, 2, 1);
-  auto cross_p1 = grid;
-  UnitTypes::restoreCrossBytes(1, cross_p1.data(), kCols, kRows,
-                               UnitType::UNIT_TYPE_DOUBLE);
-  EXPECT_THAT(cross_p1, ElementsAreArray(original));
+  {
+    auto grid = original;
+    UnitTypes::setCrossDerivative(UnitType::UNIT_TYPE_DOUBLE, grid.data(),
+                                  kCols, kRows, 2, 1);
+    EXPECT_NE(grid, original);
+    auto cross_p1 = grid;
+    UnitTypes::restoreCrossBytes(1, cross_p1.data(), kCols, kRows,
+                                 UnitType::UNIT_TYPE_DOUBLE);
+    EXPECT_THAT(cross_p1, ElementsAreArray(original));
 
-  UnitTypes::setCrossDerivative(UnitType::UNIT_TYPE_DOUBLE, grid.data(), kCols,
-                                kRows, 2, 2);
-  UnitTypes::restoreCrossBytes(2, grid.data(), kCols, kRows,
-                               UnitType::UNIT_TYPE_DOUBLE);
-  EXPECT_THAT(grid, ElementsAreArray(original));
+    UnitTypes::setCrossDerivative(UnitType::UNIT_TYPE_DOUBLE, grid.data(),
+                                  kCols, kRows, 2, 2);
+    EXPECT_NE(grid, original);
+    UnitTypes::restoreCrossBytes(2, grid.data(), kCols, kRows,
+                                 UnitType::UNIT_TYPE_DOUBLE);
+    EXPECT_THAT(grid, ElementsAreArray(original));
+  }
 }
 
 }  // namespace

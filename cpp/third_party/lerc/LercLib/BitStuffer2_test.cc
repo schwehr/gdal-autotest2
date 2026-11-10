@@ -34,17 +34,17 @@
 
 #include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
+#include "third_party/lerc/LercLib/Defines.h"
+#include "third_party/lerc/google/util/lerc_private_test_util.h"
+#include "third_party/lerc/google/util/lerc_test_util.h"
 
 namespace lerc {
 namespace {
 
 using ::LercNS::BitStuffer2;
 using ::LercNS::Byte;
+using ::testing::Each;
 using ::testing::ElementsAreArray;
-
-int HeaderBytesForCount(std::size_t count) {
-  return count < 256 ? 2 : (count < 65536 ? 3 : 5);
-}
 
 std::vector<std::pair<unsigned int, unsigned int>> BuildSortedPairs(
     const std::vector<unsigned int>& values) {
@@ -53,9 +53,7 @@ std::vector<std::pair<unsigned int, unsigned int>> BuildSortedPairs(
   for (unsigned int i = 0; i < values.size(); ++i) {
     sorted.emplace_back(values[i], i);
   }
-  std::ranges::sort(sorted, [](const auto& a, const auto& b) {
-    return a.first < b.first || (a.first == b.first && a.second < b.second);
-  });
+  std::sort(sorted.begin(), sorted.end());
   return sorted;
 }
 
@@ -74,8 +72,8 @@ TEST(BitStuffer2Test, EncodeSimpleRejectsInvalidInputs) {
 TEST(BitStuffer2Test, EncodeDecodeSimpleZeroBitsAndVariedElementCounts) {
   const BitStuffer2 bs;
 
-  // 1. All zeros: numBits == 0 writes header only; Decode succeeds leaving
-  //    caller-provided zeroed vector intact.
+  // 1. All zeros: numBits == 0 writes header only; Decode succeeds without
+  //    writing into dataVec, leaving caller sentinel values intact.
   const std::vector<unsigned int> zeros(12, 0U);
   const unsigned int needed_zero =
       BitStuffer2::ComputeNumBytesNeededSimple(zeros.size(), 0U);
@@ -86,12 +84,13 @@ TEST(BitStuffer2Test, EncodeDecodeSimpleZeroBitsAndVariedElementCounts) {
   EXPECT_EQ(needed_zero,
             static_cast<unsigned int>(zero_dst - zero_blob.data()));
 
-  std::vector<unsigned int> decoded(zeros.size(), 0U);
+  constexpr unsigned int kSentinel = 0xDEADBEEFU;
+  std::vector<unsigned int> decoded(zeros.size(), kSentinel);
   const Byte* zero_src = zero_blob.data();
   std::size_t rem = zero_blob.size();
   ASSERT_TRUE(bs.Decode(&zero_src, rem, decoded, zeros.size(), 4));
   EXPECT_EQ(0U, rem);
-  EXPECT_THAT(decoded, ElementsAreArray(zeros));
+  EXPECT_THAT(decoded, Each(kSentinel));
 
   // 2. Round-trip small (<256), medium (256..65535), and large (65536) counts
   //    plus varied bit-widths (1, 5, 13, 31) for both version 2 and version 4.
@@ -110,16 +109,18 @@ TEST(BitStuffer2Test, EncodeDecodeSimpleZeroBitsAndVariedElementCounts) {
                          ? 0x7FFFFFFFU
                          : (static_cast<unsigned int>(i * 2654435761U) & mask);
         }
-        const unsigned int max_elem = *std::ranges::max_element(input);
+        const unsigned int max_elem =
+            *std::max_element(input.begin(), input.end());
         const unsigned int needed =
             BitStuffer2::ComputeNumBytesNeededSimple(count, max_elem);
 
         // Align payload start to 4 bytes for version < 3 so the upstream
-        // unsigned int* cast in BitStuff_Before_Lerc2v3 stays aligned.
-        const std::size_t hdr_bytes = HeaderBytesForCount(count);
-        const std::size_t align_pad = (4 - (hdr_bytes % 4)) % 4;
-        std::vector<uint32_t> aligned_storage((align_pad + needed + 8) / 4 + 1,
-                                              0U);
+        // unsigned int* cast in BitStuff_Before_Lerc2v3 stays aligned, and
+        // reserve >= 4B tail headroom for its full uint32 memset zeroing.
+        const std::size_t align_pad =
+            AlignPadTo4(BitStuffer2HeaderBytes(count));
+        std::vector<std::uint32_t> aligned_storage(
+            (align_pad + needed + 4U) / sizeof(std::uint32_t) + 1U, 0U);
         Byte* base =
             reinterpret_cast<Byte*>(aligned_storage.data()) + align_pad;
         Byte* dst = base;
@@ -128,7 +129,7 @@ TEST(BitStuffer2Test, EncodeDecodeSimpleZeroBitsAndVariedElementCounts) {
         const std::size_t written = static_cast<std::size_t>(dst - base);
         EXPECT_EQ(needed, written);
 
-        std::vector<unsigned int> out(count, 0xDEADBEEFU);
+        std::vector<unsigned int> out(count, kSentinel);
         const Byte* src = base;
         std::size_t remaining = written;
         ASSERT_TRUE(bs.Decode(&src, remaining, out, count, version))
@@ -147,9 +148,9 @@ TEST(BitStuffer2Test,
   Byte* dst = buf.data();
 
   // 1. Null pointer, empty, non-zero min, 32-bit, >=255 distinct entries.
-  //    All-zero input is excluded from EncodeLut because BitStuffer2::EncodeLut
-  //    reads m_tmpLutVec.back() before checking nLut < 1 (aborting under
-  //    hardened libc++); ComputeNumBytesNeededLut sets doLut = false instead.
+  // TODO(schwehr): Report upstream: BitStuffer2::EncodeLut reads
+  // m_tmpLutVec.back() before checking nLut < 1 on all-zero input, aborting
+  // under hardened libc++; ComputeNumBytesNeededLut sets doLut = false instead.
   const auto valid_sorted = BuildSortedPairs({0, 5, 0, 5, 10, 0});
   EXPECT_FALSE(bs.EncodeLut(nullptr, valid_sorted, 4));
   EXPECT_FALSE(bs.EncodeLut(&dst, {}, 4));
@@ -184,7 +185,7 @@ TEST(BitStuffer2Test,
       BuildSortedPairs(repetitive), do_lut);
   EXPECT_TRUE(do_lut);
 
-  std::vector<Byte> lut_blob(lut_bytes + 8, 0U);
+  std::vector<Byte> lut_blob(lut_bytes, 0U);
   Byte* lut_dst = lut_blob.data();
   ASSERT_TRUE(bs.EncodeLut(&lut_dst, BuildSortedPairs(repetitive), 4));
   EXPECT_EQ(lut_bytes, static_cast<unsigned int>(lut_dst - lut_blob.data()));
@@ -213,9 +214,13 @@ TEST(BitStuffer2Test, EncodeDecodeLutVersion2AndMediumCountRoundTrip) {
       BitStuffer2::ComputeNumBytesNeededLut(BuildSortedPairs(v2_vals), do_lut);
   ASSERT_TRUE(do_lut);
 
-  // Header is 1 (numBitsByte) + 1 (nElem) + 1 (nLut+1) = 3 bytes -> pad 1 byte.
-  std::array<uint32_t, 64> aligned_buf{};
-  Byte* base = reinterpret_cast<Byte*>(aligned_buf.data()) + 1;
+  // Header is BitStuffer2HeaderBytes(v2_vals.size()) (2B) + 1B (nLut+1) = 3B,
+  // so AlignPadTo4(3) = 1B aligns the first BitStuff_Before_Lerc2v3 cursor;
+  // aligned_buf gives ample tail headroom for its full uint32 memset zeroing.
+  const std::size_t align_pad =
+      AlignPadTo4(BitStuffer2HeaderBytes(v2_vals.size()) + 1U);
+  std::array<std::uint32_t, 64> aligned_buf{};
+  Byte* base = reinterpret_cast<Byte*>(aligned_buf.data()) + align_pad;
   Byte* dst = base;
   ASSERT_TRUE(bs.EncodeLut(&dst, BuildSortedPairs(v2_vals), 2));
   const std::size_t written = static_cast<std::size_t>(dst - base);
@@ -244,7 +249,7 @@ TEST(BitStuffer2Test, EncodeDecodeLutVersion2AndMediumCountRoundTrip) {
   const unsigned int med_needed =
       BitStuffer2::ComputeNumBytesNeededLut(BuildSortedPairs(medium), do_lut);
   ASSERT_TRUE(do_lut);
-  std::vector<Byte> med_blob(med_needed + 8, 0U);
+  std::vector<Byte> med_blob(med_needed, 0U);
   Byte* med_dst = med_blob.data();
   ASSERT_TRUE(bs.EncodeLut(&med_dst, BuildSortedPairs(medium), 4));
   EXPECT_EQ(med_needed, static_cast<unsigned int>(med_dst - med_blob.data()));
@@ -268,31 +273,41 @@ TEST(BitStuffer2Test, DecodeRejectsMalformedHeadersAndAllTruncations) {
   EXPECT_FALSE(bs.Decode(nullptr, rem, out, 32, 4));
   EXPECT_FALSE(bs.Decode(&src, rem, out, 32, 4));
 
-  // 2. Truncated numElements or numElements > maxElementCount.
-  constexpr auto kShortCount = std::to_array<Byte>({0x03});  // expects 4B count
+  // 2. Truncated numElements, invalid count byte width, or numElements > max.
+  constexpr auto kShortCount = std::to_array<Byte>(
+      {static_cast<Byte>(kBitStufferFourByteCount | 3U)});  // expects 4B count
   src = kShortCount.data();
   rem = kShortCount.size();
   EXPECT_FALSE(bs.Decode(&src, rem, out, 32, 4));
 
-  constexpr auto kOverMax =
-      std::to_array<Byte>({0x80, 10});  // 1B count = 10 > max=5
+  constexpr auto kInvalidWidth =
+      std::to_array<Byte>({static_cast<Byte>(kBitStufferInvalidCount | 1U)});
+  src = kInvalidWidth.data();
+  rem = kInvalidWidth.size();
+  EXPECT_FALSE(bs.Decode(&src, rem, out, 32, 4));
+
+  constexpr auto kOverMax = std::to_array<Byte>(
+      {kBitStufferOneByteCount, 10});  // 1B count = 10 > max=5
   src = kOverMax.data();
   rem = kOverMax.size();
   EXPECT_FALSE(bs.Decode(&src, rem, out, 5, 4));
 
   // 3. Corrupted LUT headers: numBits == 0, truncated before nLutByte, nLut ==
   // 0.
-  constexpr auto kLutZeroBits = std::to_array<Byte>({0xA0, 4, 2, 1});
+  constexpr Byte kOneByteLutFlag = kBitStufferOneByteCount | kBitStufferLutFlag;
+  constexpr auto kLutZeroBits = std::to_array<Byte>({kOneByteLutFlag, 4, 2, 1});
   src = kLutZeroBits.data();
   rem = kLutZeroBits.size();
   EXPECT_FALSE(bs.Decode(&src, rem, out, 32, 2));
 
-  constexpr auto kLutTruncBeforeNLut = std::to_array<Byte>({0xA3, 4});
+  constexpr auto kLutTruncBeforeNLut =
+      std::to_array<Byte>({static_cast<Byte>(kOneByteLutFlag | 3U), 4});
   src = kLutTruncBeforeNLut.data();
   rem = kLutTruncBeforeNLut.size();
   EXPECT_FALSE(bs.Decode(&src, rem, out, 32, 4));
 
-  constexpr auto kLutZeroEntries = std::to_array<Byte>({0xA3, 4, 1, 0, 0});
+  constexpr auto kLutZeroEntries = std::to_array<Byte>(
+      {static_cast<Byte>(kOneByteLutFlag | 3U), 4, 1, 0, 0});
   src = kLutZeroEntries.data();
   rem = kLutZeroEntries.size();
   EXPECT_FALSE(bs.Decode(&src, rem, out, 32, 4));
@@ -302,26 +317,39 @@ TEST(BitStuffer2Test, DecodeRejectsMalformedHeadersAndAllTruncations) {
   const std::vector<unsigned int> simple_vals = {0, 3, 7, 15, 2, 19, 31, 4, 11};
   const std::vector<unsigned int> lut_vals = {0, 500, 0, 1000, 500, 0, 1000, 0};
 
-  for (int version : {2, 4}) {
-    std::array<uint32_t, 64> aligned_simple{};
-    Byte* s_base = reinterpret_cast<Byte*>(aligned_simple.data()) + 2;
-    Byte* s_dst = s_base;
-    ASSERT_TRUE(bs.EncodeSimple(&s_dst, simple_vals, version));
-    const std::size_t s_len = static_cast<std::size_t>(s_dst - s_base);
-    for (std::size_t trunc = 0; trunc < s_len; ++trunc) {
-      src = s_base;
-      rem = trunc;
-      EXPECT_FALSE(bs.Decode(&src, rem, out, simple_vals.size(), version))
-          << "simple v" << version << " trunc=" << trunc;
-    }
+  AlignedBitStuffer2Stream v2_simple;
+  ASSERT_TRUE(EncodeSimpleV2Aligned(simple_vals, v2_simple));
+  for (std::size_t trunc = 0; trunc < v2_simple.byte_length; ++trunc) {
+    src = v2_simple.data();
+    rem = trunc;
+    EXPECT_FALSE(bs.Decode(&src, rem, out, simple_vals.size(), 2))
+        << "simple v2 trunc=" << trunc;
+  }
 
-    // Use 4-byte aligned LUT values (nLut=2, numBits=10 -> 3 bytes, test
-    // unaligned index in v4 and aligned LUT start in v2 with 4 entries).
+  std::array<Byte, 64> v4_simple_buf{};
+  Byte* s4_dst = v4_simple_buf.data();
+  ASSERT_TRUE(bs.EncodeSimple(&s4_dst, simple_vals, 4));
+  const std::size_t s4_len =
+      static_cast<std::size_t>(s4_dst - v4_simple_buf.data());
+  for (std::size_t trunc = 0; trunc < s4_len; ++trunc) {
+    src = v4_simple_buf.data();
+    rem = trunc;
+    EXPECT_FALSE(bs.Decode(&src, rem, out, simple_vals.size(), 4))
+        << "simple v4 trunc=" << trunc;
+  }
+
+  for (int version : {2, 4}) {
+    // Version 2 uses 4 non-zero 8-bit palette entries (4B LUT payload) so the
+    // second BitStuff_Before_Lerc2v3 cursor stays 4-byte aligned; version 4
+    // uses nLut=2, numBits=10 (3B LUT payload) to exercise unaligned index
+    // streams.
     const std::vector<unsigned int> v2_lut_vals = {0, 30, 60, 120, 240,
                                                    0, 30, 60, 120, 240};
     const auto& lv = (version == 2) ? v2_lut_vals : lut_vals;
-    std::array<uint32_t, 64> aligned_lut{};
-    Byte* l_base = reinterpret_cast<Byte*>(aligned_lut.data()) + 1;
+    const std::size_t align_pad =
+        AlignPadTo4(BitStuffer2HeaderBytes(lv.size()) + 1U);
+    std::array<std::uint32_t, 64> aligned_lut{};
+    Byte* l_base = reinterpret_cast<Byte*>(aligned_lut.data()) + align_pad;
     Byte* l_dst = l_base;
     ASSERT_TRUE(bs.EncodeLut(&l_dst, BuildSortedPairs(lv), version));
     const std::size_t l_len = static_cast<std::size_t>(l_dst - l_base);

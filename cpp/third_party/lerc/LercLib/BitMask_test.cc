@@ -20,9 +20,8 @@
 
 #include "third_party/lerc/LercLib/BitMask.h"
 
-#include <cstdint>
-
 #include "testing/base/public/gunit.h"
+#include "third_party/lerc/LercLib/Defines.h"
 
 namespace lerc {
 namespace {

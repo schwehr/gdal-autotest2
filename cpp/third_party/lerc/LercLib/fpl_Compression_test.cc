@@ -21,6 +21,7 @@
 
 #include "third_party/lerc/LercLib/fpl_Compression.h"
 
+#include <array>
 #include <cstddef>
 #include <vector>
 
@@ -33,6 +34,14 @@ namespace {
 
 using ::LercNS::fpl_Compression;
 using ::testing::ElementsAreArray;
+
+// Mirrors HuffmanFirstByte in fpl_EsriHuffman.cpp.
+enum class HuffmanMode : unsigned char {
+  kNormal = 0,
+  kRle = 1,
+  kNoEncoding = 2,
+  kPackBits = 3,
+};
 
 TEST(FplCompressionTest, FastEstimateWithoutOutputComputesStridedEntropy) {
   // Constant input has zero sampled entropy.
@@ -53,17 +62,24 @@ TEST(FplCompressionTest, FastEstimateWithoutOutputComputesStridedEntropy) {
       uniform.data(), uniform.size(), /*output=*/nullptr, /*fast=*/true);
   EXPECT_EQ(256U, est_uniform);
 
-  // Skewed pattern yields non-zero sampled entropy below sample count (100B).
-  std::vector<char> skewed(700);
-  for (std::size_t i = 0; i < skewed.size(); ++i) {
-    skewed[i] = static_cast<char>((i % 7 == 0) ? (i & 3) : 0);
+  // Sampled indices (i % 7 == 0, 100 samples) cycle uniformly over 4 values
+  // {0..3} (25 each): 2 bits/sample * 100 = 200 bits = 25B.
+  std::vector<char> sampled_four(700);
+  for (std::size_t i = 0; i < sampled_four.size(); ++i) {
+    sampled_four[i] = static_cast<char>((i % 7 == 0) ? (i & 3) : 0);
   }
-  const std::size_t est_skewed = fpl_Compression::compress_buffer(
-      skewed.data(), skewed.size(), /*output=*/nullptr, /*fast=*/true);
-  EXPECT_EQ(25U, est_skewed);
+  const std::size_t est_four = fpl_Compression::compress_buffer(
+      sampled_four.data(), sampled_four.size(), /*output=*/nullptr,
+      /*fast=*/true);
+  EXPECT_EQ(25U, est_four);
 }
 
 TEST(FplCompressionTest, CompressAndExtractRoundTripAcrossModes) {
+  struct ModeCase {
+    std::vector<char> input;
+    HuffmanMode expected_mode;
+  };
+
   // 1. Constant (HUFFMAN_RLE)
   const std::vector<char> constant(64, 0x55);
 
@@ -86,27 +102,34 @@ TEST(FplCompressionTest, CompressAndExtractRoundTripAcrossModes) {
     skewed[i] = static_cast<char>((i % 9 == 0) ? 1 : ((i % 20 == 0) ? 2 : 0));
   }
 
-  const std::vector<std::vector<char>> inputs = {constant, runs, incompressible,
-                                                 skewed};
-  for (const auto& input : inputs) {
-    for (bool fast : {false, true}) {
-      char* raw_compressed = nullptr;
-      const std::size_t comp_size = fpl_Compression::compress_buffer(
-          input.data(), input.size(), &raw_compressed, fast);
-      OwnedMallocChars compressed(raw_compressed);
-      ASSERT_GT(comp_size, 0U);
-      ASSERT_NE(nullptr, compressed.get());
+  const std::array<ModeCase, 4> cases = {{
+      {.input = constant, .expected_mode = HuffmanMode::kRle},
+      {.input = runs, .expected_mode = HuffmanMode::kPackBits},
+      {.input = incompressible, .expected_mode = HuffmanMode::kNoEncoding},
+      {.input = skewed, .expected_mode = HuffmanMode::kNormal},
+  }};
+  for (const auto& tc : cases) {
+    char* raw_compressed = nullptr;
+    const std::size_t comp_size = fpl_Compression::compress_buffer(
+        tc.input.data(), tc.input.size(), &raw_compressed, /*fast=*/false);
+    OwnedMallocChars compressed(raw_compressed);
+    // compress_buffer returns static_cast<size_t>(UINT_MAX) + 1 on error.
+    ASSERT_LE(comp_size, tc.input.size() + 1U);
+    ASSERT_NE(nullptr, compressed.get());
+    EXPECT_EQ(static_cast<unsigned char>(tc.expected_mode),
+              static_cast<unsigned char>(compressed.get()[0]));
 
-      char* raw_extracted = nullptr;
-      const std::size_t out_size = fpl_Compression::extract_buffer(
-          compressed.get(), comp_size, input.size(), &raw_extracted);
-      OwnedMallocChars extracted(raw_extracted);
-      ASSERT_EQ(input.size(), out_size);
-      ASSERT_NE(nullptr, extracted.get());
-      EXPECT_THAT(
-          std::vector<char>(extracted.get(), extracted.get() + out_size),
-          ElementsAreArray(input));
-    }
+    // Note: extract_buffer unconditionally returns uncompressed_size (its only
+    // DecodeHuffman check is assert(ret), compiled out under -c opt), so
+    // ElementsAreArray verifies actual decompression.
+    char* raw_extracted = nullptr;
+    const std::size_t out_size = fpl_Compression::extract_buffer(
+        compressed.get(), comp_size, tc.input.size(), &raw_extracted);
+    OwnedMallocChars extracted(raw_extracted);
+    ASSERT_EQ(tc.input.size(), out_size);
+    ASSERT_NE(nullptr, extracted.get());
+    EXPECT_THAT(std::vector<char>(extracted.get(), extracted.get() + out_size),
+                ElementsAreArray(tc.input));
   }
 }
 

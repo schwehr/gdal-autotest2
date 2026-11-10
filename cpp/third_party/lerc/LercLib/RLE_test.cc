@@ -28,6 +28,7 @@
 
 #include "testing/base/public/gmock.h"
 #include "testing/base/public/gunit.h"
+#include "third_party/lerc/LercLib/Defines.h"
 
 namespace lerc {
 namespace {
@@ -36,6 +37,23 @@ using ::LercNS::Byte;
 using ::LercNS::RLE;
 using ::testing::Each;
 using ::testing::ElementsAreArray;
+
+[[nodiscard]] std::unique_ptr<Byte[]> CompressOwned(const Byte* arr,
+                                                    std::size_t num_bytes,
+                                                    std::size_t& out_size,
+                                                    bool verify = false) {
+  const RLE rle;
+  Byte* raw_rle = nullptr;
+  const bool ok = rle.compress(arr, num_bytes, &raw_rle, out_size, verify);
+  // Arm ownership immediately: compress(..., verify=true) allocates before
+  // verifying and leaves *arrRLE allocated if verification fails.
+  std::unique_ptr<Byte[]> owned(raw_rle);
+  if (!ok) {
+    ADD_FAILURE() << "RLE::compress failed for num_bytes=" << num_bytes;
+    return nullptr;
+  }
+  return owned;
+}
 
 TEST(RleTest, InvalidInputsAndSingleByteReturnExpectedSizesAndFailures) {
   const RLE rle;
@@ -48,13 +66,15 @@ TEST(RleTest, InvalidInputsAndSingleByteReturnExpectedSizesAndFailures) {
   Byte* raw_rle = nullptr;
   std::size_t rle_size = 999;
   EXPECT_FALSE(rle.compress(nullptr, 4, &raw_rle, rle_size));
+  std::unique_ptr<Byte[]> cleanup_null(raw_rle);
+  raw_rle = nullptr;
   EXPECT_FALSE(rle.compress(&single, 0, &raw_rle, rle_size));
+  std::unique_ptr<Byte[]> cleanup_zero(raw_rle);
 
   // 2. Single-byte input encodes as 2B count + 1B literal + 2B EOF = 5B.
   EXPECT_EQ(5U, rle.computeNumBytesRLE(&single, 1));
-  const bool ok = rle.compress(&single, 1, &raw_rle, rle_size);
-  std::unique_ptr<Byte[]> owned_rle(raw_rle);
-  ASSERT_TRUE(ok);
+  std::unique_ptr<Byte[]> owned_rle = CompressOwned(&single, 1, rle_size);
+  ASSERT_NE(nullptr, owned_rle);
   EXPECT_EQ(5U, rle_size);
 
   Byte* raw_out = nullptr;
@@ -69,10 +89,11 @@ TEST(RleTest, InvalidInputsAndSingleByteReturnExpectedSizesAndFailures) {
 
 TEST(RleTest, MixedOddEvenAndShortRepeatRunsRoundTripWithVerify) {
   // Construct a pattern crossing all state-machine transitions:
-  // - Odd prefix
-  // - Run of 4 identical bytes (< m_minNumEven == 5): stays in odd mode
-  // - Odd middle switching to an even run (>= 5 identical bytes)
-  // - Even run switching back to odd, ending in an odd byte
+  // - 3-byte odd prefix + 4 identical bytes (< m_minNumEven == 5) + 2 odd bytes
+  //   = 9 odd bytes -> 2B count + 9B literals = 11B
+  // - Run of 9 identical bytes (>= 5) -> 2B count + 1B value = 3B
+  // - 2 trailing odd bytes -> 2B count + 2B literals = 4B
+  // - 2B EOF marker -> total 20B
   std::vector<Byte> input = {1, 2, 3};
   input.insert(input.end(), 4, 0x10);
   input.push_back(4);
@@ -82,31 +103,25 @@ TEST(RleTest, MixedOddEvenAndShortRepeatRunsRoundTripWithVerify) {
   input.push_back(7);
 
   const RLE rle;
-  const std::size_t predicted =
-      rle.computeNumBytesRLE(input.data(), input.size());
-  Byte* raw_rle = nullptr;
+  EXPECT_EQ(20U, rle.computeNumBytesRLE(input.data(), input.size()));
   std::size_t rle_size = 0;
-  const bool comp_ok =
-      rle.compress(input.data(), input.size(), &raw_rle, rle_size,
-                   /*verify=*/true);
-  std::unique_ptr<Byte[]> owned_rle(raw_rle);
-  ASSERT_TRUE(comp_ok);
-  EXPECT_EQ(predicted, rle_size);
+  std::unique_ptr<Byte[]> owned_rle =
+      CompressOwned(input.data(), input.size(), rle_size, /*verify=*/true);
+  ASSERT_NE(nullptr, owned_rle);
+  EXPECT_EQ(20U, rle_size);
 
-  // Also test starting immediately in an even run and ending in an even run.
+  // Also test starting immediately in an even run and ending in an even run:
+  // 3B even + 3B odd + 3B even + 2B EOF = 11B.
   std::vector<Byte> even_ends(8, 0xAA);
   even_ends.push_back(0x11);
   even_ends.insert(even_ends.end(), 7, 0xBB);
 
-  Byte* raw_even_rle = nullptr;
+  EXPECT_EQ(11U, rle.computeNumBytesRLE(even_ends.data(), even_ends.size()));
   std::size_t even_rle_size = 0;
-  const bool even_ok =
-      rle.compress(even_ends.data(), even_ends.size(), &raw_even_rle,
-                   even_rle_size, /*verify=*/false);
-  std::unique_ptr<Byte[]> owned_even_rle(raw_even_rle);
-  ASSERT_TRUE(even_ok);
-  EXPECT_EQ(rle.computeNumBytesRLE(even_ends.data(), even_ends.size()),
-            even_rle_size);
+  std::unique_ptr<Byte[]> owned_even_rle =
+      CompressOwned(even_ends.data(), even_ends.size(), even_rle_size);
+  ASSERT_NE(nullptr, owned_even_rle);
+  EXPECT_EQ(11U, even_rle_size);
 
   Byte* raw_out = nullptr;
   std::size_t out_size = 0;
@@ -119,7 +134,7 @@ TEST(RleTest, MixedOddEvenAndShortRepeatRunsRoundTripWithVerify) {
               ElementsAreArray(even_ends));
 
   // Verify pre-allocated decompress succeeds when capacity exceeds out_size.
-  std::vector<Byte> prealloc(even_ends.size() + 4, 0xCC);
+  std::vector<Byte> prealloc(input.size() + 4, 0xCC);
   ASSERT_TRUE(RLE::decompress(owned_rle.get(), rle_size, prealloc.data(),
                               prealloc.size()));
   EXPECT_THAT(
@@ -133,43 +148,36 @@ TEST(RleTest, MixedOddEvenAndShortRepeatRunsRoundTripWithVerify) {
 TEST(RleTest, SplitsOddAndEvenRunsExceedingMaxShortCounter) {
   const RLE rle;
 
-  // 1. Over 32767 non-repeating bytes triggers odd-counter rollover splitting.
+  // 1. 32770 bytes via uint8 wrap-around iota have distinct adjacent pairs
+  //    everywhere, forcing an odd rollover split:
+  //    (2 + 32767) + (2 + 3) + 2 EOF = 32776B.
   constexpr std::size_t kLongOddLen = 32770;
   std::vector<Byte> odd_input(kLongOddLen);
   std::iota(odd_input.begin(), odd_input.end(), Byte{0});
-  // Ensure adjacent bytes differ everywhere despite uint8 wrap-around.
-  for (std::size_t i = 1; i < odd_input.size(); ++i) {
-    if (odd_input[i] == odd_input[i - 1]) {
-      odd_input[i] ^= 1;
-    }
-  }
 
-  Byte* raw_odd_rle = nullptr;
+  EXPECT_EQ(32776U, rle.computeNumBytesRLE(odd_input.data(), odd_input.size()));
   std::size_t odd_rle_size = 0;
-  const bool odd_ok = rle.compress(odd_input.data(), odd_input.size(),
-                                   &raw_odd_rle, odd_rle_size);
-  std::unique_ptr<Byte[]> owned_odd_rle(raw_odd_rle);
-  ASSERT_TRUE(odd_ok);
-  EXPECT_EQ(rle.computeNumBytesRLE(odd_input.data(), odd_input.size()),
-            odd_rle_size);
+  std::unique_ptr<Byte[]> owned_odd_rle =
+      CompressOwned(odd_input.data(), odd_input.size(), odd_rle_size);
+  ASSERT_NE(nullptr, owned_odd_rle);
+  EXPECT_EQ(32776U, odd_rle_size);
 
   std::vector<Byte> odd_out(kLongOddLen, 0xFF);
   ASSERT_TRUE(RLE::decompress(owned_odd_rle.get(), odd_rle_size, odd_out.data(),
                               odd_out.size()));
   EXPECT_THAT(odd_out, ElementsAreArray(odd_input));
 
-  // 2. Over 32767 identical bytes triggers even-counter rollover splitting.
+  // 2. 32770 identical bytes forces an even-counter rollover split:
+  //    3B (32767 run) + 3B (3 run) + 2B EOF = 8B.
   constexpr std::size_t kLongEvenLen = 32770;
-  std::vector<Byte> even_input(kLongEvenLen, 0x3C);
+  const std::vector<Byte> even_input(kLongEvenLen, 0x3C);
 
-  Byte* raw_even_rle = nullptr;
+  EXPECT_EQ(8U, rle.computeNumBytesRLE(even_input.data(), even_input.size()));
   std::size_t even_rle_size = 0;
-  const bool even_ok = rle.compress(even_input.data(), even_input.size(),
-                                    &raw_even_rle, even_rle_size);
-  std::unique_ptr<Byte[]> owned_even_rle(raw_even_rle);
-  ASSERT_TRUE(even_ok);
-  EXPECT_EQ(rle.computeNumBytesRLE(even_input.data(), even_input.size()),
-            even_rle_size);
+  std::unique_ptr<Byte[]> owned_even_rle =
+      CompressOwned(even_input.data(), even_input.size(), even_rle_size);
+  ASSERT_NE(nullptr, owned_even_rle);
+  EXPECT_EQ(8U, even_rle_size);
 
   Byte* raw_even_out = nullptr;
   std::size_t even_out_size = 0;
@@ -185,11 +193,10 @@ TEST(RleTest, SplitsOddAndEvenRunsExceedingMaxShortCounter) {
 
 TEST(RleTest, DecompressRejectsInvalidStreamsTruncationsAndSmallBuffers) {
   const std::vector<Byte> sample = {10, 20, 20, 20, 20, 20, 20, 30, 40};
-  const RLE rle;
-  Byte* raw_rle = nullptr;
   std::size_t rle_size = 0;
-  ASSERT_TRUE(rle.compress(sample.data(), sample.size(), &raw_rle, rle_size));
-  std::unique_ptr<Byte[]> owned_rle(raw_rle);
+  std::unique_ptr<Byte[]> owned_rle =
+      CompressOwned(sample.data(), sample.size(), rle_size);
+  ASSERT_NE(nullptr, owned_rle);
 
   // 1. Null pointers and sub-header lengths fail cleanly.
   Byte* alloc_out = nullptr;
@@ -227,11 +234,14 @@ TEST(RleTest, DecompressRejectsInvalidStreamsTruncationsAndSmallBuffers) {
   EXPECT_EQ(0U, out_size);
 
   // 5. Hand-crafted stream with cnt == 0 consumes 1 dummy byte cleanly in
-  //    pre-allocated decompress (per zero-count guard against corrupted v<=2).
+  //    pre-allocated decompress without writing to output (zero-count guard
+  //    against corrupted v<=2 streams).
   constexpr auto kZeroCountStream =
       std::to_array<Byte>({0x00, 0x00, 0x42, 0x00, 0x80});
+  std::vector<Byte> zero_cnt_out(4, 0x99);
   EXPECT_TRUE(RLE::decompress(kZeroCountStream.data(), kZeroCountStream.size(),
-                              out_buf.data(), out_buf.size()));
+                              zero_cnt_out.data(), zero_cnt_out.size()));
+  EXPECT_THAT(zero_cnt_out, Each(0x99));
 }
 
 }  // namespace
