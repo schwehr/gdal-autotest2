@@ -55,7 +55,20 @@
 namespace autotest2 {
 namespace {
 
+using ::testing::Contains;
 using ::testing::HasSubstr;
+
+// Appends CPL error and warning messages to the `std::vector<std::string>`
+// passed via `CPLErrorHandlerPusher` user data.
+void CPL_STDCALL RecordErrorMessage(CPLErr /*error_class*/,
+                                    CPLErrorNum /*error_num*/,
+                                    const char* msg) {
+  auto* error_msgs =
+      static_cast<std::vector<std::string>*>(CPLGetErrorHandlerUserData());
+  if (error_msgs != nullptr && msg != nullptr) {
+    error_msgs->emplace_back(msg);
+  }
+}
 
 template <typename Tag, typename Tag::type M>
 struct AccessPrivate {
@@ -1689,14 +1702,30 @@ TEST_F(OgrSqliteTableLayerTest,
   poTableLayer->InitFeatureCount();
   EXPECT_TRUE(poTableLayer->AreStatisticsValid());
 
-  // Test field laundering and ROWID warning in SpatiaLite
+  // Test field laundering and ROWID warning in SpatiaLite.
+  // `poTableLayer` is out of deferred creation mode, so `CreateField` executes
+  // an immediate `ALTER TABLE`. SQLite 3.54.0+ rejects `ADD COLUMN 'rowid'` on
+  // rowid tables ("cannot add rowid alias: rowid") after GDAL emits the
+  // SpatiaLite warning, overwriting `CPLGetLastErrorMsg()`. Keep this block at
+  // the end of the test because `poTableLayer`'s schema state diverges across
+  // SQLite < 3.54 and >= 3.54.
   {
     CPLErrorReset();
-    CPLPushErrorHandler(CPLQuietErrorHandler);
-    OGRFieldDefn fRowId("ROWID", OFTString);
-    EXPECT_EQ(poTableLayer->CreateField(&fRowId), OGRERR_NONE);
-    CPLPopErrorHandler();
-    EXPECT_THAT(CPLGetLastErrorMsg(), HasSubstr("can corrupt spatial index"));
+    std::vector<std::string> error_msgs;
+    {
+      CPLErrorHandlerPusher error_pusher(RecordErrorMessage, &error_msgs);
+      OGRFieldDefn rowid_field("ROWID", OFTString);
+      if (sqlite3_libversion_number() >= 3054000) {
+        EXPECT_EQ(OGRERR_FAILURE, poTableLayer->CreateField(&rowid_field));
+        EXPECT_EQ(CE_Failure, CPLGetLastErrorType());
+        EXPECT_THAT(CPLGetLastErrorMsg(), HasSubstr("cannot add rowid alias"));
+      } else {
+        EXPECT_EQ(OGRERR_NONE, poTableLayer->CreateField(&rowid_field));
+        EXPECT_EQ(CE_Warning, CPLGetLastErrorType());
+      }
+    }
+    EXPECT_THAT(error_msgs, Contains(HasSubstr("can corrupt spatial index")));
+    CPLErrorReset();
   }
 }
 
