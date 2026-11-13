@@ -31,7 +31,8 @@ namespace {
 
 class TestMessageHandler : public kdu_thread_safe_message {
  public:
-  explicit TestMessageHandler(bool throw_on_end) : throw_on_end_(throw_on_end) {}
+  explicit TestMessageHandler(bool throw_on_end)
+      : throw_on_end_(throw_on_end) {}
   ~TestMessageHandler() noexcept override = default;
 
   void put_text(const char* string) override {
@@ -161,7 +162,8 @@ class BufferSource : public kdu_compressed_source {
   }
   int read(kdu_byte* buf, int num_bytes) override {
     if (num_bytes <= 0 || pos_ >= bytes_.size()) return 0;
-    const size_t avail = std::min(static_cast<size_t>(num_bytes), bytes_.size() - pos_);
+    const size_t avail =
+        std::min(static_cast<size_t>(num_bytes), bytes_.size() - pos_);
     std::memcpy(buf, bytes_.data() + pos_, avail);
     pos_ += avail;
     return static_cast<int>(avail);
@@ -333,10 +335,10 @@ void PushTileSamples(kdu_codestream& cs, kdu_tile& tile,
   }
   kdu_multi_analysis engine;
   try {
-    engine.create(cs, tile, env, queue_ptr,
-                  env != nullptr ? KDU_MULTI_XFORM_MT_DWT
-                                 : KDU_MULTI_XFORM_DEFAULT_FLAGS,
-                  roi);
+    engine.create(
+        cs, tile, env, queue_ptr,
+        env != nullptr ? KDU_MULTI_XFORM_MT_DWT : KDU_MULTI_XFORM_DEFAULT_FLAGS,
+        roi);
     std::vector<int> heights(spec.components);
     std::vector<kdu_dims> comp_dims(spec.components);
     for (int c = 0; c < spec.components; ++c) {
@@ -425,8 +427,13 @@ void PushAllTiles(kdu_codestream& cs,
     for (int tx = tile_range.pos.x; tx < tile_range.pos.x + tile_range.size.x;
          ++tx) {
       kdu_tile tile = cs.open_tile(kdu_coords(tx, ty), env);
-      PushTileSamples(cs, tile, planes, spec, roi, env);
-      tile.close(env);
+      try {
+        PushTileSamples(cs, tile, planes, spec, roi, env);
+        tile.close(env);
+      } catch (...) {
+        if (tile.exists()) tile.close(env);
+        throw;
+      }
     }
   }
 }
@@ -440,23 +447,28 @@ std::vector<kdu_byte> EncodeCodestream(
   BufferTarget target;
   kdu_codestream cs;
   cs.create(&siz, &target);
-  ApplyCodingParams(cs, spec);
-  if (layer_bytes != nullptr && num_layers > 0) {
-    cs.set_max_bytes(layer_bytes[num_layers - 1], true, true);
-  }
+  try {
+    ApplyCodingParams(cs, spec);
+    if (layer_bytes != nullptr && num_layers > 0) {
+      cs.set_max_bytes(layer_bytes[num_layers - 1], true, true);
+    }
 
-  PushAllTiles(cs, planes, spec, roi);
-  if (layer_bytes != nullptr && num_layers > 0) {
-    cs.flush(layer_bytes, num_layers);
-  } else {
-    int nl = 1;
-    kdu_params* cod = cs.access_siz()->access_cluster(COD_params);
-    if (cod != nullptr) cod->get(Clayers, 0, 0, nl);
-    std::vector<kdu_long> auto_bytes(static_cast<size_t>(std::max(1, nl)), 0);
-    auto_bytes.back() = 1LL << 30;
-    cs.flush(auto_bytes.data(), static_cast<int>(auto_bytes.size()));
+    PushAllTiles(cs, planes, spec, roi);
+    if (layer_bytes != nullptr && num_layers > 0) {
+      cs.flush(layer_bytes, num_layers);
+    } else {
+      int nl = 1;
+      kdu_params* cod = cs.access_siz()->access_cluster(COD_params);
+      if (cod != nullptr) cod->get(Clayers, 0, 0, nl);
+      std::vector<kdu_long> auto_bytes(static_cast<size_t>(std::max(1, nl)), 0);
+      auto_bytes.back() = 1LL << 30;
+      cs.flush(auto_bytes.data(), static_cast<int>(auto_bytes.size()));
+    }
+    cs.destroy();
+  } catch (...) {
+    if (cs.exists()) cs.destroy();
+    throw;
   }
-  cs.destroy();
   return target.data;
 }
 
@@ -561,8 +573,8 @@ std::vector<std::vector<int>> DecodeCodestream(kdu_codestream& cs,
             kdu_line_buf* line = engine.get_line(c, env);
             if (line == nullptr) continue;
             const kdu_coords sz = engine.get_size(c);
-            const int y = tile_comp_dims[c].pos.y - comp_dims[c].pos.y +
-                          pulled[c];
+            const int y =
+                tile_comp_dims[c].pos.y - comp_dims[c].pos.y + pulled[c];
             const int x0 = tile_comp_dims[c].pos.x - comp_dims[c].pos.x;
             const int offset = is_signed[c] ? 0 : (1 << (bits[c] - 1));
             for (int x = 0; x < sz.x; ++x) {
@@ -585,8 +597,8 @@ std::vector<std::vector<int>> DecodeCodestream(kdu_codestream& cs,
                      static_cast<double>(1 << KDU_FIX_POINT)) *
                     static_cast<double>(1 << bits[c])));
               }
-              if (y >= 0 && y < comp_dims[c].size.y &&
-                  x0 + x >= 0 && x0 + x < comp_dims[c].size.x) {
+              if (y >= 0 && y < comp_dims[c].size.y && x0 + x >= 0 &&
+                  x0 + x < comp_dims[c].size.x) {
                 out[c][static_cast<size_t>(y) * comp_dims[c].size.x + x0 + x] =
                     sample + offset;
               }
@@ -779,8 +791,8 @@ TEST_F(CompressedTest, SubbandAndPrecinctDirectBlocksAndServerPackets) {
   spec.components = 1;
   spec.reversible = false;
   spec.dwt_levels = 2;
-  spec.extra_params = {"Clayers=3", "Cprecincts={16,16}", "Cblk={8,8}",
-                       "Cuse_eph=yes", "Cuse_sop=yes", "Qstep=0.01"};
+  spec.extra_params = {"Clayers=3",    "Cprecincts={16,16}", "Cblk={8,8}",
+                       "Cuse_eph=yes", "Cuse_sop=yes",       "Qstep=0.01"};
   kdu_long lbytes[3] = {150, 350, 900};
   const auto bytes =
       EncodeCodestream(spec, MakePlanes(spec), nullptr, lbytes, 3);
@@ -862,7 +874,8 @@ TEST_F(CompressedTest, SubbandAndPrecinctDirectBlocksAndServerPackets) {
   kdu_precinct op = oir.open_precinct(ovp.pos);
   kdu_dims obp;
   op.get_valid_blocks(LL_BAND, obp);
-  kdu_subband osb = odt.access_component(0).access_resolution(0).access_subband(LL_BAND);
+  kdu_subband osb =
+      odt.access_component(0).access_resolution(0).access_subband(LL_BAND);
   kdu_block* sbk = osb.open_block(obp.pos);
   kdu_block* dbk = op.open_block(LL_BAND, obp.pos);
   CopyEncodedBlock(dbk, sbk);
@@ -971,10 +984,10 @@ TEST_F(CompressedTest, Part2MctNltRoiAtkAndCplexCbrCachedPaths) {
       if (tile.get_mct_dwt_info(stage, 0, is_rev, levels, cmin, clim, nsteps,
                                 sym, sym_ext, dwt_c) != nullptr) {
         std::vector<int> ai(nbi), ao(nbo);
-        EXPECT_NE(tile.get_mct_dwt_info(stage, 0, is_rev, levels, cmin, clim,
-                                        nsteps, sym, sym_ext, dwt_c, ai.data(),
-                                        ao.data()),
-                  nullptr);
+        EXPECT_NE(
+            tile.get_mct_dwt_info(stage, 0, is_rev, levels, cmin, clim, nsteps,
+                                  sym, sym_ext, dwt_c, ai.data(), ao.data()),
+            nullptr);
       }
       ++stage;
     }
@@ -993,17 +1006,13 @@ TEST_F(CompressedTest, Part2MctNltRoiAtkAndCplexCbrCachedPaths) {
     spec.dwt_levels = 2;
     spec.tile_size = kdu_coords(24, 24);
     spec.extra_params = {
-        "Clayers=2",
-        "Corder=PCRL",
-        "Cprecincts={8,8}",
-        "Cblk={8,8}",
-        "Rshift=15",
-        "ORGgen_plt=yes",
-        "ORGtparts=R",
+        "Clayers=2", "Corder=PCRL",    "Cprecincts={8,8}", "Cblk={8,8}",
+        "Rshift=15", "ORGgen_plt=yes", "ORGtparts=R",
     };
     RectRoiImage roi(4, 4, 16, 16);
     kdu_long lbytes[2] = {600, 1800};
-    const auto bytes = EncodeCodestream(spec, MakePlanes(spec), &roi, lbytes, 2);
+    const auto bytes =
+        EncodeCodestream(spec, MakePlanes(spec), &roi, lbytes, 2);
     ASSERT_FALSE(bytes.empty());
 
     BufferSource src(bytes);
@@ -1088,8 +1097,9 @@ TEST_F(CompressedTest, ResilientCorruptPacketAndPersistentRestartPaths) {
   const auto bytes = EncodeCodestream(spec, MakePlanes(spec));
   ASSERT_GT(bytes.size(), 100U);
 
-  std::vector<kdu_byte> trunc(bytes.begin(),
-                              bytes.begin() + static_cast<ptrdiff_t>(bytes.size() * 2 / 3));
+  std::vector<kdu_byte> trunc(
+      bytes.begin(),
+      bytes.begin() + static_cast<ptrdiff_t>(bytes.size() * 2 / 3));
   BufferSource tsrc(trunc);
   kdu_codestream rcs;
   rcs.create(&tsrc);
@@ -1135,7 +1145,8 @@ TEST_F(CompressedTest, ResilientCorruptPacketAndPersistentRestartPaths) {
     kdu_codestream vcs;
     vcs.create(&vsrc);
     kdu_tile vt = vcs.open_tile(kdu_coords(0, 0));
-    kdu_subband vsb = vt.access_component(0).access_resolution(0).access_subband(LL_BAND);
+    kdu_subband vsb =
+        vt.access_component(0).access_resolution(0).access_subband(LL_BAND);
     float vf = 0.0f, me = 0.0f, vs = 0.0f;
     (void)vsb.get_masking_params(vf, me, vs);
     vt.close();
@@ -1145,22 +1156,17 @@ TEST_F(CompressedTest, ResilientCorruptPacketAndPersistentRestartPaths) {
 
 TEST_F(CompressedTest, CplexEstSingleThreadScbrAndFragmentsPaths) {
   // 1. Multi-set Scbr + Cplex=EST + SPF fragments + max_slope_threshold.
-  for (const char* delay_cfg :
-       {"Cplex={6,EST,0.25,0}", "Cplex={6,EST,0.25,8}",
-        "Cplex={6,EST,0.25,-1}"}) {
+  for (const char* delay_cfg : {"Cplex={6,EST,0.25,0}", "Cplex={6,EST,0.25,8}",
+                                "Cplex={6,EST,0.25,-1}"}) {
     CodestreamSpec spec;
     spec.width = 128;
     spec.height = 128;
     spec.components = 1;
     spec.reversible = false;
     spec.dwt_levels = 2;
-    spec.extra_params = {"Corder=PCRL",
-                         "Cprecincts={16,16}",
-                         "Cblk={8,8}",
-                         "Clayers=1",
-                         "Scbr={1,128}",
-                         "Content_type=PHOTO",
-                         delay_cfg};
+    spec.extra_params = {
+        "Corder=PCRL",  "Cprecincts={16,16}", "Cblk={8,8}", "Clayers=1",
+        "Scbr={1,128}", "Content_type=PHOTO", delay_cfg};
     const auto planes = MakePlanes(spec);
     siz_params siz;
     ConfigureSiz(siz, spec);
@@ -1182,8 +1188,8 @@ TEST_F(CompressedTest, CplexEstSingleThreadScbrAndFragmentsPaths) {
       const float scale = 1.0f / static_cast<float>(1 << spec.bit_depth);
       const int offset = 1 << (spec.bit_depth - 1);
       for (int x = 0; x < spec.width; ++x) {
-        const int v = planes[0][static_cast<size_t>(y) * spec.width + x] -
-                      offset;
+        const int v =
+            planes[0][static_cast<size_t>(y) * spec.width + x] - offset;
         if (line->get_buf32() != nullptr) {
           line->get_buf32()[x].fval = static_cast<float>(v) * scale;
         } else {
@@ -1210,10 +1216,10 @@ TEST_F(CompressedTest, CplexEstSingleThreadScbrAndFragmentsPaths) {
     spec.components = 3;
     spec.reversible = false;
     spec.dwt_levels = 2;
-    spec.extra_params = {"Corder=RPCL",         "Cprecincts={16,16}",
-                         "Cblk={8,8}",          "Cdecomp=B(-:-:-)",
-                         "Content_type=SCREEN", "Cplex={6,EST,0.25,0}",
-                         "Clayers=2"};
+    spec.extra_params = {
+        "Corder=RPCL",      "Cprecincts={16,16}",  "Cblk={8,8}",
+        "Cdecomp=B(-:-:-)", "Content_type=SCREEN", "Cplex={6,EST,0.25,0}",
+        "Clayers=2"};
     const auto planes = MakePlanes(spec);
     siz_params siz;
     ConfigureSiz(siz, spec);
@@ -1281,8 +1287,8 @@ TEST_F(CompressedTest, DecodingCorruptPacketsFetchBlockAndPrecinctQueries) {
     spec.components = 2;
     spec.reversible = rev;
     spec.dwt_levels = 2;
-    spec.extra_params = {"Cycc=no",    "Clayers=3",         "Cprecincts={16,16}",
-                         "Cblk={8,8}", "Cuse_sop=yes",      "Cuse_eph=yes",
+    spec.extra_params = {"Cycc=no",    "Clayers=3",    "Cprecincts={16,16}",
+                         "Cblk={8,8}", "Cuse_sop=yes", "Cuse_eph=yes",
                          "Corder=RLCP"};
     const auto planes = MakePlanes(spec);
 
@@ -1314,11 +1320,13 @@ TEST_F(CompressedTest, DecodingCorruptPacketsFetchBlockAndPrecinctQueries) {
                 offset;
             if (line->is_absolute()) {
               line->get_buf16() != nullptr
-                  ? (void)(line->get_buf16()[x].ival = static_cast<kdu_int16>(v))
+                  ? (void)(line->get_buf16()[x].ival =
+                               static_cast<kdu_int16>(v))
                   : (void)(line->get_buf32()[x].ival = v);
             } else if (line->get_buf32() != nullptr) {
               line->get_buf32()[x].fval =
-                  static_cast<float>(v) / static_cast<float>(1 << spec.bit_depth);
+                  static_cast<float>(v) /
+                  static_cast<float>(1 << spec.bit_depth);
             } else {
               line->get_buf16()[x].ival =
                   static_cast<kdu_int16>(v << (KDU_FIX_POINT - spec.bit_depth));
@@ -1335,7 +1343,9 @@ TEST_F(CompressedTest, DecodingCorruptPacketsFetchBlockAndPrecinctQueries) {
 
       kdu_tile rtile = ocs.review_closed_tile(kdu_coords(0, 0));
       EXPECT_TRUE(rtile.exists());
-      kdu_subband sb = rtile.access_component(0).access_resolution(0).access_subband(LL_BAND);
+      kdu_subband sb =
+          rtile.access_component(0).access_resolution(0).access_subband(
+              LL_BAND);
       float wmse[16] = {};
       EXPECT_GT(sb.get_per_plane_wmse(wmse, 16, false), 0);
       kdu_dims vblks;
@@ -1406,8 +1416,8 @@ TEST_F(CompressedTest, DecodingCorruptPacketsFetchBlockAndPrecinctQueries) {
 
       // Seekable source + corrupt packet triggers error 36 in
       // handle_corrupt_packet when resilient is enabled.
-      BufferSource seek_src(corrupt,
-                            KDU_SOURCE_CAP_SEQUENTIAL | KDU_SOURCE_CAP_SEEKABLE);
+      BufferSource seek_src(
+          corrupt, KDU_SOURCE_CAP_SEQUENTIAL | KDU_SOURCE_CAP_SEEKABLE);
       kdu_codestream scs;
       scs.create(&seek_src);
       scs.set_resilient(true);
@@ -1518,8 +1528,9 @@ TEST_F(CompressedTest, Part2NltLutSmagUmagMctDepAndRxformPaths) {
     std::vector<int> roff(static_cast<size_t>(nbo));
     std::vector<int> aout(static_cast<size_t>(nbo));
     EXPECT_TRUE(tile.get_mct_dependency_info(
-        0, 0, dep_rev, rev ? nullptr : fcoeff.data(), rev ? nullptr : foff.data(),
-        rev ? rcoeff.data() : nullptr, rev ? roff.data() : nullptr, aout.data()));
+        0, 0, dep_rev, rev ? nullptr : fcoeff.data(),
+        rev ? nullptr : foff.data(), rev ? rcoeff.data() : nullptr,
+        rev ? roff.data() : nullptr, aout.data()));
     EXPECT_GT(tile.find_component_gain_info(0, false), 0.0f);
     EXPECT_GT(tile.find_component_gain_info(0, true), 0.0f);
     tile.close();
@@ -1528,7 +1539,8 @@ TEST_F(CompressedTest, Part2NltLutSmagUmagMctDepAndRxformPaths) {
     cs.destroy();
   }
 
-  // 3. MCT multi-block matrix (irreversible + reversible rxform) + output subset.
+  // 3. MCT multi-block matrix (irreversible + reversible rxform) + output
+  // subset.
   for (bool rev : {true, false}) {
     CodestreamSpec spec;
     spec.width = 24;
@@ -1786,7 +1798,8 @@ class AsyncMemSource : public kdu_compressed_source {
  private:
   void AdvanceToLocked(size_t next_avail) {
     const size_t cur_avail = avail_.load(std::memory_order_relaxed);
-    const size_t clamped = std::min(data_.size(), std::max(cur_avail, next_avail));
+    const size_t clamped =
+        std::min(data_.size(), std::max(cur_avail, next_avail));
     avail_.store(clamped, std::memory_order_release);
   }
 
@@ -1888,9 +1901,10 @@ class CountingInputMonitor : public kdu_input_codestream_monitor {
   int restarted = 0;
 };
 
-std::vector<kdu_byte> RepackWithPackedHeaders(
-    const std::vector<kdu_byte>& src, bool use_ppm, bool emit_both = false,
-    bool truncate_packed = false) {
+std::vector<kdu_byte> RepackWithPackedHeaders(const std::vector<kdu_byte>& src,
+                                              bool use_ppm,
+                                              bool emit_both = false,
+                                              bool truncate_packed = false) {
   auto read_u16 = [&](size_t p) -> kdu_uint16 {
     return (static_cast<kdu_uint16>(src[p]) << 8) | src[p + 1];
   };
@@ -1992,9 +2006,9 @@ std::vector<kdu_byte> RepackWithPackedHeaders(
   for (const auto& tp : tparts) {
     std::vector<kdu_byte> tp_bytes = tp.header_prefix;
     if (!use_ppm || emit_both) {
-      const size_t split_at =
-          tp.packed_hdrs.size() > 8 ? tp.packed_hdrs.size() / 2
-                                    : tp.packed_hdrs.size();
+      const size_t split_at = tp.packed_hdrs.size() > 8
+                                  ? tp.packed_hdrs.size() / 2
+                                  : tp.packed_hdrs.size();
       kdu_byte zppt = 0;
       for (size_t off = 0; off < tp.packed_hdrs.size();) {
         const size_t chunk =
@@ -2100,8 +2114,7 @@ TEST_F(CompressedTest, AutoFlushFlushStatsCbrBulkFillAndReinitializePaths) {
                          "Cprecincts={64,64}", "Scbr={1,512}"};
     const auto planes = MakePlanes(spec);
     kdu_long cbr_bytes[1] = {49152};
-    const auto bytes =
-        EncodeCodestream(spec, planes, nullptr, cbr_bytes, 1);
+    const auto bytes = EncodeCodestream(spec, planes, nullptr, cbr_bytes, 1);
     EXPECT_GE(bytes.size(), 40000U);
   }
 
@@ -2259,8 +2272,8 @@ TEST_F(CompressedTest,
     spec.dwt_levels = 2;
     spec.tile_size = kdu_coords(16, 16);
     spec.extra_params = {
-        "Clayers=2", "Corder=LRCP", "Cprecincts={8,8}", "Cblk={8,8}",
-        "Qstep=0.01", "Qstep:T1=0.04", "Rshift:T2=16", "Corder:T3=RLCP",
+        "Clayers=2",  "Corder=LRCP",   "Cprecincts={8,8}", "Cblk={8,8}",
+        "Qstep=0.01", "Qstep:T1=0.04", "Rshift:T2=16",     "Corder:T3=RLCP",
     };
     const auto bytes = EncodeCodestream(spec, MakePlanes(spec));
     BufferSource src(bytes);
@@ -2300,8 +2313,8 @@ TEST_F(CompressedTest,
     qlim.set_comp_info(0, 1.0F, -1);
     qlim.set_comp_info(1, 2.0F, 1);
     qlim.set_comp_info(2, 2.0F, 1);
-    cs.apply_input_restrictions(0, 0, 1, 0, nullptr,
-                                KDU_WANT_OUTPUT_COMPONENTS, nullptr, &qlim);
+    cs.apply_input_restrictions(0, 0, 1, 0, nullptr, KDU_WANT_OUTPUT_COMPONENTS,
+                                nullptr, &qlim);
     {
       kdu_tile tile = cs.open_tile(kdu_coords(0, 0));
       kdu_uint32 mct_hash = 0;
@@ -2316,7 +2329,8 @@ TEST_F(CompressedTest,
   }
 }
 
-TEST_F(CompressedTest, PpmPptPackedHeadersAsyncNonBlockingAndCorruptHeaderPaths) {
+TEST_F(CompressedTest,
+       PpmPptPackedHeadersAsyncNonBlockingAndCorruptHeaderPaths) {
   // 1. Packed packet headers: PPM, PPT, combined PPM+PPT error 13,
   //    cached+PPT error 6, truncated PPT error 27.
   {
@@ -2369,15 +2383,15 @@ TEST_F(CompressedTest, PpmPptPackedHeadersAsyncNonBlockingAndCorruptHeaderPaths)
     size_t sot = 2;
     while (sot + 4 <= ppt_bytes.size() &&
            !((ppt_bytes[sot] == 0xFF) && (ppt_bytes[sot + 1] == 0x90))) {
-      const size_t len = (static_cast<size_t>(ppt_bytes[sot + 2]) << 8) |
-                         ppt_bytes[sot + 3];
+      const size_t len =
+          (static_cast<size_t>(ppt_bytes[sot + 2]) << 8) | ppt_bytes[sot + 3];
       sot += 2 + len;
     }
     size_t sod = sot + 12;
     while (sod + 2 <= ppt_bytes.size() &&
            !((ppt_bytes[sod] == 0xFF) && (ppt_bytes[sod + 1] == 0x93))) {
-      const size_t len = (static_cast<size_t>(ppt_bytes[sod + 2]) << 8) |
-                         ppt_bytes[sod + 3];
+      const size_t len =
+          (static_cast<size_t>(ppt_bytes[sod + 2]) << 8) | ppt_bytes[sod + 3];
       sod += 2 + len;
     }
     ASSERT_LT(sod, ppt_bytes.size());
@@ -2420,11 +2434,11 @@ TEST_F(CompressedTest, PpmPptPackedHeadersAsyncNonBlockingAndCorruptHeaderPaths)
     spec.extra_params = {"Clayers=2", "Cblk={16,16}", "Cprecincts={16,16}"};
     const auto bytes = EncodeCodestream(spec, MakePlanes(spec));
 
-    AsyncMemSource async_src(
-        bytes, 64, 48,
-        KDU_SOURCE_CAP_MEMORY_BACKED | KDU_SOURCE_CAP_ASYNC_NOTIFICATION |
-            KDU_SOURCE_CAP_SEEKABLE,
-        /*note_block_once=*/true);
+    AsyncMemSource async_src(bytes, 64, 48,
+                             KDU_SOURCE_CAP_MEMORY_BACKED |
+                                 KDU_SOURCE_CAP_ASYNC_NOTIFICATION |
+                                 KDU_SOURCE_CAP_SEEKABLE,
+                             /*note_block_once=*/true);
     kdu_codestream cs;
     cs.create(&async_src);
     cs.enable_restart();
@@ -2460,15 +2474,16 @@ TEST_F(CompressedTest, PpmPptPackedHeadersAsyncNonBlockingAndCorruptHeaderPaths)
       if (transpose) cs.change_appearance(true, false, false);
       error_handler_.clear();
       EXPECT_THROW(([&]() {
-        kdu_tile tile = cs.open_tile(kdu_coords(0, 0));
-        try {
-          PushTileSamples(cs, tile, pl, s);
-        } catch (...) {
-          if (tile.exists()) tile.close();
-          throw;
-        }
-        tile.close();
-      })(), int);
+                     kdu_tile tile = cs.open_tile(kdu_coords(0, 0));
+                     try {
+                       PushTileSamples(cs, tile, pl, s);
+                     } catch (...) {
+                       if (tile.exists()) tile.close();
+                       throw;
+                     }
+                     tile.close();
+                   })(),
+                   int);
       cs.destroy();
     };
     expect_cbr_start_fail(spec, planes, /*transpose=*/true);
@@ -2528,8 +2543,8 @@ TEST_F(CompressedTest, RemainingSingleThreadCoveragePaths) {
     spec.dwt_levels = 2;
     spec.tile_size = kdu_coords(16, 16);
     spec.extra_params = {
-        "Clayers=2", "Corder=LRCP", "Cprecincts={8,8}", "Cblk={8,8}",
-        "Qderived=yes", "Qstep=0.01", "Qstep:T1=0.04", "Rshift:T2=16",
+        "Clayers=2",      "Corder=LRCP",    "Cprecincts={8,8}", "Cblk={8,8}",
+        "Qderived=yes",   "Qstep=0.01",     "Qstep:T1=0.04",    "Rshift:T2=16",
         "Qderived:T3=no", "Corder:T4=RLCP",
     };
     const auto bytes = EncodeCodestream(spec, MakePlanes(spec));
@@ -2542,7 +2557,8 @@ TEST_F(CompressedTest, RemainingSingleThreadCoveragePaths) {
     cs.destroy();
   }
 
-  // 2. kdu_quality_limiter with multi-stage MCT (kd_tile::set_elements_of_interest
+  // 2. kdu_quality_limiter with multi-stage MCT
+  // (kd_tile::set_elements_of_interest
   //    mct_head != NULL loop).
   {
     CodestreamSpec spec;
@@ -2552,14 +2568,24 @@ TEST_F(CompressedTest, RemainingSingleThreadCoveragePaths) {
     spec.reversible = false;
     spec.dwt_levels = 2;
     spec.extra_params = {
-        "Cycc=no", "Clayers=2", "Cprecincts={16,16}", "Cblk={8,8}",
-        "Sextensions=MCT", "Mcomponents=4", "Mprecision=8", "Msigned=no",
-        "Mmatrix_size:I1=4", "Mmatrix_coeffs:I1=1,0,0,1",
-        "Mmatrix_size:I2=4", "Mmatrix_coeffs:I2=1,0,0,1",
-        "Mstage_inputs:I1={0,1},{2,3}", "Mstage_outputs:I1={0,1},{2,3}",
+        "Cycc=no",
+        "Clayers=2",
+        "Cprecincts={16,16}",
+        "Cblk={8,8}",
+        "Sextensions=MCT",
+        "Mcomponents=4",
+        "Mprecision=8",
+        "Msigned=no",
+        "Mmatrix_size:I1=4",
+        "Mmatrix_coeffs:I1=1,0,0,1",
+        "Mmatrix_size:I2=4",
+        "Mmatrix_coeffs:I2=1,0,0,1",
+        "Mstage_inputs:I1={0,1},{2,3}",
+        "Mstage_outputs:I1={0,1},{2,3}",
         "Mstage_collections:I1={2,2},{2,2}",
         "Mstage_xforms:I1={MATRIX,1,0,0,0},{MATRIX,2,0,0,0}",
-        "Mnum_stages=1", "Mstages=1",
+        "Mnum_stages=1",
+        "Mstages=1",
     };
     const auto bytes = EncodeCodestream(spec, MakePlanes(spec));
     BufferSource src(bytes);
@@ -2571,8 +2597,8 @@ TEST_F(CompressedTest, RemainingSingleThreadCoveragePaths) {
     qlim.set_comp_info(1, 2.0F, 1);
     qlim.set_comp_info(2, 2.0F, 1);
     qlim.set_comp_info(3, 1.5F, -1);
-    cs.apply_input_restrictions(0, 0, 1, 0, nullptr,
-                                KDU_WANT_OUTPUT_COMPONENTS, nullptr, &qlim);
+    cs.apply_input_restrictions(0, 0, 1, 0, nullptr, KDU_WANT_OUTPUT_COMPONENTS,
+                                nullptr, &qlim);
     const auto dec = DecodeCodestream(cs, false);
     EXPECT_EQ(dec.size(), 4U);
     cs.destroy();
@@ -2617,7 +2643,7 @@ TEST_F(CompressedTest, RemainingSingleThreadCoveragePaths) {
     spec.components = 1;
     spec.reversible = false;
     spec.dwt_levels = 2;
-    spec.extra_params = {"Corder=PCRL", "Clayers=1", "Cprecincts={32,32}",
+    spec.extra_params = {"Corder=PCRL",  "Clayers=1",   "Cprecincts={32,32}",
                          "Cblk={16,16}", "Qstep=0.001", "Scbr={1,256}"};
     const auto planes = MakePlanes(spec);
     kdu_long cbr_bytes[1] = {32771};  // Odd target larger than encoded data.
@@ -2636,8 +2662,9 @@ TEST_F(CompressedTest, RemainingSingleThreadCoveragePaths) {
     spec.reversible = true;
     spec.dwt_levels = 2;
     spec.tile_size = kdu_coords(32, 32);
-    spec.extra_params = {"Clayers=2", "Cuse_sop=yes", "Cuse_eph=yes",
-                         "Cprecincts={16,16}", "Cblk={8,8}", "ORGgen_plt=yes"};
+    spec.extra_params = {"Clayers=2",    "Cuse_sop=yes",
+                         "Cuse_eph=yes", "Cprecincts={16,16}",
+                         "Cblk={8,8}",   "ORGgen_plt=yes"};
     const auto bytes = EncodeCodestream(spec, MakePlanes(spec));
 
     // Non-seekable AsyncMemSource.
@@ -2824,9 +2851,9 @@ TEST_F(CompressedTest, MultiThreadedEncodingAndDecodingPaths) {
     spec.dwt_levels = 2;
     spec.tile_size = kdu_coords(64, 64);
     spec.extra_params = {
-        "Cycc=yes", "Clayers=2", "Corder=PCRL", "Cprecincts={16,16}",
-        "Cblk={8,8}", "Cuse_sop=yes", "Cuse_eph=yes", "ORGgen_plt=yes",
-        "Cplex={6,EST,0.25,0}",
+        "Cycc=yes",           "Clayers=2",      "Corder=PCRL",
+        "Cprecincts={16,16}", "Cblk={8,8}",     "Cuse_sop=yes",
+        "Cuse_eph=yes",       "ORGgen_plt=yes", "Cplex={6,EST,0.25,0}",
     };
     const auto planes = MakePlanes(spec);
     siz_params siz;
@@ -2862,8 +2889,9 @@ TEST_F(CompressedTest, MultiThreadedEncodingAndDecodingPaths) {
   }
 
   // 2. Multi-threaded decoding: open_tiles(bkgnd_open), access_tile(&env),
-  //    kdu_multi_synthesis(&env), close_in_background, apply_input_restrictions,
-  //    close_tiles(&env), restart(&env), plus MT compact_blocks and async.
+  //    kdu_multi_synthesis(&env), close_in_background,
+  //    apply_input_restrictions, close_tiles(&env), restart(&env), plus MT
+  //    compact_blocks and async.
   {
     BufferSource src1(mt_tgt1.data);
     BufferSource src2(mt_tgt2.data);
@@ -2910,7 +2938,7 @@ TEST_F(CompressedTest, MultiThreadedEncodingAndDecodingPaths) {
     spec.reversible = true;
     spec.dwt_levels = 2;
     spec.tile_size = kdu_coords(16, 16);
-    spec.extra_params = {"Clayers=1", "Corder=LRCP", "Cprecincts={8,8}",
+    spec.extra_params = {"Clayers=1",  "Corder=LRCP",  "Cprecincts={8,8}",
                          "Cblk={8,8}", "Rshift:T1=16", "Corder:T2=RLCP"};
     const auto bytes = EncodeCodestream(spec, MakePlanes(spec));
     BufferSource mem_src(bytes, KDU_SOURCE_CAP_SEQUENTIAL |
@@ -3024,9 +3052,10 @@ TEST_F(CompressedTest, MultiFragmentSpfAppearanceAndCancellationPaths) {
     spec.components = 3;
     spec.reversible = false;
     spec.dwt_levels = 2;
-    spec.extra_params = {"Corder=RPCL", "Cprecincts={16,16}", "Cblk={8,8}",
-                         "Cdecomp=B(-:-:-)", "Cprog_weights=0.5,2.0,2.0",
-                         "Cplex={6,EST,0.25,0}", "Clayers=2"};
+    spec.extra_params = {
+        "Corder=RPCL",      "Cprecincts={16,16}",        "Cblk={8,8}",
+        "Cdecomp=B(-:-:-)", "Cprog_weights=0.5,2.0,2.0", "Cplex={6,EST,0.25,0}",
+        "Clayers=2"};
     const auto planes = MakePlanes(spec);
     siz_params siz;
     ConfigureSiz(siz, spec);
@@ -3074,8 +3103,9 @@ TEST_F(CompressedTest, MultiFragmentSpfAppearanceAndCancellationPaths) {
         kdu_sample16* d16 = line->get_buf16();
         for (int x = 0; x < widths[c]; ++x) {
           const int cx = x % spec.width;
-          const float fval = static_cast<float>(
-              planes[c][static_cast<size_t>(y) * spec.width + cx] - off) *
+          const float fval =
+              static_cast<float>(
+                  planes[c][static_cast<size_t>(y) * spec.width + cx] - off) *
               scale;
           if (d32 != nullptr) {
             d32[x].fval = fval;
@@ -3216,7 +3246,7 @@ TEST_F(CompressedTest, MultiFragmentSpfAppearanceAndCancellationPaths) {
     spec.components = 1;
     spec.reversible = false;
     spec.dwt_levels = 2;
-    spec.extra_params = {"Corder=PCRL", "Clayers=1", "Cprecincts={64,64}",
+    spec.extra_params = {"Corder=PCRL",  "Clayers=1",    "Cprecincts={64,64}",
                          "Cblk={16,16}", "Qstep=0.0005", "Scbr={1,512}"};
     std::vector<std::vector<int>> smooth_planes(
         1, std::vector<int>(static_cast<size_t>(spec.width * spec.height), 0));
@@ -3262,21 +3292,36 @@ TEST_F(CompressedTest, ProfilesInterchangeMctAndPacketErrorPaths) {
   const std::vector<ProfileCase> profile_cases = {
       // PROFILE0 violations: non-zero origin, BYPASS mode, Rshift out of range.
       {{"Sprofile=PROFILE0", "Cmodes=BYPASS", "Cblk={16,16}", "Rshift=40"},
-       kdu_coords(0, 0), kdu_coords(1, 1), false, 8},
+       kdu_coords(0, 0),
+       kdu_coords(1, 1),
+       false,
+       8},
       // PROFILE1 violation: rectangular Cblk > 64 (Srequired_CBto6).
       {{"Sprofile=PROFILE1", "Cblk={128,32}"},
-       kdu_coords(0, 0), kdu_coords(0, 0), false, 8},
+       kdu_coords(0, 0),
+       kdu_coords(0, 0),
+       false,
+       8},
       // CINEMA2S: forbids SOP/EPH, requires 5x5 CB, P<=256, irrev.
       {{"Sprofile=CINEMA2S", "Cuse_sop=yes", "Cuse_eph=yes", "Cblk={16,16}",
         "Cprecincts={512,512}"},
-       kdu_coords(0, 0), kdu_coords(0, 0), true, 12},
+       kdu_coords(0, 0),
+       kdu_coords(0, 0),
+       true,
+       12},
       // CINEMASS: requires SOP/EPH and P >= CB.
       {{"Sprofile=CINEMASS", "Cuse_sop=no", "Cuse_eph=no", "Cprecincts={8,8}",
         "Cblk={32,32}"},
-       kdu_coords(0, 0), kdu_coords(0, 0), false, 12},
+       kdu_coords(0, 0),
+       kdu_coords(0, 0),
+       false,
+       12},
       // BROADCAST: requires CB 7x6 / reversible mismatch / multi-tile.
       {{"Sprofile=BROADCAST", "Sbroadcast={6,single,rev}", "Cblk={16,16}"},
-       kdu_coords(64, 64), kdu_coords(0, 0), false, 10},
+       kdu_coords(64, 64),
+       kdu_coords(0, 0),
+       false,
+       10},
   };
   for (const auto& pc : profile_cases) {
     warning_handler_.clear();
@@ -3350,8 +3395,9 @@ TEST_F(CompressedTest, ProfilesInterchangeMctAndPacketErrorPaths) {
   }
 
   // 2. kdu_node::access_primary_child, change_appearance(transpose+vflip+hflip)
-  //    get_parent_dims / get_valid_block_span, interchange kdu_subband::open_block,
-  //    and set_synth_overshoot_limit(generate_errors=true).
+  //    get_parent_dims / get_valid_block_span, interchange
+  //    kdu_subband::open_block, and
+  //    set_synth_overshoot_limit(generate_errors=true).
   for (bool reversible : {true, false}) {
     CodestreamSpec spec;
     spec.width = 64;
@@ -3457,14 +3503,24 @@ TEST_F(CompressedTest, ProfilesInterchangeMctAndPacketErrorPaths) {
     spec.dwt_levels = 2;
     spec.tile_size = kdu_coords(32, 32);
     spec.extra_params = {
-        "Cycc=no", "Clayers=2", "Cprecincts={16,16}", "Cblk={8,8}",
-        "Sextensions=MCT", "Mcomponents=4", "Mprecision=8", "Msigned=no",
-        "Mmatrix_size:I1=4", "Mmatrix_coeffs:I1=1,0,0,1",
-        "Mmatrix_size:I2=4", "Mmatrix_coeffs:I2=1,0,0,1",
-        "Mstage_inputs:I1={0,1},{2,3}", "Mstage_outputs:I1={0,1},{2,3}",
+        "Cycc=no",
+        "Clayers=2",
+        "Cprecincts={16,16}",
+        "Cblk={8,8}",
+        "Sextensions=MCT",
+        "Mcomponents=4",
+        "Mprecision=8",
+        "Msigned=no",
+        "Mmatrix_size:I1=4",
+        "Mmatrix_coeffs:I1=1,0,0,1",
+        "Mmatrix_size:I2=4",
+        "Mmatrix_coeffs:I2=1,0,0,1",
+        "Mstage_inputs:I1={0,1},{2,3}",
+        "Mstage_outputs:I1={0,1},{2,3}",
         "Mstage_collections:I1={2,2},{2,2}",
         "Mstage_xforms:I1={MATRIX,1,0,0,0},{MATRIX,2,0,0,0}",
-        "Mnum_stages=1", "Mstages=1",
+        "Mnum_stages=1",
+        "Mstages=1",
     };
     const auto b1 = EncodeCodestream(spec, MakePlanes(spec));
     CodestreamSpec spec2 = spec;
@@ -3504,8 +3560,8 @@ TEST_F(CompressedTest, ProfilesInterchangeMctAndPacketErrorPaths) {
     spec.components = 2;
     spec.reversible = false;
     spec.dwt_levels = 2;
-    spec.extra_params = {"Corder=LRCP", "Clayers=2", "Cprecincts={16,16}",
-                         "Cblk={8,8}", "Cuse_sop=yes", "Cuse_eph=yes"};
+    spec.extra_params = {"Corder=LRCP", "Clayers=2",    "Cprecincts={16,16}",
+                         "Cblk={8,8}",  "Cuse_sop=yes", "Cuse_eph=yes"};
     const auto base = EncodeCodestream(spec, MakePlanes(spec));
     std::vector<size_t> sops;
     for (size_t i = 0; i + 5 < base.size(); ++i) {
@@ -3577,7 +3633,8 @@ TEST_F(CompressedTest, ProfilesInterchangeMctAndPacketErrorPaths) {
 }
 
 TEST_F(CompressedTest, CbrBulkFillTlmRestartAsyncAndCornerPaths) {
-  // 1. Single-precinct-per-flush-set CBR forcing bulk_fill > 8192 and fine_fill > 0
+  // 1. Single-precinct-per-flush-set CBR forcing bulk_fill > 8192 and fine_fill
+  // > 0
   //    (with and without flush stats, plus secondary bulk fill).
   for (bool use_stats : {false, true}) {
     for (int h : {256, 128}) {
@@ -3588,12 +3645,8 @@ TEST_F(CompressedTest, CbrBulkFillTlmRestartAsyncAndCornerPaths) {
       spec.reversible = false;
       spec.dwt_levels = 0;
       spec.extra_params = {
-          "Corder=PCRL",
-          "Cprecincts={64,64}",
-          "Cblk={16,16}",
-          "Qstep=0.005",
-          "Clayers=1",
-          "Scbr={1,128}",
+          "Corder=PCRL", "Cprecincts={64,64}", "Cblk={16,16}",
+          "Qstep=0.005", "Clayers=1",          "Scbr={1,128}",
       };
       std::vector<std::vector<int>> planes(1);
       planes[0].resize(static_cast<size_t>(spec.width * spec.height));
@@ -3659,7 +3712,8 @@ TEST_F(CompressedTest, CbrBulkFillTlmRestartAsyncAndCornerPaths) {
     dec_cs.destroy();
   }
 
-  // 2. trans_pcrd_opt + adjust_slopes_for_trans_out on shrunk packet descriptors.
+  // 2. trans_pcrd_opt + adjust_slopes_for_trans_out on shrunk packet
+  // descriptors.
   {
     CodestreamSpec spec;
     spec.width = 64;
@@ -3835,9 +3889,8 @@ TEST_F(CompressedTest, CbrBulkFillTlmRestartAsyncAndCornerPaths) {
     spec2.reversible = false;
     spec2.dwt_levels = 1;
     spec2.extra_params = {
-        "Cycc=yes",       "Clayers=1",      "Cprecincts={32,32}",
-        "Cblk={16,16}",   "Qstep=0.02",     "ORGgen_plt=yes",
-        "Corder=RLCP",
+        "Cycc=yes",   "Clayers=1",      "Cprecincts={32,32}", "Cblk={16,16}",
+        "Qstep=0.02", "ORGgen_plt=yes", "Corder=RLCP",
     };
     const auto b2 = EncodeCodestream(spec2, MakePlanes(spec2));
     ASSERT_FALSE(b2.empty());
@@ -3854,7 +3907,8 @@ TEST_F(CompressedTest, CbrBulkFillTlmRestartAsyncAndCornerPaths) {
     };
     CaptureMsg text_out;
     cs.set_textualization(&text_out, false);
-    // Disjoint persistent crop before restart -> parse_all_relevant_packets(true).
+    // Disjoint persistent crop before restart ->
+    // parse_all_relevant_packets(true).
     kdu_dims crop1;
     crop1.pos = kdu_coords(0, 0);
     crop1.size = kdu_coords(16, 16);
@@ -3898,7 +3952,8 @@ TEST_F(CompressedTest, CbrBulkFillTlmRestartAsyncAndCornerPaths) {
       EXPECT_FALSE(t.get_ycc());  // comp 2 excluded!
       t.close();
     }
-    // Non-resizing restart with changed coding params triggers kd_tile::reinitialize.
+    // Non-resizing restart with changed coding params triggers
+    // kd_tile::reinitialize.
     cs.apply_input_restrictions(0, 0, 0, 0, nullptr,
                                 KDU_WANT_CODESTREAM_COMPONENTS);
     cs.restart(&s2);
@@ -3908,8 +3963,8 @@ TEST_F(CompressedTest, CbrBulkFillTlmRestartAsyncAndCornerPaths) {
     EXPECT_FALSE(text_out.out.empty());
     cs.destroy();
 
-    // Also cover parse_all_relevant_packets(true) returning false when !all_addressable
-    // and reset_packet_reading() on !compact_blocks.
+    // Also cover parse_all_relevant_packets(true) returning false when
+    // !all_addressable and reset_packet_reading() on !compact_blocks.
     BufferSource non_seek_src(b1, KDU_SOURCE_CAP_SEQUENTIAL);
     kdu_codestream ns_cs;
     ns_cs.create(&non_seek_src);
@@ -3930,7 +3985,8 @@ TEST_F(CompressedTest, CbrBulkFillTlmRestartAsyncAndCornerPaths) {
     }
     ns_cs.destroy();
 
-    // Non-persistent input_monitor + PLT reset_packet_reading (!compact_blocks).
+    // Non-persistent input_monitor + PLT reset_packet_reading
+    // (!compact_blocks).
     struct CountingMonitor : public kdu_input_codestream_monitor {
       void parsing_complete() override { ++done; }
       int done = 0;
@@ -4064,7 +4120,8 @@ TEST_F(CompressedTest, CbrBulkFillTlmRestartAsyncAndCornerPaths) {
       EXPECT_GT(tgt.data.size(), 40U);
     }
 
-    // Creslengths without SPF + Qweights mismatch on comp >= 1 + MCT luma_input_idx.
+    // Creslengths without SPF + Qweights mismatch on comp >= 1 + MCT
+    // luma_input_idx.
     {
       CodestreamSpec spec;
       spec.width = 48;
@@ -4121,7 +4178,8 @@ TEST_F(CompressedTest, CbrBulkFillTlmRestartAsyncAndCornerPaths) {
     EXPECT_FALSE(b_prec.empty());
     EXPECT_FALSE(warning_handler_.history().empty());
 
-    // 2-tile Profile-0 where tile 1 is written first (next_tnum mismatch warning).
+    // 2-tile Profile-0 where tile 1 is written first (next_tnum mismatch
+    // warning).
     pspec.width = 128;
     pspec.height = 128;
     pspec.tile_size = kdu_coords(64, 128);
@@ -4182,7 +4240,9 @@ TEST_F(CompressedTest, CbrBulkFillTlmRestartAsyncAndCornerPaths) {
       ScopedCachedSource(const std::vector<kdu_byte>& main_hdr,
                          const std::map<int, std::vector<kdu_byte>>& tile_hdrs,
                          const std::map<kdu_long, std::vector<kdu_byte>>& pkts)
-          : main_hdr_(main_hdr), tile_hdrs_(tile_hdrs), pkts_(pkts),
+          : main_hdr_(main_hdr),
+            tile_hdrs_(tile_hdrs),
+            pkts_(pkts),
             cur_(&main_hdr_) {}
       int get_capabilities() override { return KDU_SOURCE_CAP_CACHED; }
       kdu_long get_pos() override { return static_cast<kdu_long>(pos_); }
@@ -4205,7 +4265,8 @@ TEST_F(CompressedTest, CbrBulkFillTlmRestartAsyncAndCornerPaths) {
       }
       int read(kdu_byte* buf, int n) override {
         if (cur_ == nullptr || pos_ >= cur_->size() || n <= 0) return 0;
-        const size_t avail = std::min(static_cast<size_t>(n), cur_->size() - pos_);
+        const size_t avail =
+            std::min(static_cast<size_t>(n), cur_->size() - pos_);
         std::memcpy(buf, cur_->data() + pos_, avail);
         pos_ += avail;
         return static_cast<int>(avail);
@@ -4325,8 +4386,8 @@ TEST_F(CompressedTest, CbrBulkFillTlmRestartAsyncAndCornerPaths) {
       AsyncTrickleSource(std::vector<kdu_byte> data, size_t step)
           : data_(std::move(data)), step_(step) {}
       bool EnableStream() {
-        return enable(KDU_MEMBACKED_SOURCE_UNSERVICED, nullptr, 0, 0,
-                      -1.0, 64, data_.size() + 256);
+        return enable(KDU_MEMBACKED_SOURCE_UNSERVICED, nullptr, 0, 0, -1.0, 64,
+                      data_.size() + 256);
       }
       void ServiceStream() {
         size_t total = 0;
@@ -4344,8 +4405,8 @@ TEST_F(CompressedTest, CbrBulkFillTlmRestartAsyncAndCornerPaths) {
           return 0;
         }
         std::this_thread::yield();
-        const size_t n = std::min({data_.size() - pos_,
-                                   static_cast<size_t>(max_bytes), step_});
+        const size_t n = std::min(
+            {data_.size() - pos_, static_cast<size_t>(max_bytes), step_});
         std::memcpy(buffer, data_.data() + pos_, n);
         pos_ += n;
         return static_cast<kdu_long>(n);
@@ -4379,7 +4440,8 @@ TEST_F(CompressedTest, ProgressiveTlutOvershootReinitAndPacketErrors) {
     return s;
   };
 
-  // 1. Asymmetric Cdecomp corner empty precincts (17x17, Clevels=1) + P2 Sorigin.
+  // 1. Asymmetric Cdecomp corner empty precincts (17x17, Clevels=1) + P2
+  // Sorigin.
   for (const char* decomp : {"V(-)", "H(-)"}) {
     siz_params siz;
     siz.set(Sdims, 0, 0, 17);
@@ -4482,7 +4544,8 @@ TEST_F(CompressedTest, ProgressiveTlutOvershootReinitAndPacketErrors) {
 
   // 3. Progressive visual weights (Cprog_weights + Cband_weights + Qfparams +
   // Cplex EST tlut) at multiple budgets, Creslengths, ORGtpart_interrupts,
-  // and Slope-EST coding hints (set_slope_hint_policy + get_global_coding_hints).
+  // and Slope-EST coding hints (set_slope_hint_policy +
+  // get_global_coding_hints).
   for (int trial = 0; trial < 3; ++trial) {
     siz_params siz;
     siz.set(Sdims, 0, 0, 128);
@@ -4505,7 +4568,8 @@ TEST_F(CompressedTest, ProgressiveTlutOvershootReinitAndPacketErrors) {
     cod->parse_string("Clevels=3");
     cod->parse_string("Cblk={16,16}");
     cod->parse_string("Cprecincts={32,32}");
-    cod->parse_string("Cband_weights=0.25,0.25,0.25,0.5,0.5,0.5,0.5,0.5,0.5,1.0");
+    cod->parse_string(
+        "Cband_weights=0.25,0.25,0.25,0.5,0.5,0.5,0.5,0.5,0.5,1.0");
     cod->parse_string("Cprog_weights=0.5");
     cod->parse_string("Cplex={6,EST,0,0}");
     if (trial == 1) {
@@ -4724,7 +4788,8 @@ TEST_F(CompressedTest, ProgressiveTlutOvershootReinitAndPacketErrors) {
   }
 
   // 7. Packet header error branches (missing_msbs overflow, illegal marker in
-  // packet header, truncation, pre-SOT corruption) across default/resilient/allow.
+  // packet header, truncation, pre-SOT corruption) across
+  // default/resilient/allow.
   {
     siz_params siz;
     siz.set(Sdims, 0, 0, 64);
@@ -4799,9 +4864,10 @@ TEST_F(CompressedTest, ProgressiveTlutOvershootReinitAndPacketErrors) {
 
     std::vector<kdu_byte> bad_marker = orig;
     if (sod_pos + 8 < bad_marker.size()) {
-      size_t off = (bad_marker[sod_pos] == 0xFF && bad_marker[sod_pos + 1] == 0x91)
-                       ? sod_pos + 6
-                       : sod_pos;
+      size_t off =
+          (bad_marker[sod_pos] == 0xFF && bad_marker[sod_pos + 1] == 0x91)
+              ? sod_pos + 6
+              : sod_pos;
       bad_marker[off] = 0xFF;
       bad_marker[off + 1] = 0x64;
     }
@@ -4815,8 +4881,8 @@ TEST_F(CompressedTest, ProgressiveTlutOvershootReinitAndPacketErrors) {
         bad_msbs[off + k] = 0x00;
       }
     }
-    std::vector<kdu_byte> trunc_pkt(orig.begin(),
-                                    orig.begin() + std::min(orig.size(), sod_pos + 7));
+    std::vector<kdu_byte> trunc_pkt(
+        orig.begin(), orig.begin() + std::min(orig.size(), sod_pos + 7));
     std::vector<kdu_byte> bad_sot = orig;
     if (sot2_pos + 2 < bad_sot.size()) {
       bad_sot[sot2_pos + 1] = 0x64;
@@ -5015,7 +5081,8 @@ TEST_F(CompressedTest, FinalCompressedCoverageGaps) {
     cod->parse_string("Clevels=3");
     cod->parse_string("Cblk={16,16}");
     cod->parse_string("Cprecincts={32,32}");
-    cod->parse_string("Cband_weights=0.25,0.25,0.25,0.5,0.5,0.5,0.5,0.5,0.5,1.0");
+    cod->parse_string(
+        "Cband_weights=0.25,0.25,0.25,0.5,0.5,0.5,0.5,0.5,0.5,1.0");
     cod->parse_string("Cprog_weights=0.5");
     cod->parse_string("Cplex={6,EST,0,0}");
     qcd->parse_string("Qstep=0.01");
@@ -5057,7 +5124,8 @@ TEST_F(CompressedTest, FinalCompressedCoverageGaps) {
     cod->parse_string("Cprecincts={16,16}");
     cod->parse_string("Corder=PCRL");
     cod->parse_string("Clayers=2");
-    cod->parse_string("Cband_weights=0.25,0.25,0.25,0.5,0.5,0.5,0.5,0.5,0.5,1.0");
+    cod->parse_string(
+        "Cband_weights=0.25,0.25,0.25,0.5,0.5,0.5,0.5,0.5,0.5,1.0");
     cod->parse_string("Cprog_weights=0.5");
     cod->parse_string("Cplex={6,EST,0,0}");
     qcd->parse_string("Qstep=0.01");
@@ -5263,7 +5331,8 @@ TEST_F(CompressedTest, FinalCompressedCoverageGaps) {
       }
       int read(kdu_byte* buf, int n) override {
         if (cur_ == nullptr || pos_ >= cur_->size() || n <= 0) return 0;
-        const size_t avail = std::min(static_cast<size_t>(n), cur_->size() - pos_);
+        const size_t avail =
+            std::min(static_cast<size_t>(n), cur_->size() - pos_);
         std::memcpy(buf, cur_->data() + pos_, avail);
         pos_ += avail;
         return static_cast<int>(avail);
@@ -5389,7 +5458,8 @@ TEST_F(CompressedTest, FinalCompressedCoverageGaps) {
     kdu_tile rtile = cs.review_closed_tile(kdu_coords(0, 0));
     if (rtile.exists()) {
       kdu_subband sb =
-          rtile.access_component(0).access_resolution(0).access_subband(LL_BAND);
+          rtile.access_component(0).access_resolution(0).access_subband(
+              LL_BAND);
       kdu_dims vblks;
       sb.get_valid_blocks(vblks);
       if (!vblks.is_empty()) {
@@ -5635,9 +5705,9 @@ TEST_F(CompressedTest, CompressedCoverage90Push) {
     cs.destroy();
   }
 
-  // 2. augment_cache_threshold() + set_persistent() so released precincts remain
-  // cached across max_layers 1 -> 2, exercising reset_packet_reading() on both
-  // !compact_blocks and compact_blocks, plus MT cache eviction &
+  // 2. augment_cache_threshold() + set_persistent() so released precincts
+  // remain cached across max_layers 1 -> 2, exercising reset_packet_reading()
+  // on both !compact_blocks and compact_blocks, plus MT cache eviction &
   // get_precinct_packets after consumption.
   {
     siz_params siz;
@@ -5698,7 +5768,8 @@ TEST_F(CompressedTest, CompressedCoverage90Push) {
       }
       int read(kdu_byte* buf, int n) override {
         if (cur_ == nullptr || pos_ >= cur_->size() || n <= 0) return 0;
-        const size_t avail = std::min(static_cast<size_t>(n), cur_->size() - pos_);
+        const size_t avail =
+            std::min(static_cast<size_t>(n), cur_->size() - pos_);
         std::memcpy(buf, cur_->data() + pos_, avail);
         pos_ += avail;
         return static_cast<int>(avail);
@@ -5727,8 +5798,8 @@ TEST_F(CompressedTest, CompressedCoverage90Push) {
       dcs.destroy();
     }
     {
-      BufferSource seek_src(stgt.data, KDU_SOURCE_CAP_SEQUENTIAL |
-                                           KDU_SOURCE_CAP_SEEKABLE);
+      BufferSource seek_src(
+          stgt.data, KDU_SOURCE_CAP_SEQUENTIAL | KDU_SOURCE_CAP_SEEKABLE);
       kdu_codestream dcs;
       dcs.create(&seek_src);
       dcs.enable_restart();
@@ -5968,7 +6039,8 @@ TEST_F(CompressedTest, CompressedCoverage90Push) {
   }
 
   // 5. Packet-body truncation & overrun with valid packet header in default,
-  // resilient, and allow_parsing_errors modes (incl. explicit parse_all_relevant_packets).
+  // resilient, and allow_parsing_errors modes (incl. explicit
+  // parse_all_relevant_packets).
   {
     CodestreamSpec spec = make_spec(64, 64, 1);
     spec.reversible = true;
@@ -6047,7 +6119,7 @@ TEST_F(CompressedTest, CompressedCoverage90Finish) {
     spec.reversible = true;
     spec.tile_size = kdu_coords(64, 64);
     spec.extra_params = {"Clevels=2",   "Cprecincts={16,16}", "Cblk={8,8}",
-                         "Clayers=3",   "Corder=RPCL",       "ORGgen_plt=yes",
+                         "Clayers=3",   "Corder=RPCL",        "ORGgen_plt=yes",
                          "Cuse_sop=yes"};
     std::vector<int> plane(128 * 128);
     for (int i = 0; i < 128 * 128; ++i) plane[i] = (i * 53) & 0xFF;
@@ -6071,11 +6143,11 @@ TEST_F(CompressedTest, CompressedCoverage90Finish) {
           bool tile_done = false;
           kdu_tile lt;
           while (!tile_done) {
-            kdu_tile nt = dcs.load_sequential(
-                &pset, tile_done, 2, 0,
-                KDU_LOAD_SEQUENTIAL_WANT_FLUSH_SET |
-                    KDU_LOAD_SEQUENTIAL_WANT_PACKET_BYTES,
-                nullptr);
+            kdu_tile nt =
+                dcs.load_sequential(&pset, tile_done, 2, 0,
+                                    KDU_LOAD_SEQUENTIAL_WANT_FLUSH_SET |
+                                        KDU_LOAD_SEQUENTIAL_WANT_PACKET_BYTES,
+                                    nullptr);
             if (!nt.exists()) break;
             lt = nt;
           }
@@ -6221,7 +6293,8 @@ TEST_F(CompressedTest, CompressedCoverage90Finish) {
         if (dcs.exists()) dcs.destroy();
       }
     }
-    // Corrupt first packet body to end with 0xFF 0x90? Wait: bump SOP seq >= total.
+    // Corrupt first packet body to end with 0xFF 0x90? Wait: bump SOP seq >=
+    // total.
     std::vector<size_t> sop_pos;
     for (size_t i = 0; i + 5 < orig.size(); ++i) {
       if (orig[i] == 0xFF && orig[i + 1] == 0x91 && orig[i + 2] == 0x00 &&
@@ -6263,8 +6336,11 @@ TEST_F(CompressedTest, CompressedCoverage90Finish) {
       s.extra_params = {prof_str,
                         std::string("Clevels=") + std::to_string(levs),
                         std::string("Clayers=") + std::to_string(layers),
-                        "Cblk={32,32}", "Corder=CPRL", "ORGgen_plt=yes",
-                        "ORGgen_tlm=1", "ORGtparts=C"};
+                        "Cblk={32,32}",
+                        "Corder=CPRL",
+                        "ORGgen_plt=yes",
+                        "ORGgen_tlm=1",
+                        "ORGtparts=C"};
       error_handler_.clear();
       try {
         const auto b = EncodeCodestream(s, MakePlanes(s));
@@ -6520,9 +6596,9 @@ TEST_F(CompressedTest, CompressedCoverage90Finish) {
       CodestreamSpec spec = make_spec(64, 64, 1);
       spec.reversible = false;
       spec.dwt_levels = 2;
-      spec.extra_params = {
-          "Cblk={16,16}", "Cprecincts={32,32}", "Rweight=0.5",
-          "Cband_weights=0.1,0.1,0.1,0.2,0.2,0.2,1.0", "Cprog_weights=0.5"};
+      spec.extra_params = {"Cblk={16,16}", "Cprecincts={32,32}", "Rweight=0.5",
+                           "Cband_weights=0.1,0.1,0.1,0.2,0.2,0.2,1.0",
+                           "Cprog_weights=0.5"};
       siz_params siz;
       ConfigureSiz(siz, spec);
       BufferTarget tgt;
@@ -6545,7 +6621,8 @@ TEST_F(CompressedTest, CompressedCoverage90Finish) {
       cs.destroy();
     }
 
-    // Interchange codestream + kdu_thread_env open_precinct / open_block / close_block
+    // Interchange codestream + kdu_thread_env open_precinct / open_block /
+    // close_block
     // + get_decomp_structure on dwt_level==0 and transposed r>0.
     {
       CodestreamSpec ispec = make_spec(64, 64, 1);
@@ -6582,6 +6659,9 @@ TEST_F(CompressedTest, CompressedCoverage90Finish) {
             kdu_dims binds;
             if (prec.get_valid_blocks(LL_BAND, binds) && !binds.is_empty()) {
               kdu_block* blk = sb.open_block(binds.pos, nullptr, &env);
+              blk->missing_msbs = 0;
+              blk->ht_skip_msbs = 0;
+              blk->num_passes = 0;
               sb.close_block(blk, &env);
             }
             prec.close();
@@ -6594,6 +6674,840 @@ TEST_F(CompressedTest, CompressedCoverage90Finish) {
       dec.destroy();
       env.destroy();
     }
+  }
+}
+
+TEST_F(CompressedTest, CompressedCoverage90FinalPush) {
+  auto make_spec = [](int w, int h, int c) {
+    CodestreamSpec s;
+    s.width = w;
+    s.height = h;
+    s.components = c;
+    return s;
+  };
+
+  // 1. Seekable PLT RPCL reset_packet_reading + sequential input_monitor.
+  {
+    CodestreamSpec spec = make_spec(64, 64, 1);
+    spec.reversible = true;
+    spec.dwt_levels = 2;
+    spec.extra_params = {"Clayers=3", "Corder=RPCL", "ORGgen_plt=yes",
+                         "Cprecincts={16,16}", "Cblk={8,8}"};
+    std::vector<int> plane(64 * 64);
+    for (int i = 0; i < 64 * 64; ++i) plane[i] = (i * 53) & 0xFF;
+    const auto bytes = EncodeCodestream(spec, {plane});
+
+    struct TestMonitor : public kdu_input_codestream_monitor {
+      int complete_calls = 0;
+      void parsing_complete() override { ++complete_calls; }
+    };
+
+    // Pure seekable + expand layers 1 -> 3 to trigger reset_packet_reading().
+    {
+      TestMonitor mon;
+      BufferSource seek_src(bytes, KDU_SOURCE_CAP_SEEKABLE);
+      kdu_codestream dcs;
+      dcs.create(&seek_src);
+      dcs.install_input_monitor(&mon, nullptr);
+      dcs.set_persistent();
+      dcs.apply_input_restrictions(0, 1, 0, 1, nullptr,
+                                   KDU_WANT_CODESTREAM_COMPONENTS);
+      EXPECT_EQ(DecodeCodestream(dcs, false).size(), 1U);
+      dcs.apply_input_restrictions(0, 1, 0, 3, nullptr,
+                                   KDU_WANT_CODESTREAM_COMPONENTS);
+      EXPECT_EQ(DecodeCodestream(dcs, false).size(), 1U);
+      dcs.destroy();
+    }
+
+    // Sequential monitor without PLT seekable path.
+    {
+      TestMonitor mon;
+      BufferSource seq_src(bytes, KDU_SOURCE_CAP_SEQUENTIAL);
+      kdu_codestream dcs;
+      dcs.create(&seq_src);
+      dcs.install_input_monitor(&mon, nullptr);
+      EXPECT_EQ(DecodeCodestream(dcs, false).size(), 1U);
+      dcs.destroy();
+    }
+  }
+
+  // 2. Corrupt/missing EPH marker after Cuse_eph=yes + body-tail 0xFF/EOC/SOT.
+  {
+    CodestreamSpec spec = make_spec(64, 64, 1);
+    spec.reversible = true;
+    spec.dwt_levels = 1;
+    spec.extra_params = {"Clayers=2", "Cblk={8,8}", "Cuse_eph=yes",
+                         "Cuse_sop=no"};
+    std::vector<int> plane(64 * 64);
+    for (int i = 0; i < 64 * 64; ++i) plane[i] = (i * 67 + (i >> 2)) & 0xFF;
+    const auto orig = EncodeCodestream(spec, {plane});
+    size_t eph_pos = 0;
+    for (size_t i = 0; i + 1 < orig.size(); ++i) {
+      if (orig[i] == 0xFF && orig[i + 1] == 0x92) {
+        eph_pos = i;
+        break;
+      }
+    }
+    if (eph_pos > 0) {
+      std::vector<std::vector<kdu_byte>> variants;
+      auto v1 = orig;
+      v1[eph_pos + 1] = 0x93;  // Unexpected marker != KDU_EPH
+      variants.push_back(std::move(v1));
+      auto v2 = orig;
+      v2[eph_pos] = 0x00;
+      v2[eph_pos + 1] = 0x00;  // Non-marker bytes where EPH expected
+      variants.push_back(std::move(v2));
+      std::vector<kdu_byte> v3(orig.begin(), orig.begin() + eph_pos + 1);
+      variants.push_back(std::move(v3));  // EOF after 0xFF before 0x92
+      for (const auto& buf : variants) {
+        for (int mode = 0; mode < 3; ++mode) {
+          BufferSource src(buf);
+          kdu_codestream dcs;
+          dcs.create(&src);
+          if (mode == 1) dcs.set_resilient(true);
+          if (mode == 2) dcs.set_fussy();
+          error_handler_.clear();
+          try {
+            (void)DecodeCodestream(dcs, false);
+          } catch (int) {
+          }
+          error_handler_.clear();
+          if (dcs.exists()) dcs.destroy();
+        }
+      }
+    }
+  }
+
+  {
+    CodestreamSpec spec = make_spec(64, 64, 1);
+    spec.reversible = true;
+    spec.dwt_levels = 0;
+    spec.extra_params = {"Cblk={64,64}", "Clayers=1", "Cuse_sop=no",
+                         "Cuse_eph=no"};
+    std::vector<int> plane(64 * 64);
+    for (int i = 0; i < 64 * 64; ++i) plane[i] = (i * 89 + (i >> 4)) & 0xFF;
+    const auto orig = EncodeCodestream(spec, {plane});
+    if (orig.size() > 20) {
+      const std::vector<kdu_byte> head(orig.begin(), orig.end() - 6);
+      std::vector<std::vector<kdu_byte>> bufs;
+      bufs.push_back(head);
+      auto b1 = head;
+      b1.push_back(0xFF);
+      bufs.push_back(std::move(b1));
+      auto b2 = head;
+      b2.push_back(0xFF);
+      b2.push_back(0x55);
+      bufs.push_back(std::move(b2));
+      auto b3 = head;
+      b3.push_back(0xFF);
+      b3.push_back(0xD9);
+      bufs.push_back(std::move(b3));
+      auto b4 = head;
+      b4.push_back(0xFF);
+      b4.push_back(0x90);
+      bufs.push_back(std::move(b4));
+      for (const auto& buf : bufs) {
+        for (int mode = 0; mode < 3; ++mode) {
+          BufferSource src(buf);
+          kdu_codestream dcs;
+          dcs.create(&src);
+          if (mode == 1) dcs.set_resilient(true);
+          if (mode == 2) dcs.set_allow_parsing_errors(true);
+          error_handler_.clear();
+          try {
+            (void)DecodeCodestream(dcs, false);
+          } catch (int) {
+          }
+          error_handler_.clear();
+          if (dcs.exists()) dcs.destroy();
+        }
+      }
+    }
+  }
+
+  // 3. Cvis + Creversible=yes + Cdecomp extra stages, plus PROFILE0 and Cdecomp
+  //    typical-tile recycle (!fully_typical).
+  {
+    CodestreamSpec spec = make_spec(128, 128, 1);
+    spec.reversible = true;
+    spec.dwt_levels = 2;
+    spec.extra_params = {"Cdecomp=B(H--:V--:H--),B(-:-:-)", "Cvis=0.05",
+                         "Cblk={8,8}"};
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    BufferTarget tgt;
+    kdu_codestream cs;
+    cs.create(&siz, &tgt);
+    ApplyCodingParams(cs, spec);
+    kdu_tile t = cs.open_tile(kdu_coords(0, 0));
+    float vf = 0.0f, me = 0.0f, vs = 0.0f;
+    EXPECT_TRUE(t.access_component(0)
+                    .access_resolution(2)
+                    .access_subband(HL_BAND)
+                    .get_masking_params(vf, me, vs));
+    t.close();
+    cs.destroy();
+  }
+  for (const char* prof : {"Sprofile=PROFILE0", "Sprofile=PROFILE1"}) {
+    CodestreamSpec spec = make_spec(64, 64, 1);
+    spec.reversible = false;
+    spec.dwt_levels = 2;
+    spec.tile_size = kdu_coords(32, 32);
+    spec.extra_params = {prof,          "Cprecincts={64,64}", "Cblk={32,32}",
+                         "Corder=LRCP", "Corder:T1=RLCP",     "Qderived=yes",
+                         "Qstep=0.01"};
+    error_handler_.clear();
+    try {
+      const auto bytes = EncodeCodestream(spec, MakePlanes(spec));
+      BufferSource src(bytes);
+      kdu_codestream dcs;
+      dcs.create(&src);
+      EXPECT_EQ(DecodeCodestream(dcs, false).size(), 1U);
+      dcs.destroy();
+    } catch (int) {
+    }
+    error_handler_.clear();
+  }
+  {
+    CodestreamSpec spec = make_spec(64, 64, 1);
+    spec.reversible = false;
+    spec.dwt_levels = 2;
+    spec.tile_size = kdu_coords(32, 32);
+    spec.extra_params = {"Cdecomp=B(H--:V--:H--),B(-:-:-)", "Cblk={8,8}",
+                         "Qderived=no", "Qstep=0.01", "Qstep:T1=0.04"};
+    const auto bytes = EncodeCodestream(spec, MakePlanes(spec));
+    BufferSource src(bytes);
+    kdu_codestream dcs;
+    dcs.create(&src);
+    EXPECT_EQ(DecodeCodestream(dcs, false).size(), 1U);
+    dcs.destroy();
+  }
+
+  // 4. Interleaved 2-tile multi-tpart: close T0 after 1 layer (!allow_restart),
+  //    then open T1 -> mark_exhausted on closed T0.
+  {
+    CodestreamSpec spec = make_spec(128, 64, 1);
+    spec.reversible = true;
+    spec.tile_size = kdu_coords(64, 64);
+    spec.extra_params = {"Clevels=1", "Cblk={16,16}", "Clayers=2",
+                         "ORGtparts=L"};
+    std::vector<int> plane(128 * 64);
+    for (int i = 0; i < 128 * 64; ++i) plane[i] = (i * 31) & 0xFF;
+    const auto orig = EncodeCodestream(spec, {plane});
+    std::vector<size_t> sot_pos;
+    for (size_t i = 0; i + 11 < orig.size(); ++i) {
+      if (orig[i] == 0xFF && orig[i + 1] == 0x90 && orig[i + 2] == 0x00 &&
+          orig[i + 3] == 0x0A) {
+        sot_pos.push_back(i);
+      }
+    }
+    if (sot_pos.size() == 4) {
+      auto slice = [&](size_t a, size_t b) {
+        return std::vector<kdu_byte>(orig.begin() + a, orig.begin() + b);
+      };
+      std::vector<kdu_byte> inter = slice(0, sot_pos[0]);
+      auto t0_0 = slice(sot_pos[0], sot_pos[1]);
+      auto t0_1 = slice(sot_pos[1], sot_pos[2]);
+      auto t1_0 = slice(sot_pos[2], sot_pos[3]);
+      auto t1_1 = slice(sot_pos[3], orig.size() - 2);
+      inter.insert(inter.end(), t0_0.begin(), t0_0.end());
+      inter.insert(inter.end(), t1_0.begin(), t1_0.end());
+      inter.insert(inter.end(), t0_1.begin(), t0_1.end());
+      inter.insert(inter.end(), t1_1.begin(), t1_1.end());
+      inter.push_back(0xFF);
+      inter.push_back(0xD9);
+
+      BufferSource src(inter, KDU_SOURCE_CAP_SEQUENTIAL);
+      kdu_codestream dcs;
+      dcs.create(&src);
+      dcs.apply_input_restrictions(0, 1, 0, 1, nullptr,
+                                   KDU_WANT_CODESTREAM_COMPONENTS);
+      kdu_tile t0 = dcs.open_tile(kdu_coords(0, 0));
+      EXPECT_TRUE(t0.parse_all_relevant_packets(false, nullptr));
+      t0.close();
+      kdu_tile t1 = dcs.open_tile(kdu_coords(1, 0));
+      t1.close();
+      dcs.destroy();
+    }
+  }
+
+  // 5. get_parent_dims / get_valid_block_span across flips, transpose, H(-),
+  //    and odd ROI.
+  for (const std::string& decomp_param :
+       {std::string("Cdecomp=H(-),V(-)"), std::string("Cdecomp=B(-:-:-)")}) {
+    CodestreamSpec spec = make_spec(64, 64, 1);
+    spec.reversible = true;
+    spec.dwt_levels = 2;
+    spec.extra_params = {decomp_param, "Cblk={8,8}"};
+    const auto bytes = EncodeCodestream(spec, MakePlanes(spec));
+    BufferSource src(bytes);
+    kdu_codestream dcs;
+    dcs.create(&src);
+    dcs.set_persistent();
+    kdu_dims roi;
+    roi.pos = kdu_coords(3, 5);
+    roi.size = kdu_coords(29, 31);
+    for (int mask = 0; mask < 8; ++mask) {
+      dcs.change_appearance((mask & 1) != 0, (mask & 2) != 0, (mask & 4) != 0);
+      error_handler_.clear();
+      kdu_tile t;
+      try {
+        dcs.apply_input_restrictions(0, 1, 0, 1, &roi,
+                                     KDU_WANT_CODESTREAM_COMPONENTS);
+        t = dcs.open_tile(kdu_coords(0, 0));
+        kdu_tile_comp tc = t.access_component(0);
+        for (int r = 0; r < tc.get_num_resolutions(); ++r) {
+          kdu_resolution res = tc.access_resolution(r);
+          int min_idx = 0;
+          const int num_bands = res.get_valid_band_indices(min_idx);
+          for (int b = min_idx; b < min_idx + num_bands; ++b) {
+            kdu_subband sb = res.access_subband(b);
+            kdu_dims pd, span;
+            sb.get_parent_dims(pd, false);
+            sb.get_parent_dims(pd, true);
+            sb.get_valid_block_span(span);
+          }
+        }
+        t.close();
+      } catch (int) {
+        if (t.exists()) t.close();
+      }
+      error_handler_.clear();
+    }
+    dcs.destroy();
+  }
+}
+
+TEST_F(CompressedTest, CompressedCoverage90Push2) {
+  auto make_spec = [](int w, int h, int c) {
+    CodestreamSpec s;
+    s.width = w;
+    s.height = h;
+    s.components = c;
+    return s;
+  };
+
+  // 1. Asymmetric !hor_split / !vert_split with odd origin and small precincts
+  //    to hit corner empty-precinct span logic in kd_tile::open.
+  for (const char* decomp : {"Cdecomp=H(-)", "Cdecomp=V(-)"}) {
+    CodestreamSpec spec = make_spec(64, 64, 1);
+    spec.origin = kdu_coords(1, 1);
+    spec.reversible = true;
+    spec.dwt_levels = 1;
+    spec.extra_params = {decomp, "Cprecincts={8,8}", "Cblk={8,8}"};
+    const auto bytes = EncodeCodestream(spec, MakePlanes(spec));
+    BufferSource src(bytes);
+    kdu_codestream dcs;
+    dcs.create(&src);
+    EXPECT_EQ(DecodeCodestream(dcs, false).size(), 1U);
+    dcs.destroy();
+  }
+
+  // 2. Profile min/max DWT levels and Srequired IRV/REV violation warnings.
+  for (int mode = 0; mode < 2; ++mode) {
+    CodestreamSpec spec = make_spec(64, 64, 1);
+    spec.reversible = (mode == 0);
+    spec.dwt_levels = (mode == 0) ? 1 : 3;
+    spec.extra_params = {"Cblk={8,8}"};
+    const auto bytes = EncodeCodestream(spec, MakePlanes(spec));
+    BufferSource src(bytes);
+    kdu_codestream dcs;
+    dcs.create(&src);
+    kdu_params* siz = dcs.access_siz();
+    if (mode == 0) {
+      siz->set(Slevels_allowed, 0, 0, 2);
+      siz->set(Slevels_allowed, 0, 1, 4);
+      siz->set(Srequired, 0, 0, Srequired_IRV);
+    } else {
+      siz->set(Slevels_allowed, 0, 0, 1);
+      siz->set(Slevels_allowed, 0, 1, 2);
+      siz->set(Srequired, 0, 0, Srequired_REV);
+    }
+    warning_handler_.clear();
+    error_handler_.clear();
+    try {
+      EXPECT_EQ(DecodeCodestream(dcs, false).size(), 1U);
+    } catch (int) {
+    }
+    error_handler_.clear();
+    warning_handler_.clear();
+    dcs.destroy();
+  }
+
+  // 3. CPLEX progressive visual weights (tlut > 0, K0_b < 0, lut_idx >= 0)
+  //    and partial Qweights mismatch warning on second component.
+  {
+    CodestreamSpec qspec = make_spec(64, 64, 2);
+    qspec.reversible = true;
+    qspec.dwt_levels = 0;
+    qspec.extra_params = {"Qweights=1.0,5.0", "Cblk={32,32}"};
+    warning_handler_.clear();
+    EXPECT_FALSE(EncodeCodestream(qspec, MakePlanes(qspec)).empty());
+    warning_handler_.clear();
+  }
+  for (int pass = 0; pass < 3; ++pass) {
+    CodestreamSpec spec = make_spec(128, 128, pass == 0 ? 2 : 1);
+    spec.reversible = false;
+    spec.dwt_levels = 2;
+    spec.extra_params = {
+        "Cblk={8,8}",
+        "Cprecincts={16,16}",
+        "Cband_weights=0.25,0.25,0.25,0.5,0.5,0.5",
+        pass == 0 ? "Cprog_weights=0.5,0.5" : "Cprog_weights=0.5",
+        "Cplex={4,EST,0.25,0}",
+    };
+    if (pass == 0) {
+      spec.extra_params.push_back("Cweight:C0=0.05");
+      spec.extra_params.push_back("Cweight:C1=20.0");
+    } else if (pass == 2) {
+      spec.extra_params.push_back("Qstep=0.001");
+    }
+    const auto planes = MakePlanes(spec);
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    BufferTarget tgt;
+    kdu_codestream cs;
+    cs.create(&siz, &tgt);
+    ApplyCodingParams(cs, spec);
+    cs.set_max_bytes(pass == 2 ? 1500 : (1LL << 20), false);
+    error_handler_.clear();
+    kdu_tile tile;
+    try {
+      tile = cs.open_tile(kdu_coords(0, 0));
+      PushTileSamples(cs, tile, planes, spec);
+      tile.close();
+      kdu_long lbytes[1] = {pass == 2 ? 1500 : (1LL << 20)};
+      cs.flush(lbytes, 1);
+    } catch (int) {
+      if (tile.exists()) tile.close();
+    }
+    error_handler_.clear();
+    cs.destroy();
+  }
+
+  // 4. get_conservative_slope_threshold with KDU_SLOPE_HINT_ESTIMATE and
+  //    explicit min_slope_threshold.
+  {
+    CodestreamSpec spec = make_spec(128, 64, 1);
+    spec.reversible = false;
+    spec.dwt_levels = 2;
+    spec.tile_size = kdu_coords(64, 64);
+    spec.extra_params = {"Cblk={16,16}", "Cprecincts={32,32}"};
+    const auto planes = MakePlanes(spec);
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    BufferTarget tgt;
+    kdu_codestream cs;
+    cs.create(&siz, &tgt);
+    ApplyCodingParams(cs, spec);
+    cs.set_slope_hint_policy(KDU_SLOPE_HINT_ESTIMATE);
+    cs.set_min_slope_threshold(1);
+    cs.set_max_bytes(512, false);
+    for (int tx = 0; tx < 2; ++tx) {
+      kdu_tile tile = cs.open_tile(kdu_coords(tx, 0));
+      if (tx == 1) {
+        (void)tile.access_component(0)
+            .access_resolution(1)
+            .access_subband(HL_BAND)
+            .get_conservative_slope_threshold();
+      }
+      PushTileSamples(cs, tile, planes, spec);
+      tile.close();
+    }
+    kdu_long lbytes[1] = {512};
+    cs.flush(lbytes, 1);
+    cs.destroy();
+  }
+
+  // 5. ORGgen_tlm=yes with heterogeneous tile ORGtparts=R creating empty
+  // tparts.
+  {
+    CodestreamSpec spec = make_spec(128, 64, 1);
+    spec.reversible = true;
+    spec.dwt_levels = 2;
+    spec.tile_size = kdu_coords(64, 64);
+    spec.extra_params = {"ORGgen_tlm=4", "ORGtparts=R", "Clevels:T1=0",
+                         "Cblk={16,16}"};
+    const auto bytes = EncodeCodestream(spec, MakePlanes(spec));
+    BufferSource src(bytes);
+    kdu_codestream dcs;
+    dcs.create(&src);
+    EXPECT_EQ(DecodeCodestream(dcs, false).size(), 1U);
+    dcs.destroy();
+  }
+
+  // 6. get_parent_dims with SPF fragments (spf_flags != 0) and nested
+  //    packet-wavelet nodes under flip/transpose appearance transforms.
+  {
+    CodestreamSpec spec = make_spec(128, 128, 1);
+    spec.reversible = true;
+    spec.dwt_levels = 2;
+    spec.extra_params = {"Cdecomp=B(H--:V--:H--),B(-:-:-)", "Cblk={8,8}"};
+    const auto bytes = EncodeCodestream(spec, MakePlanes(spec));
+    BufferSource src(bytes);
+    kdu_codestream dcs;
+    dcs.create(&src);
+    dcs.set_persistent();
+    dcs.configure_simultaneous_processing_fragments(16, 1, 8);
+    kdu_dims roi;
+    roi.pos = kdu_coords(3, 5);
+    roi.size = kdu_coords(59, 61);
+    for (int mask = 0; mask < 8; ++mask) {
+      dcs.change_appearance((mask & 1) != 0, (mask & 2) != 0, (mask & 4) != 0);
+      error_handler_.clear();
+      kdu_tile t;
+      try {
+        dcs.apply_input_restrictions(0, 1, 0, 1, &roi,
+                                     KDU_WANT_CODESTREAM_COMPONENTS);
+        t = dcs.open_tile(kdu_coords(0, 0));
+        kdu_tile_comp tc = t.access_component(0);
+        auto visit_node = [&](auto& self, kdu_node node) -> void {
+          kdu_subband sb = node.access_subband();
+          if (sb.exists()) {
+            kdu_dims pd;
+            sb.get_parent_dims(pd, false);
+            sb.get_parent_dims(pd, true);
+            return;
+          }
+          for (int i = 0; i < 4; ++i) {
+            kdu_node child = node.access_child(i);
+            if (child.exists()) self(self, child);
+          }
+        };
+        for (int r = 0; r < tc.get_num_resolutions(); ++r) {
+          kdu_resolution res = tc.access_resolution(r);
+          const int num_frags = res.get_num_simultaneous_processing_fragments();
+          for (int pf = 0; pf < num_frags; ++pf) {
+            visit_node(visit_node, res.access_node(pf));
+          }
+        }
+        t.close();
+      } catch (int) {
+        if (t.exists()) t.close();
+      }
+      error_handler_.clear();
+    }
+    dcs.destroy();
+  }
+
+  // 7. Corrupt packet start / header marker (!resilient), packet body ending in
+  //    0xFF (default/resilient putback), legacy Mxform_MAT get_mct_rxform_info,
+  //    non-persistent input_monitor completion in read_packet, and 3-tpart
+  //    interleaved seekable reopen.
+  {
+    CodestreamSpec spec = make_spec(64, 64, 1);
+    spec.reversible = true;
+    spec.dwt_levels = 0;
+    spec.extra_params = {"Cblk={64,64}", "Clayers=1", "Cuse_sop=no",
+                         "Cuse_eph=no"};
+    std::vector<int> plane(64 * 64);
+    for (int i = 0; i < 64 * 64; ++i) plane[i] = (i * 41 + (i >> 3)) & 0xFF;
+    const auto orig = EncodeCodestream(spec, {plane});
+    size_t sod_pos = 0;
+    size_t eoc_pos = 0;
+    for (size_t i = 0; i + 1 < orig.size(); ++i) {
+      if (sod_pos == 0 && orig[i] == 0xFF && orig[i + 1] == 0x93) sod_pos = i;
+      if (orig[i] == 0xFF && orig[i + 1] == 0xD9) eoc_pos = i;
+    }
+    std::vector<std::vector<kdu_byte>> corrupt_bufs;
+    if (sod_pos > 0 && sod_pos + 6 < orig.size()) {
+      auto b_pkt_start = orig;
+      b_pkt_start[sod_pos + 2] = 0xFF;
+      b_pkt_start[sod_pos + 3] = 0x55;
+      corrupt_bufs.push_back(std::move(b_pkt_start));
+
+      auto b_hdr_mid = orig;
+      b_hdr_mid[sod_pos + 2] = 0x80;  // Enter non-empty packet header.
+      b_hdr_mid[sod_pos + 3] = 0xFF;
+      b_hdr_mid[sod_pos + 4] = 0x55;
+      corrupt_bufs.push_back(std::move(b_hdr_mid));
+    }
+    if (eoc_pos > sod_pos + 4) {
+      auto b_end_ff = orig;
+      b_end_ff[eoc_pos - 1] = 0xFF;  // Packet body ends with dangling 0xFF.
+      corrupt_bufs.push_back(std::move(b_end_ff));
+    }
+    for (const auto& buf : corrupt_bufs) {
+      for (int res = 0; res < 2; ++res) {
+        BufferSource src(buf);
+        kdu_codestream dcs;
+        dcs.create(&src);
+        if (res == 1) dcs.set_resilient(true);
+        error_handler_.clear();
+        try {
+          (void)DecodeCodestream(dcs, false);
+        } catch (int) {
+        }
+        error_handler_.clear();
+        if (dcs.exists()) dcs.destroy();
+      }
+    }
+  }
+
+  // Legacy Mxform_MAT (mct_flags == 0) + get_mct_rxform_info.
+  {
+    CodestreamSpec spec = make_spec(24, 24, 2);
+    spec.is_signed = true;
+    spec.reversible = true;
+    spec.dwt_levels = 1;
+    spec.extra_params = {
+        "Cycc=no",
+        "Sextensions=MCT",
+        "Mcomponents=2",
+        "Mprecision=8",
+        "Msigned=yes",
+        "Mmatrix_size:I1=6",
+        "Mmatrix_coeffs:I1=1,512,512,-1,0,1",
+        "Mstage_inputs:I1={0,1}",
+        "Mstage_outputs:I1={0,1}",
+        "Mstage_collections:I1={2,2}",
+        "Mstage_xforms:I1={MATRIX,1,0,1,0}",
+        "Mnum_stages=1",
+        "Mstages=1",
+    };
+    const auto bytes = EncodeCodestream(spec, MakePlanes(spec));
+    BufferSource src(bytes);
+    kdu_codestream dcs;
+    dcs.create(&src);
+    kdu_params* cod = dcs.access_siz()->access_cluster(COD_params);
+    if (cod != nullptr) cod->set(Cmct, 0, 0, 0);
+    int out_idx[2] = {0, 1};
+    dcs.apply_input_restrictions(2, out_idx, 0, 0, nullptr,
+                                 KDU_WANT_OUTPUT_COMPONENTS);
+    error_handler_.clear();
+    kdu_tile tile;
+    try {
+      tile = dcs.open_tile(kdu_coords(0, 0));
+      int nsi = 0, nso = 0, nbi = 0, nbo = 0;
+      if (tile.get_mct_block_info(0, 0, nsi, nso, nbi, nbo) &&
+          tile.get_mct_rxform_info(0, 0)) {
+        std::vector<int> rmat(static_cast<size_t>(nbi * (nbi + 1)));
+        std::vector<int> aout(static_cast<size_t>(nbo));
+        EXPECT_TRUE(tile.get_mct_rxform_info(0, 0, rmat.data(), aout.data()));
+      }
+      tile.close();
+    } catch (int) {
+      if (tile.exists()) tile.close();
+    }
+    error_handler_.clear();
+    dcs.destroy();
+  }
+
+  // Non-persistent input_monitor completion in read_packet (ORGgen_plt=no).
+  {
+    struct Monitor : public kdu_input_codestream_monitor {
+      int done = 0;
+      void parsing_complete() override { ++done; }
+    } mon;
+    CodestreamSpec spec = make_spec(64, 64, 1);
+    spec.reversible = true;
+    spec.dwt_levels = 1;
+    spec.extra_params = {"Clayers=2", "ORGgen_plt=no", "Cblk={16,16}"};
+    const auto bytes = EncodeCodestream(spec, MakePlanes(spec));
+    BufferSource src(bytes, KDU_SOURCE_CAP_SEQUENTIAL);
+    kdu_codestream dcs;
+    dcs.create(&src);
+    dcs.install_input_monitor(&mon, nullptr);
+    dcs.apply_input_restrictions(0, 1, 0, 1, nullptr,
+                                 KDU_WANT_CODESTREAM_COMPONENTS);
+    EXPECT_EQ(DecodeCodestream(dcs, false).size(), 1U);
+    EXPECT_GE(mon.done, 1);
+    dcs.destroy();
+  }
+
+  // Seekable 3-tpart interleaved T0_0, T0_1, T1_0, T0_2, T1_1, T1_2.
+  {
+    CodestreamSpec spec = make_spec(128, 64, 1);
+    spec.reversible = true;
+    spec.tile_size = kdu_coords(64, 64);
+    spec.extra_params = {"Clevels=1", "Cblk={16,16}", "Clayers=3",
+                         "ORGtparts=L", "ORGgen_plt=yes"};
+    std::vector<int> plane(128 * 64);
+    for (int i = 0; i < 128 * 64; ++i) plane[i] = (i * 59) & 0xFF;
+    const auto orig = EncodeCodestream(spec, {plane});
+    std::vector<size_t> sot_pos;
+    for (size_t i = 0; i + 11 < orig.size(); ++i) {
+      if (orig[i] == 0xFF && orig[i + 1] == 0x90 && orig[i + 2] == 0x00 &&
+          orig[i + 3] == 0x0A) {
+        sot_pos.push_back(i);
+      }
+    }
+    if (sot_pos.size() == 6) {
+      auto slice = [&](size_t a, size_t b) {
+        return std::vector<kdu_byte>(orig.begin() + a, orig.begin() + b);
+      };
+      std::vector<kdu_byte> inter = slice(0, sot_pos[0]);
+      auto append = [&](const std::vector<kdu_byte>& v) {
+        inter.insert(inter.end(), v.begin(), v.end());
+      };
+      append(slice(sot_pos[0], sot_pos[1]));       // T0_0
+      append(slice(sot_pos[1], sot_pos[2]));       // T0_1
+      append(slice(sot_pos[3], sot_pos[4]));       // T1_0
+      append(slice(sot_pos[2], sot_pos[3]));       // T0_2
+      append(slice(sot_pos[4], sot_pos[5]));       // T1_1
+      append(slice(sot_pos[5], orig.size() - 2));  // T1_2
+      inter.push_back(0xFF);
+      inter.push_back(0xD9);
+
+      BufferSource src(inter, KDU_SOURCE_CAP_SEEKABLE);
+      kdu_codestream dcs;
+      dcs.create(&src);
+      dcs.apply_input_restrictions(0, 1, 0, 2, nullptr,
+                                   KDU_WANT_CODESTREAM_COMPONENTS);
+      kdu_tile t0 = dcs.open_tile(kdu_coords(0, 0));
+      EXPECT_TRUE(t0.parse_all_relevant_packets(false, nullptr));
+      t0.close();
+      kdu_tile t1 = dcs.open_tile(kdu_coords(1, 0));
+      EXPECT_TRUE(t1.parse_all_relevant_packets(false, nullptr));
+      t1.close();
+      dcs.destroy();
+    }
+  }
+
+  // 8. Leaf kdu_node::get_bibo_gains, PROFILE0 violation warnings, tile-header
+  //    RGN/POC Sallowed_RHET/Sallowed_PHET warnings, single-threaded
+  //    auto_flush, and SPF + flippable B(B:B:B) get_parent_dims.
+  {
+    CodestreamSpec spec = make_spec(512, 64, 1);
+    spec.reversible = true;
+    spec.dwt_levels = 2;
+    spec.extra_params = {"Cblk={16,16}", "Cprecincts={32,32}"};
+    const auto bytes = EncodeCodestream(spec, MakePlanes(spec));
+    BufferSource src(bytes);
+    kdu_codestream dcs;
+    dcs.create(&src);
+    dcs.set_persistent();
+    dcs.configure_simultaneous_processing_fragments(32, 2, 4);
+    for (int mask = 0; mask < 2; ++mask) {
+      dcs.change_appearance(mask == 1, false, false);
+      kdu_tile tile = dcs.open_tile(kdu_coords(0, 0));
+      kdu_resolution res = tile.access_component(0).access_resolution(2);
+      int steps = 0;
+      kdu_node leaf = res.access_node().access_child(HL_BAND);
+      EXPECT_NE(leaf.get_bibo_gains(steps, false), nullptr);
+      EXPECT_EQ(steps, 0);
+      EXPECT_NE(leaf.get_bibo_gains(steps, true), nullptr);
+      EXPECT_EQ(steps, 0);
+      const int nfrags = res.get_num_simultaneous_processing_fragments();
+      for (int pf = 0; pf < nfrags; ++pf) {
+        kdu_dims pd;
+        res.access_node(pf)
+            .access_child(HL_BAND)
+            .access_subband()
+            .get_parent_dims(pd, false);
+      }
+      tile.close();
+    }
+    dcs.destroy();
+  }
+
+  // Flippable nested packet-wavelet B(V--:H--:-),B(-:-:-) get_parent_dims under
+  // transpose and flips.
+  {
+    CodestreamSpec spec = make_spec(64, 64, 1);
+    spec.reversible = true;
+    spec.dwt_levels = 2;
+    spec.extra_params = {"Cdecomp=B(V--:H--:-),B(-:-:-)", "Cblk={8,8}"};
+    const auto bytes = EncodeCodestream(spec, MakePlanes(spec));
+    BufferSource src(bytes);
+    kdu_codestream dcs;
+    dcs.create(&src);
+    dcs.set_persistent();
+    for (int mask = 0; mask < 8; ++mask) {
+      dcs.change_appearance((mask & 4) != 0, (mask & 1) != 0, (mask & 2) != 0);
+      error_handler_.clear();
+      kdu_tile tile;
+      try {
+        tile = dcs.open_tile(kdu_coords(0, 0));
+        kdu_resolution res = tile.access_component(0).access_resolution(2);
+        int min_b = 0;
+        const int nb = res.get_valid_band_indices(min_b);
+        for (int b = min_b; b < min_b + nb; ++b) {
+          kdu_dims pd;
+          res.access_subband(b).get_parent_dims(pd, false);
+        }
+        tile.close();
+      } catch (int) {
+        if (tile.exists()) tile.close();
+      }
+      error_handler_.clear();
+    }
+    dcs.destroy();
+  }
+
+  // PROFILE0 violation warnings and Sallowed RHET/PHET tile-header warnings.
+  {
+    CodestreamSpec spec = make_spec(256, 64, 2);
+    spec.reversible = true;
+    spec.dwt_levels = 1;
+    spec.tile_size = kdu_coords(128, 64);
+    spec.extra_params = {"Cblk={16,16}", "Cprecincts={32,32}", "Rshift:T1=16",
+                         "Porder:T1={0,0,2,2,2,PCRL}"};
+    const auto bytes = EncodeCodestream(spec, MakePlanes(spec));
+    BufferSource src(bytes);
+    kdu_codestream dcs;
+    dcs.create(&src);
+    kdu_params* siz = dcs.access_siz();
+    siz->set(Sconf_profile, 0, 0, Sprofile_PROFILE0);
+    siz->set(Sallowed, 0, 0, 0);
+    warning_handler_.clear();
+    error_handler_.clear();
+    try {
+      EXPECT_EQ(DecodeCodestream(dcs, false).size(), 2U);
+    } catch (int) {
+    }
+    error_handler_.clear();
+    warning_handler_.clear();
+    dcs.destroy();
+  }
+
+  // Single-threaded auto_flush with cached target triggering incr_flush_counter
+  // (env == nullptr).
+  {
+    CodestreamSpec spec = make_spec(64, 64, 1);
+    spec.reversible = true;
+    spec.dwt_levels = 1;
+    spec.extra_params = {"Cdecomp=V(-)", "Cblk={8,8}", "Cprecincts={8,8}"};
+    const auto planes = MakePlanes(spec);
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    BufferTarget tgt(true);
+    kdu_codestream cs;
+    cs.create(&siz, &tgt);
+    ApplyCodingParams(cs, spec);
+    kdu_long lbytes[1] = {1LL << 20};
+    cs.auto_flush(1, 1, 8, 8, lbytes, 1);
+    kdu_tile tile = cs.open_tile(kdu_coords(0, 0));
+    PushTileSamples(cs, tile, planes, spec);
+    tile.close();
+    cs.flush(lbytes, 1);
+    cs.destroy();
+    EXPECT_FALSE(tgt.precincts.empty());
+  }
+
+  // 9. Multi-tile ORGgen_tlm with asymmetric Clevels:T1 emitting empty
+  //    tile-parts and kdu_tile::set_components_of_interest with
+  //    KDU_WANT_CODESTREAM_COMPONENTS.
+  {
+    CodestreamSpec spec = make_spec(256, 64, 2);
+    spec.reversible = true;
+    spec.dwt_levels = 2;
+    spec.tile_size = kdu_coords(128, 64);
+    spec.extra_params = {"Cblk={8,8}", "ORGgen_tlm=4", "ORGtparts=R",
+                         "Clevels:T1=0"};
+    const auto bytes = EncodeCodestream(spec, MakePlanes(spec));
+    EXPECT_FALSE(bytes.empty());
+
+    BufferSource src(bytes);
+    kdu_codestream dcs;
+    dcs.create(&src);
+    dcs.apply_input_restrictions(0, 0, 0, 0, nullptr,
+                                 KDU_WANT_CODESTREAM_COMPONENTS);
+    kdu_tile tile = dcs.open_tile(kdu_coords(0, 0));
+    tile.set_components_of_interest(0, nullptr);
+    tile.set_components_of_interest(1, nullptr);
+    tile.close();
+    dcs.destroy();
   }
 }
 
