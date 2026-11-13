@@ -3,6 +3,7 @@
 #include <atomic>
 #include <filesystem>  // NOLINT
 #include <fstream>
+#include <ios>
 #include <string>
 #include <system_error>  // NOLINT(build/c++11)
 #include <vector>

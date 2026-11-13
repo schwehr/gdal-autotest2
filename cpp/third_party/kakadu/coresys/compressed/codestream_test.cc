@@ -2,17 +2,20 @@
 // via the public coresys headers in third_party/kakadu/vendor/coresys/common/.
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstddef>
-#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <initializer_list>
 #include <limits>
 #include <map>
+#include <memory>
 #include <mutex>
+#include <new>
 #include <string>
 #include <thread>
 #include <utility>
@@ -21,11 +24,12 @@
 #include "testing/base/public/gunit.h"
 #include "third_party/kakadu/vendor/coresys/common/kdu_arch.h"
 #include "third_party/kakadu/vendor/coresys/common/kdu_compressed.h"
-#include "third_party/kakadu/vendor/coresys/common/kdu_elementary.h"
 #include "third_party/kakadu/vendor/coresys/common/kdu_messaging.h"
 #include "third_party/kakadu/vendor/coresys/common/kdu_params.h"
 #include "third_party/kakadu/vendor/coresys/common/kdu_roi_processing.h"
 #include "third_party/kakadu/vendor/coresys/common/kdu_sample_processing.h"
+#include "third_party/kakadu/vendor/coresys/common/kdu_threads.h"
+#include "third_party/kakadu/vendor/coresys/common/kdu_ubiquitous.h"
 
 namespace kdu_core {
 namespace {
@@ -36,7 +40,7 @@ class CapturingMessageHandler : public kdu_thread_safe_message {
       : throw_on_end_(throw_on_end) {}
   ~CapturingMessageHandler() noexcept override = default;
 
-  void put_text(const char *string) override {
+  void put_text(const char* string) override {
     if (string != nullptr) {
       std::lock_guard<std::mutex> lock(text_mutex_);
       current_ += string;
@@ -82,12 +86,12 @@ class CapturingMessageHandler : public kdu_thread_safe_message {
 
 class CapturingPlainMessage : public kdu_message {
  public:
-  void put_text(const char *string) override {
+  void put_text(const char* string) override {
     if (string != nullptr) {
       text_ += string;
     }
   }
-  const std::string &text() const { return text_; }
+  const std::string& text() const { return text_; }
 
  private:
   std::string text_;
@@ -121,7 +125,7 @@ class CodestreamTest : public ::testing::Test {
 class MemoryTarget : public kdu_compressed_target {
  public:
   int get_capabilities() override { return capabilities; }
-  kdu_membroker *get_membroker() override { return broker; }
+  kdu_membroker* get_membroker() override { return broker; }
   bool prefer_large_writes() const override { return prefer_large; }
 
   void set_target_size(kdu_long num_bytes) override {
@@ -150,7 +154,7 @@ class MemoryTarget : public kdu_compressed_target {
     return true;
   }
 
-  bool write(const kdu_byte *buf, int num_bytes) override {
+  bool write(const kdu_byte* buf, int num_bytes) override {
     if (num_bytes <= 0) {
       return num_bytes == 0;
     }
@@ -189,7 +193,7 @@ class MemoryTarget : public kdu_compressed_target {
   bool prefer_large = true;
   bool closed = false;
   int capabilities = KDU_TARGET_CAP_SEQUENTIAL;
-  kdu_membroker *broker = nullptr;
+  kdu_membroker* broker = nullptr;
   kdu_long reported_target_size = -1;
   int target_size_calls = 0;
   int rewrite_calls = 0;
@@ -200,7 +204,7 @@ class MemoryTarget : public kdu_compressed_target {
 class StructuredCacheTarget : public kdu_compressed_target {
  public:
   int get_capabilities() override { return KDU_TARGET_CAP_CACHED; }
-  kdu_membroker *get_membroker() override { return broker; }
+  kdu_membroker* get_membroker() override { return broker; }
 
   void start_mainheader() override {
     active = &main_header;
@@ -225,11 +229,11 @@ class StructuredCacheTarget : public kdu_compressed_target {
   void end_precinct(kdu_long unique_id, int num_packets,
                     const kdu_long packet_lengths[]) override {
     active = nullptr;
-    auto &lens = precinct_packet_lengths[unique_id];
+    auto& lens = precinct_packet_lengths[unique_id];
     lens.assign(packet_lengths, packet_lengths + num_packets);
   }
 
-  bool write(const kdu_byte *buf, int num_bytes) override {
+  bool write(const kdu_byte* buf, int num_bytes) override {
     if (active == nullptr || num_bytes < 0) {
       return false;
     }
@@ -247,31 +251,31 @@ class StructuredCacheTarget : public kdu_compressed_target {
     return true;
   }
 
-  kdu_membroker *broker = nullptr;
+  kdu_membroker* broker = nullptr;
   int total_tiles = 0;
   bool closed = false;
   std::vector<kdu_byte> main_header;
   std::map<int, std::vector<kdu_byte>> tile_headers;
   std::map<kdu_long, std::vector<kdu_byte>> precincts;
   std::map<kdu_long, std::vector<kdu_long>> precinct_packet_lengths;
-  std::vector<kdu_byte> *active = nullptr;
+  std::vector<kdu_byte>* active = nullptr;
 };
 
 class MemorySource : public kdu_compressed_source {
  public:
-  MemorySource(const kdu_byte *ptr, size_t len, int caps)
+  MemorySource(const kdu_byte* ptr, size_t len, int caps)
       : data_(ptr, ptr + len), caps_(caps) {}
 
-  explicit MemorySource(const std::vector<kdu_byte> &buf,
+  explicit MemorySource(const std::vector<kdu_byte>& buf,
                         int caps = KDU_SOURCE_CAP_SEQUENTIAL |
                                    KDU_SOURCE_CAP_SEEKABLE |
                                    KDU_SOURCE_CAP_IN_MEMORY)
       : data_(buf), caps_(caps) {}
 
   int get_capabilities() override { return caps_; }
-  kdu_membroker *get_membroker() override { return broker; }
+  kdu_membroker* get_membroker() override { return broker; }
 
-  int read(kdu_byte *buf, int num_bytes) override {
+  int read(kdu_byte* buf, int num_bytes) override {
     if (pos_ >= data_.size() || num_bytes <= 0) {
       return 0;
     }
@@ -286,7 +290,7 @@ class MemorySource : public kdu_compressed_source {
   }
 
   bool seek(kdu_long offset) override {
-    if ((caps_ & KDU_SOURCE_CAP_SEEKABLE) == 0 || offset < 0) {
+    if (fail_seek || (caps_ & KDU_SOURCE_CAP_SEEKABLE) == 0 || offset < 0) {
       return false;
     }
     pos_ = std::min(static_cast<size_t>(offset), data_.size());
@@ -300,7 +304,7 @@ class MemorySource : public kdu_compressed_source {
     return static_cast<kdu_long>(pos_);
   }
 
-  kdu_byte *access_memory(kdu_long &pos, kdu_byte *&lim) override {
+  kdu_byte* access_memory(kdu_long& pos, kdu_byte*& lim) override {
     if ((caps_ & KDU_SOURCE_CAP_IN_MEMORY) == 0 || data_.empty()) {
       return nullptr;
     }
@@ -314,9 +318,10 @@ class MemorySource : public kdu_compressed_source {
     return true;
   }
 
-  kdu_membroker *broker = nullptr;
+  kdu_membroker* broker = nullptr;
   int max_chunk_ = 0;
   bool closed = false;
+  bool fail_seek = false;
 
  private:
   std::vector<kdu_byte> data_;
@@ -326,7 +331,7 @@ class MemorySource : public kdu_compressed_source {
 
 class StructuredCacheSource : public kdu_compressed_source {
  public:
-  explicit StructuredCacheSource(const StructuredCacheTarget &cache)
+  explicit StructuredCacheSource(const StructuredCacheTarget& cache)
       : cache_(cache), current_(&cache_.main_header) {}
 
   int get_capabilities() override {
@@ -362,7 +367,7 @@ class StructuredCacheSource : public kdu_compressed_source {
     return true;
   }
 
-  int read(kdu_byte *buf, int num_bytes) override {
+  int read(kdu_byte* buf, int num_bytes) override {
     if (current_ == nullptr || pos_ >= current_->size() || num_bytes <= 0) {
       return 0;
     }
@@ -386,26 +391,26 @@ class StructuredCacheSource : public kdu_compressed_source {
   std::vector<int> hide_tiles;
 
  private:
-  const StructuredCacheTarget &cache_;
-  const std::vector<kdu_byte> *current_;
+  const StructuredCacheTarget& cache_;
+  const std::vector<kdu_byte>* current_;
   const std::vector<kdu_byte> empty_;
   size_t pos_ = 0;
 };
 
 class TestMembackedSource : public kdu_membacked_compressed_source {
  public:
-  TestMembackedSource(const std::vector<kdu_byte> &payload, size_t step_bytes)
+  TestMembackedSource(const std::vector<kdu_byte>& payload, size_t step_bytes)
       : payload_(payload), step_bytes_(step_bytes) {}
 
-  bool enable_stream(int mode, const kdu_byte *desc, size_t desc_len,
+  bool enable_stream(int mode, const kdu_byte* desc, size_t desc_len,
                      kdu_uint32 interp, double ts, size_t min_buf,
                      size_t max_buf) {
     pos_ = 0;
     return kdu_membacked_compressed_source::enable(mode, desc, desc_len, interp,
-                                                 ts, min_buf, max_buf);
+                                                   ts, min_buf, max_buf);
   }
 
-  bool run_service(size_t &total_fetched, kdu_int32 &term_code) {
+  bool run_service(size_t& total_fetched, kdu_int32& term_code) {
     return kdu_membacked_compressed_source::service(total_fetched, term_code);
   }
 
@@ -416,14 +421,15 @@ class TestMembackedSource : public kdu_membacked_compressed_source {
   void run_reset() { kdu_membacked_compressed_source::reset(); }
 
  protected:
-  kdu_long fetch_data(kdu_long max_bytes, kdu_byte *buffer,
+  kdu_long fetch_data(kdu_long max_bytes, kdu_byte* buffer,
                       bool blocking) override {
     (void)blocking;
     if (pos_ >= payload_.size()) {
       finish_fetching(forced_term_code_);
       return 0;
     }
-    size_t want = std::min(payload_.size() - pos_, static_cast<size_t>(max_bytes));
+    size_t want =
+        std::min(payload_.size() - pos_, static_cast<size_t>(max_bytes));
     if (step_bytes_ > 0) {
       want = std::min(want, step_bytes_);
     }
@@ -463,16 +469,19 @@ class BoxRoiImage;
 class BoxRoiNode : public kdu_roi_node {
  public:
   BoxRoiNode(int width, int height, kdu_dims active_box,
-             BoxRoiImage *owner = nullptr)
-      : width_(width), height_(height), active_box_(active_box), owner_(owner) {}
+             BoxRoiImage* owner = nullptr)
+      : width_(width),
+        height_(height),
+        active_box_(active_box),
+        owner_(owner) {}
 
   void pull(kdu_byte buf[], int width) override {
     if (row_ >= height_) {
       std::memset(buf, 0, static_cast<size_t>(width));
       return;
     }
-    const bool in_y =
-        row_ >= active_box_.pos.y && row_ < active_box_.pos.y + active_box_.size.y;
+    const bool in_y = row_ >= active_box_.pos.y &&
+                      row_ < active_box_.pos.y + active_box_.size.y;
     for (int x = 0; x < width && x < width_; ++x) {
       const bool in_x =
           x >= active_box_.pos.x && x < active_box_.pos.x + active_box_.size.x;
@@ -488,7 +497,7 @@ class BoxRoiNode : public kdu_roi_node {
   int width_;
   int height_;
   kdu_dims active_box_;
-  BoxRoiImage *owner_;
+  BoxRoiImage* owner_;
   int row_ = 0;
 };
 
@@ -496,24 +505,24 @@ class BoxRoiImage : public kdu_roi_image {
  public:
   explicit BoxRoiImage(kdu_dims active_box) : active_box_(active_box) {}
   ~BoxRoiImage() override {
-    for (BoxRoiNode *node : active_nodes_) {
+    for (BoxRoiNode* node : active_nodes_) {
       node->DetachOwner();
       delete node;
     }
   }
 
-  kdu_roi_node *acquire_node(int comp_idx, kdu_dims tile_region) override {
+  kdu_roi_node* acquire_node(int comp_idx, kdu_dims tile_region) override {
     (void)comp_idx;
     kdu_dims local = active_box_;
     local.pos.x -= tile_region.pos.x;
     local.pos.y -= tile_region.pos.y;
-    auto *node =
+    auto* node =
         new BoxRoiNode(tile_region.size.x, tile_region.size.y, local, this);
     active_nodes_.push_back(node);
     return node;
   }
 
-  void ReleaseNode(BoxRoiNode *node) {
+  void ReleaseNode(BoxRoiNode* node) {
     active_nodes_.erase(
         std::remove(active_nodes_.begin(), active_nodes_.end(), node),
         active_nodes_.end());
@@ -521,7 +530,7 @@ class BoxRoiImage : public kdu_roi_image {
 
  private:
   kdu_dims active_box_;
-  std::vector<BoxRoiNode *> active_nodes_;
+  std::vector<BoxRoiNode*> active_nodes_;
 };
 
 void BoxRoiNode::release() {
@@ -546,16 +555,14 @@ struct ImageSpec {
   std::vector<std::string> extra_params;
 };
 
-std::vector<std::vector<kdu_int32>> MakeTestPlanes(const ImageSpec &spec) {
+std::vector<std::vector<kdu_int32>> MakeTestPlanes(const ImageSpec& spec) {
   std::vector<std::vector<kdu_int32>> planes(spec.components);
-  const kdu_int32 min_val =
-      spec.is_signed ? -(1 << (spec.bit_depth - 1)) : 0;
+  const kdu_int32 min_val = spec.is_signed ? -(1 << (spec.bit_depth - 1)) : 0;
   const kdu_int32 span = (1 << spec.bit_depth);
   for (int c = 0; c < spec.components; ++c) {
-    const kdu_coords sub =
-        (c < static_cast<int>(spec.subsampling.size()))
-            ? spec.subsampling[c]
-            : kdu_coords(1, 1);
+    const kdu_coords sub = (c < static_cast<int>(spec.subsampling.size()))
+                               ? spec.subsampling[c]
+                               : kdu_coords(1, 1);
     const int w = (spec.width + sub.x - 1) / sub.x;
     const int h = (spec.height + sub.y - 1) / sub.y;
     planes[c].resize(static_cast<size_t>(w) * h);
@@ -570,11 +577,12 @@ std::vector<std::vector<kdu_int32>> MakeTestPlanes(const ImageSpec &spec) {
   return planes;
 }
 
-void WriteLineSample(kdu_line_buf *line, int x, kdu_int32 raw, int bits,
+void WriteLineSample(kdu_line_buf* line, int x, kdu_int32 raw, int bits,
                      bool is_signed) {
   const double centered =
-      is_signed ? static_cast<double>(raw)
-                : static_cast<double>(raw) - static_cast<double>(1LL << (bits - 1));
+      is_signed
+          ? static_cast<double>(raw)
+          : static_cast<double>(raw) - static_cast<double>(1LL << (bits - 1));
   if (line->is_absolute()) {
     const auto val = static_cast<kdu_int64>(std::llround(centered));
     if (line->get_buf16() != nullptr) {
@@ -595,7 +603,7 @@ void WriteLineSample(kdu_line_buf *line, int x, kdu_int32 raw, int bits,
   }
 }
 
-kdu_int32 ReadLineSample(kdu_line_buf *line, int x, int bits, bool is_signed) {
+kdu_int32 ReadLineSample(kdu_line_buf* line, int x, int bits, bool is_signed) {
   double centered = 0.0;
   if (line->is_absolute()) {
     if (line->get_buf16() != nullptr) {
@@ -606,9 +614,8 @@ kdu_int32 ReadLineSample(kdu_line_buf *line, int x, int bits, bool is_signed) {
       centered = static_cast<double>(line->get_buf64()[x].ival);
     }
   } else if (line->get_buf32() != nullptr) {
-    centered =
-        static_cast<double>(line->get_buf32()[x].fval) *
-        static_cast<double>(1LL << bits);
+    centered = static_cast<double>(line->get_buf32()[x].fval) *
+               static_cast<double>(1LL << bits);
   } else if (line->get_buf16() != nullptr) {
     centered = (static_cast<double>(line->get_buf16()[x].ival) /
                 static_cast<double>(1 << KDU_FIX_POINT)) *
@@ -624,8 +631,8 @@ kdu_int32 ReadLineSample(kdu_line_buf *line, int x, int bits, bool is_signed) {
 }
 
 void PushTileData(kdu_codestream cs, kdu_tile tile,
-                  const std::vector<std::vector<kdu_int32>> &planes,
-                  const ImageSpec &spec, kdu_roi_image *roi = nullptr,
+                  const std::vector<std::vector<kdu_int32>>& planes,
+                  const ImageSpec& spec, kdu_roi_image* roi = nullptr,
                   int flags = KDU_MULTI_XFORM_DEFAULT_FLAGS) {
   const int num_comps = tile.get_num_components();
   kdu_multi_analysis engine;
@@ -645,19 +652,18 @@ void PushTileData(kdu_codestream cs, kdu_tile tile,
         continue;
       }
       any_left = true;
-      kdu_line_buf *line = engine.exchange_line(c, nullptr);
+      kdu_line_buf* line = engine.exchange_line(c, nullptr);
       if (line == nullptr) {
         continue;
       }
-      const kdu_coords sub =
-          (c < static_cast<int>(spec.subsampling.size()))
-              ? spec.subsampling[c]
-              : kdu_coords(1, 1);
+      const kdu_coords sub = (c < static_cast<int>(spec.subsampling.size()))
+                                 ? spec.subsampling[c]
+                                 : kdu_coords(1, 1);
       const int comp_w = (spec.width + sub.x - 1) / sub.x;
-      const int x0 = comp_dims[c].pos.x -
-                     ((spec.img_origin.x + sub.x - 1) / sub.x);
-      const int y0 = comp_dims[c].pos.y -
-                     ((spec.img_origin.y + sub.y - 1) / sub.y);
+      const int x0 =
+          comp_dims[c].pos.x - ((spec.img_origin.x + sub.x - 1) / sub.x);
+      const int y0 =
+          comp_dims[c].pos.y - ((spec.img_origin.y + sub.y - 1) / sub.y);
       const int y = y0 + next_row[c];
       for (int x = 0; x < sz.x; ++x) {
         WriteLineSample(line, x,
@@ -675,8 +681,8 @@ void PushTileData(kdu_codestream cs, kdu_tile tile,
   engine.destroy();
 }
 
-bool IsSizExtraParam(const std::string &param) {
-  auto starts_with = [&](const char *prefix) {
+bool IsSizExtraParam(const std::string& param) {
+  auto starts_with = [&](const char* prefix) {
     return param.rfind(prefix, 0) == 0;
   };
   return starts_with("S") || starts_with("Mcomponents") ||
@@ -685,7 +691,7 @@ bool IsSizExtraParam(const std::string &param) {
          starts_with("Nsigned");
 }
 
-void ConfigureSiz(siz_params &siz, const ImageSpec &spec) {
+void ConfigureSiz(siz_params& siz, const ImageSpec& spec) {
   siz.set(Scomponents, 0, 0, spec.components);
   siz.set(Ssize, 0, 0, spec.height + spec.img_origin.y);
   siz.set(Ssize, 0, 1, spec.width + spec.img_origin.x);
@@ -704,26 +710,25 @@ void ConfigureSiz(siz_params &siz, const ImageSpec &spec) {
   for (int c = 0; c < spec.components; ++c) {
     siz.set(Sprecision, c, 0, spec.bit_depth);
     siz.set(Ssigned, c, 0, spec.is_signed);
-    const kdu_coords sub =
-        (c < static_cast<int>(spec.subsampling.size()))
-            ? spec.subsampling[c]
-            : kdu_coords(1, 1);
+    const kdu_coords sub = (c < static_cast<int>(spec.subsampling.size()))
+                               ? spec.subsampling[c]
+                               : kdu_coords(1, 1);
     siz.set(Ssampling, c, 0, sub.y);
     siz.set(Ssampling, c, 1, sub.x);
   }
-  for (const std::string &p : spec.extra_params) {
+  for (const std::string& p : spec.extra_params) {
     if (IsSizExtraParam(p)) {
       ASSERT_TRUE(siz.parse_string(p.c_str())) << "Failed SIZ param: " << p;
     }
   }
-  static_cast<kdu_params *>(&siz)->finalize();
+  static_cast<kdu_params*>(&siz)->finalize();
 }
 
-void ConfigureCodestreamParams(kdu_codestream cs, const ImageSpec &spec) {
-  siz_params *params = cs.access_siz();
+void ConfigureCodestreamParams(kdu_codestream cs, const ImageSpec& spec) {
+  siz_params* params = cs.access_siz();
   ASSERT_NE(params, nullptr);
-  auto has_param = [&](const char *prefix) {
-    for (const std::string &p : spec.extra_params) {
+  auto has_param = [&](const char* prefix) {
+    for (const std::string& p : spec.extra_params) {
       if (p.rfind(prefix, 0) == 0) {
         return true;
       }
@@ -742,7 +747,7 @@ void ConfigureCodestreamParams(kdu_codestream cs, const ImageSpec &spec) {
     const std::string levels = "Clevels=" + std::to_string(spec.dwt_levels);
     ASSERT_TRUE(params->parse_string(levels.c_str()));
   }
-  for (const std::string &p : spec.extra_params) {
+  for (const std::string& p : spec.extra_params) {
     if (!p.empty() && !IsSizExtraParam(p)) {
       ASSERT_TRUE(params->parse_string(p.c_str()))
           << "Failed codestream param: " << p;
@@ -752,106 +757,125 @@ void ConfigureCodestreamParams(kdu_codestream cs, const ImageSpec &spec) {
 }
 
 std::vector<kdu_byte> EncodeImage(
-    const ImageSpec &spec,
-    const std::vector<std::vector<kdu_int32>> &planes,
-    kdu_compressed_target *custom_target = nullptr,
-    kdu_long max_bytes = 0,
-    bool flush_at_end = true,
-    int target_caps = KDU_TARGET_CAP_SEQUENTIAL) {
+    const ImageSpec& spec, const std::vector<std::vector<kdu_int32>>& planes,
+    kdu_compressed_target* custom_target = nullptr, kdu_long max_bytes = 0,
+    bool flush_at_end = true, int target_caps = KDU_TARGET_CAP_SEQUENTIAL) {
   siz_params siz;
   ConfigureSiz(siz, spec);
 
   MemoryTarget local_target;
   local_target.capabilities = target_caps;
-  kdu_compressed_target *target =
+  kdu_compressed_target* target =
       custom_target != nullptr ? custom_target : &local_target;
 
   kdu_codestream cs;
-  cs.create(&siz, target);
-  ConfigureCodestreamParams(cs, spec);
-  if (max_bytes > 0) {
-    cs.set_max_bytes(max_bytes, false, false);
-  }
-  kdu_dims tile_range;
-  cs.get_valid_tiles(tile_range);
-  for (int ty = 0; ty < tile_range.size.y; ++ty) {
-    for (int tx = 0; tx < tile_range.size.x; ++tx) {
-      kdu_tile tile = cs.open_tile(
-          kdu_coords(tile_range.pos.x + tx, tile_range.pos.y + ty));
-      PushTileData(cs, tile, planes, spec);
-      tile.close();
+  try {
+    cs.create(&siz, target);
+    ConfigureCodestreamParams(cs, spec);
+    if (max_bytes > 0) {
+      cs.set_max_bytes(max_bytes, false, false);
     }
+    kdu_dims tile_range;
+    cs.get_valid_tiles(tile_range);
+    for (int ty = 0; ty < tile_range.size.y; ++ty) {
+      for (int tx = 0; tx < tile_range.size.x; ++tx) {
+        kdu_tile tile = cs.open_tile(
+            kdu_coords(tile_range.pos.x + tx, tile_range.pos.y + ty));
+        PushTileData(cs, tile, planes, spec);
+        tile.close();
+      }
+    }
+    if (flush_at_end) {
+      kdu_long layer_bytes[1] = {max_bytes};
+      cs.flush(max_bytes > 0 ? layer_bytes : nullptr, 1);
+    }
+    cs.destroy();
+  } catch (...) {
+    if (cs.exists()) cs.destroy();
+    target->close();
+    throw;
   }
-  if (flush_at_end) {
-    kdu_long layer_bytes[1] = {max_bytes};
-    cs.flush(max_bytes > 0 ? layer_bytes : nullptr, 1);
-  }
-  cs.destroy();
   target->close();
   return local_target.data;
 }
 
-std::vector<std::vector<kdu_int32>> DecodeFullImage(kdu_compressed_source *src) {
+std::vector<std::vector<kdu_int32>> DecodeFullImage(
+    kdu_compressed_source* src) {
   kdu_codestream cs;
-  cs.create(src);
-  const int num_comps = cs.get_num_components(true);
-  std::vector<std::vector<kdu_int32>> out(num_comps);
-  std::vector<kdu_dims> full_comp_dims(num_comps);
-  for (int c = 0; c < num_comps; ++c) {
-    cs.get_dims(c, full_comp_dims[c], true);
-    out[c].resize(static_cast<size_t>(full_comp_dims[c].size.x) *
-                  full_comp_dims[c].size.y);
-  }
-
-  kdu_dims valid_tiles;
-  cs.get_valid_tiles(valid_tiles);
-  for (int ty = 0; ty < valid_tiles.size.y; ++ty) {
-    for (int tx = 0; tx < valid_tiles.size.x; ++tx) {
-      kdu_tile tile = cs.open_tile(
-          kdu_coords(valid_tiles.pos.x + tx, valid_tiles.pos.y + ty));
-      kdu_multi_synthesis engine;
-      engine.create(cs, tile, nullptr, nullptr, KDU_MULTI_XFORM_DEFAULT_FLAGS);
-      std::vector<int> next_row(num_comps, 0);
-      std::vector<kdu_dims> tile_comp_dims(num_comps);
-      for (int c = 0; c < num_comps; ++c) {
-        cs.get_tile_dims(tile.get_tile_idx(), c, tile_comp_dims[c], true);
-      }
-      bool any_left = true;
-      while (any_left) {
-        any_left = false;
-        bool progressed = false;
-        for (int c = 0; c < num_comps; ++c) {
-          const kdu_coords sz = engine.get_size(c);
-          if (next_row[c] >= sz.y) {
-            continue;
-          }
-          any_left = true;
-          kdu_line_buf *line = engine.get_line(c);
-          if (line == nullptr) {
-            continue;
-          }
-          const int bits = cs.get_bit_depth(c, true);
-          const bool is_signed = cs.get_signed(c, true);
-          const int x0 = tile_comp_dims[c].pos.x - full_comp_dims[c].pos.x;
-          const int y0 = tile_comp_dims[c].pos.y - full_comp_dims[c].pos.y;
-          const int dst_y = y0 + next_row[c];
-          const int dst_w = full_comp_dims[c].size.x;
-          for (int x = 0; x < sz.x; ++x) {
-            out[c][static_cast<size_t>(dst_y) * dst_w + x0 + x] =
-                ReadLineSample(line, x, bits, is_signed);
-          }
-          next_row[c]++;
-          progressed = true;
-        }
-        if (any_left && !progressed) {
-          break;
-        }
-      }
-      engine.destroy();
-      tile.close();
+  std::vector<std::vector<kdu_int32>> out;
+  try {
+    cs.create(src);
+    const int num_comps = cs.get_num_components(true);
+    out.resize(num_comps);
+    std::vector<kdu_dims> full_comp_dims(num_comps);
+    for (int c = 0; c < num_comps; ++c) {
+      cs.get_dims(c, full_comp_dims[c], true);
+      out[c].resize(static_cast<size_t>(full_comp_dims[c].size.x) *
+                    full_comp_dims[c].size.y);
     }
+
+    kdu_dims valid_tiles;
+    cs.get_valid_tiles(valid_tiles);
+    for (int ty = 0; ty < valid_tiles.size.y; ++ty) {
+      for (int tx = 0; tx < valid_tiles.size.x; ++tx) {
+        kdu_tile tile;
+        kdu_multi_synthesis engine;
+        try {
+          tile = cs.open_tile(
+              kdu_coords(valid_tiles.pos.x + tx, valid_tiles.pos.y + ty));
+          engine.create(cs, tile, nullptr, nullptr,
+                        KDU_MULTI_XFORM_DEFAULT_FLAGS);
+          std::vector<int> next_row(num_comps, 0);
+          std::vector<kdu_dims> tile_comp_dims(num_comps);
+          for (int c = 0; c < num_comps; ++c) {
+            cs.get_tile_dims(tile.get_tile_idx(), c, tile_comp_dims[c], true);
+          }
+          bool any_left = true;
+          while (any_left) {
+            any_left = false;
+            bool progressed = false;
+            for (int c = 0; c < num_comps; ++c) {
+              const kdu_coords sz = engine.get_size(c);
+              if (next_row[c] >= sz.y) {
+                continue;
+              }
+              any_left = true;
+              kdu_line_buf* line = engine.get_line(c);
+              if (line == nullptr) {
+                continue;
+              }
+              const int bits = cs.get_bit_depth(c, true);
+              const bool is_signed = cs.get_signed(c, true);
+              const int x0 = tile_comp_dims[c].pos.x - full_comp_dims[c].pos.x;
+              const int y0 = tile_comp_dims[c].pos.y - full_comp_dims[c].pos.y;
+              const int dst_y = y0 + next_row[c];
+              const int dst_w = full_comp_dims[c].size.x;
+              for (int x = 0; x < sz.x; ++x) {
+                out[c][static_cast<size_t>(dst_y) * dst_w + x0 + x] =
+                    ReadLineSample(line, x, bits, is_signed);
+              }
+              next_row[c]++;
+              progressed = true;
+            }
+            if (any_left && !progressed) {
+              break;
+            }
+          }
+          engine.destroy();
+          tile.close();
+        } catch (...) {
+          if (engine.exists()) engine.destroy();
+          if (tile.exists()) tile.close();
+          throw;
+        }
+      }
+    }
+    cs.destroy();
+  } catch (...) {
+    if (cs.exists()) cs.destroy();
+    src->close();
+    throw;
   }
-  cs.destroy();
   src->close();
   return out;
 }
@@ -888,8 +912,8 @@ TEST_F(CodestreamTest, CodestreamCommentsTextBinaryAndLarge) {
   ASSERT_TRUE(c1.exists());
   EXPECT_FALSE(c1.check_readonly());
   c1 << "hdr:" << '!' << -7 << " " << 42U << " " << kdu_long{123456} << " "
-     << short{-3} << " " << static_cast<unsigned short>(9) << " " << 1.5F
-     << " " << 2.25;
+     << short{-3} << " " << static_cast<unsigned short>(9) << " " << 1.5F << " "
+     << 2.25;
   c1.put_text(" end");
 
   kdu_codestream_comment c2 = cs.add_comment();
@@ -898,7 +922,8 @@ TEST_F(CodestreamTest, CodestreamCommentsTextBinaryAndLarge) {
   for (size_t i = 0; i < large_bin.size(); ++i) {
     large_bin[i] = static_cast<kdu_byte>((i * 7 + 3) & 0xFF);
   }
-  EXPECT_TRUE(c2.put_data(large_bin.data(), static_cast<int>(large_bin.size())));
+  EXPECT_TRUE(
+      c2.put_data(large_bin.data(), static_cast<int>(large_bin.size())));
 
   kdu_tile tile = cs.open_tile(kdu_coords(0, 0));
   PushTileData(cs, tile, planes, spec);
@@ -918,7 +943,7 @@ TEST_F(CodestreamTest, CodestreamCommentsTextBinaryAndLarge) {
   kdu_codestream_comment cur = in_cs.get_comment();
   while (cur.exists()) {
     EXPECT_TRUE(cur.check_readonly());
-    const char *txt = cur.get_text();
+    const char* txt = cur.get_text();
     ASSERT_NE(txt, nullptr);
     if (txt[0] != '\0') {
       texts.emplace_back(txt);
@@ -926,8 +951,8 @@ TEST_F(CodestreamTest, CodestreamCommentsTextBinaryAndLarge) {
       constexpr int kMaxComBytes = 65530;
       std::vector<kdu_byte> read_back(large_bin.size() + 16);
       EXPECT_EQ(cur.get_data(nullptr, 1000, 100), 100);
-      const int total_read = cur.get_data(read_back.data(), 0,
-                                          static_cast<int>(read_back.size()));
+      const int total_read =
+          cur.get_data(read_back.data(), 0, static_cast<int>(read_back.size()));
       if (total_read == kMaxComBytes &&
           std::memcmp(read_back.data(), large_bin.data(), kMaxComBytes) == 0) {
         found_binary = true;
@@ -938,11 +963,11 @@ TEST_F(CodestreamTest, CodestreamCommentsTextBinaryAndLarge) {
   EXPECT_FALSE(texts.empty());
   EXPECT_TRUE(found_binary);
   const bool found_text =
-      std::any_of(texts.begin(), texts.end(), [](const std::string &s) {
+      std::any_of(texts.begin(), texts.end(), [](const std::string& s) {
         return s.find("hdr:!-7 42 0123456 -3 9") != std::string::npos;
       });
   std::string joined_texts;
-  for (const auto &t : texts) {
+  for (const auto& t : texts) {
     joined_texts += "[" + t + "] ";
   }
   EXPECT_TRUE(found_text) << "texts=" << joined_texts;
@@ -1059,8 +1084,8 @@ TEST_F(CodestreamTest, MultiTileSubsampledQueryAndAppearanceTransforms) {
 }
 
 TEST_F(CodestreamTest, ProgressionOrdersPocTlmPltSopEphAndNonSeekableSource) {
-  const char *orders[] = {"LRCP", "RLCP", "RPCL", "PCRL", "CPRL"};
-  for (const char *ord : orders) {
+  const char* orders[] = {"LRCP", "RLCP", "RPCL", "PCRL", "CPRL"};
+  for (const char* ord : orders) {
     ImageSpec spec;
     spec.width = 48;
     spec.height = 48;
@@ -1095,8 +1120,7 @@ TEST_F(CodestreamTest, ProgressionOrdersPocTlmPltSopEphAndNonSeekableSource) {
     cs.get_valid_tiles(tr);
     for (int ty = 0; ty < tr.size.y; ++ty) {
       for (int tx = 0; tx < tr.size.x; ++tx) {
-        kdu_tile tile =
-            cs.open_tile(kdu_coords(tr.pos.x + tx, tr.pos.y + ty));
+        kdu_tile tile = cs.open_tile(kdu_coords(tr.pos.x + tx, tr.pos.y + ty));
         PushTileData(cs, tile, planes, spec);
         tile.close();
       }
@@ -1334,8 +1358,8 @@ TEST_F(CodestreamTest, RestartShareBufferingRoiAndWriteFailPolicies) {
   cs_throw.destroy();
 }
 
-void DecodeTileFirstComponent(kdu_codestream &cs, kdu_tile &tile,
-                              kdu_thread_env *env = nullptr) {
+void DecodeTileFirstComponent(kdu_codestream& cs, kdu_tile& tile,
+                              kdu_thread_env* env = nullptr) {
   kdu_multi_synthesis synth;
   synth.create(cs, tile, env, nullptr, KDU_MULTI_XFORM_DEFAULT_FLAGS);
   const int height = synth.get_size(0).y;
@@ -1345,7 +1369,7 @@ void DecodeTileFirstComponent(kdu_codestream &cs, kdu_tile &tile,
   synth.destroy(env);
 }
 
-void DecodeTileAllComponents(kdu_codestream &cs, kdu_tile &tile) {
+void DecodeTileAllComponents(kdu_codestream& cs, kdu_tile& tile) {
   kdu_multi_synthesis synth;
   synth.create(cs, tile, nullptr, nullptr, KDU_MULTI_XFORM_DEFAULT_FLAGS);
   const int num_comps = cs.get_num_components(true);
@@ -1428,7 +1452,7 @@ TEST_F(CodestreamTest, InterchangeCodestreamLoadSequentialAndTranscoding) {
   EXPECT_TRUE(pset.init(kdu_coords(0, 0), 2));
   const int manual_idx = pset.add_pdescriptor(0, 0, kdu_coords(0, 0));
   ASSERT_GE(manual_idx, 0);
-  kdu_pdescriptor *manual = pset.access_pdescriptor(manual_idx);
+  kdu_pdescriptor* manual = pset.access_pdescriptor(manual_idx);
   ASSERT_NE(manual, nullptr);
   manual->num_packets = 1;
   int find_idx = -1;
@@ -1474,7 +1498,7 @@ TEST_F(CodestreamTest, InterchangeCodestreamLoadSequentialAndTranscoding) {
     kdu_pdescriptor_set tail;
     flush_set.extract_tail(&tail, 0);
     for (int pd_idx = 0; pd_idx < tail.get_num_pdescriptors(); ++pd_idx) {
-      kdu_pdescriptor *pd = tail.access_pdescriptor(pd_idx);
+      kdu_pdescriptor* pd = tail.access_pdescriptor(pd_idx);
       ASSERT_NE(pd, nullptr);
 
       kdu_tile_comp itc = in_tile.access_component(pd->component_idx);
@@ -1497,8 +1521,8 @@ TEST_F(CodestreamTest, InterchangeCodestreamLoadSequentialAndTranscoding) {
         for (int by = 0; by < blocks.size.y; ++by) {
           for (int bx = 0; bx < blocks.size.x; ++bx) {
             const kdu_coords bidx(blocks.pos.x + bx, blocks.pos.y + by);
-            kdu_block *ib = isub.open_block(bidx);
-            kdu_block *xb = xprec.open_block(b, bidx);
+            kdu_block* ib = isub.open_block(bidx);
+            kdu_block* xb = xprec.open_block(b, bidx);
             xb->num_passes = ib->num_passes;
             xb->missing_msbs = ib->missing_msbs;
             int total_bytes = 0;
@@ -1512,7 +1536,7 @@ TEST_F(CodestreamTest, InterchangeCodestreamLoadSequentialAndTranscoding) {
               std::memcpy(xb->byte_buffer, ib->byte_buffer,
                           static_cast<size_t>(total_bytes));
             }
-            kdu_block *ob = osub.open_block(bidx);
+            kdu_block* ob = osub.open_block(bidx);
             ob->num_passes = ib->num_passes;
             ob->missing_msbs = ib->missing_msbs;
             for (int p = 0; p < ib->num_passes; ++p) {
@@ -1568,10 +1592,10 @@ TEST_F(CodestreamTest, MembackedCompressedSourceModesAndDecode) {
   EXPECT_EQ(mb_src.get_capabilities() & KDU_SOURCE_CAP_MEMORY_BACKED,
             KDU_SOURCE_CAP_MEMORY_BACKED);
   const char desc_tag[] = "frame0";
-  ASSERT_TRUE(mb_src.enable_stream(
-      KDU_MEMBACKED_SOURCE_FULLY_SERVICED,
-      reinterpret_cast<const kdu_byte *>(desc_tag), sizeof(desc_tag), 0x01,
-      1.25, 32, bytes.size() + 64));
+  ASSERT_TRUE(mb_src.enable_stream(KDU_MEMBACKED_SOURCE_FULLY_SERVICED,
+                                   reinterpret_cast<const kdu_byte*>(desc_tag),
+                                   sizeof(desc_tag), 0x01, 1.25, 32,
+                                   bytes.size() + 64));
   size_t total = 0;
   kdu_int32 term_code = 0;
   // In single-threaded builds (no mutex support), enable downgrades to
@@ -1603,10 +1627,10 @@ TEST_F(CodestreamTest, MembackedCompressedSourceModesAndDecode) {
   unserviced.run_reset();
   ASSERT_TRUE(unserviced.run_open(true));
   kdu_long pos = 0;
-  kdu_byte *lim = nullptr;
+  kdu_byte* lim = nullptr;
   EXPECT_NE(unserviced.access_memory(pos, lim), nullptr);
-  const int sflags =
-      unserviced.load_memory(static_cast<kdu_long>(bytes.size()), true, nullptr);
+  const int sflags = unserviced.load_memory(static_cast<kdu_long>(bytes.size()),
+                                            true, nullptr);
   EXPECT_NE(sflags & KDU_SOURCE_SPAN_EXISTS, 0);
   const int lflags = unserviced.load_memory(
       static_cast<kdu_long>(bytes.size() + 1), true, nullptr);
@@ -1809,7 +1833,8 @@ TEST_F(CodestreamTest, Part2MctVariantsAtkNltAndComponentRestrictions) {
         "Mstage_inputs:I1={0,2}",
         "Mstage_outputs:I1={0,2}",
         "Mstage_collections:I1={3,3}",
-        rev ? "Mstage_xforms:I1={DEP,1,1,1,0}" : "Mstage_xforms:I1={DEP,1,1,0,0}",
+        rev ? "Mstage_xforms:I1={DEP,1,1,1,0}"
+            : "Mstage_xforms:I1={DEP,1,1,0,0}",
         "Mnum_stages=1",
         "Mstages=1",
     };
@@ -1846,7 +1871,8 @@ TEST_F(CodestreamTest, Part2MctVariantsAtkNltAndComponentRestrictions) {
         "Mstage_inputs:I1={0,4}",
         "Mstage_outputs:I1={0,4}",
         "Mstage_collections:I1={5,5}",
-        rev ? "Mstage_xforms:I1={DWT,1,1,2,1}" : "Mstage_xforms:I1={DWT,0,1,2,0}",
+        rev ? "Mstage_xforms:I1={DWT,1,1,2,1}"
+            : "Mstage_xforms:I1={DWT,0,1,2,0}",
         "Mnum_stages=1",
         "Mstages=1",
     };
@@ -1876,7 +1902,7 @@ TEST_F(CodestreamTest, Part2MctVariantsAtkNltAndComponentRestrictions) {
        "Kextension:I6=CON", "Ksteps:I6={2,0,0,0},{2,-1,0,0}",
        "Kcoeffs:I6={-0.5},{-0.5},{0.25},{0.25}", "Creversible=no"},
   };
-  for (const auto &atk_params : atk_configs) {
+  for (const auto& atk_params : atk_configs) {
     ImageSpec spec;
     spec.width = 24;
     spec.height = 24;
@@ -1899,11 +1925,8 @@ TEST_F(CodestreamTest, Part2MctVariantsAtkNltAndComponentRestrictions) {
     nlt_smag.reversible = true;
     nlt_smag.dwt_levels = 1;
     nlt_smag.extra_params = {
-        "Sextensions=NLT",
-        "Ncomponents=1",
-        "Nprecision=8",
-        "Nsigned=yes",
-        "NLType=SMAG",
+        "Sextensions=NLT", "Ncomponents=1", "Nprecision=8",
+        "Nsigned=yes",     "NLType=SMAG",
     };
     const auto smag_planes = MakeTestPlanes(nlt_smag);
     const auto smag_bytes = EncodeImage(nlt_smag, smag_planes);
@@ -1938,7 +1961,7 @@ TEST_F(CodestreamTest, Part2MctVariantsAtkNltAndComponentRestrictions) {
 
 TEST_F(CodestreamTest, ProgressionOrdersCprlPrclCbrMultiTileAndCreslengths) {
   // 1. CPRL, PRCL progression orders + Creslengths + PLT/TLM + multi-tile.
-  for (const char *order : {"CPRL", "PRCL"}) {
+  for (const char* order : {"CPRL", "PRCL"}) {
     ImageSpec spec;
     spec.width = 64;
     spec.height = 64;
@@ -1998,11 +2021,11 @@ TEST_F(CodestreamTest, ProgressionOrdersCprlPrclCbrMultiTileAndCreslengths) {
     kdu_pdescriptor_set pset;
     for (;;) {
       bool tile_done = false;
-      kdu_tile tile = in_cs.load_sequential(
-          &pset, tile_done, 1, 1,
-          KDU_LOAD_SEQUENTIAL_WANT_FLUSH_SET |
-              KDU_LOAD_SEQUENTIAL_WANT_PACKET_BYTES,
-          nullptr);
+      kdu_tile tile =
+          in_cs.load_sequential(&pset, tile_done, 1, 1,
+                                KDU_LOAD_SEQUENTIAL_WANT_FLUSH_SET |
+                                    KDU_LOAD_SEQUENTIAL_WANT_PACKET_BYTES,
+                                nullptr);
       if (!tile.exists()) {
         break;
       }
@@ -2012,9 +2035,9 @@ TEST_F(CodestreamTest, ProgressionOrdersCprlPrclCbrMultiTileAndCreslengths) {
       if (it == out_tiles.end()) {
         it = out_tiles.emplace(key, xchg_cs.open_tile(tidx)).first;
       }
-      kdu_tile &otile = it->second;
+      kdu_tile& otile = it->second;
       for (int d = 0; d < pset.get_num_pdescriptors(); ++d) {
-        kdu_pdescriptor *pd = pset.access_pdescriptor(d);
+        kdu_pdescriptor* pd = pset.access_pdescriptor(d);
         ASSERT_NE(pd, nullptr);
         kdu_tile_comp itc = tile.access_component(pd->component_idx);
         kdu_resolution ires = itc.access_resolution(pd->resolution_level);
@@ -2034,8 +2057,8 @@ TEST_F(CodestreamTest, ProgressionOrdersCprlPrclCbrMultiTileAndCreslengths) {
           for (int by = 0; by < blocks.size.y; ++by) {
             for (int bx = 0; bx < blocks.size.x; ++bx) {
               const kdu_coords bidx(blocks.pos.x + bx, blocks.pos.y + by);
-              kdu_block *ib = isub.open_block(bidx);
-              kdu_block *ob = osub.open_block(bidx);
+              kdu_block* ib = isub.open_block(bidx);
+              kdu_block* ob = osub.open_block(bidx);
               ob->num_passes = ib->num_passes;
               ob->missing_msbs = ib->missing_msbs;
               int total_bytes = 0;
@@ -2075,7 +2098,8 @@ TEST_F(CodestreamTest, ProgressionOrdersCprlPrclCbrMultiTileAndCreslengths) {
     EXPECT_GT(xchg_tgt.data.size(), 0);
   }
 
-  // 2. Unsized layer prefixes & synthesized second-last target size in pcrd_opt.
+  // 2. Unsized layer prefixes & synthesized second-last target size in
+  // pcrd_opt.
   {
     ImageSpec spec;
     spec.width = 48;
@@ -2117,7 +2141,8 @@ TEST_F(CodestreamTest, ProgressionOrdersCprlPrclCbrMultiTileAndCreslengths) {
     in_cs.destroy();
   }
 
-  // 3. Multi-set incremental Scbr flushing across multiple tiles + stats exchange.
+  // 3. Multi-set incremental Scbr flushing across multiple tiles + stats
+  // exchange.
   {
     ImageSpec spec;
     spec.width = 64;
@@ -2187,9 +2212,9 @@ class TestOvlpSource : public kdu_membacked_ovlp_source {
   int fetch_calls() const { return fetch_calls_; }
 
  protected:
-  const kdu_byte *fetch_to_next(size_t &descriptor_length,
-                                kdu_uint64 &interpretation, double &timestamp,
-                                size_t &max_buffer_size) override {
+  const kdu_byte* fetch_to_next(size_t& descriptor_length,
+                                kdu_uint64& interpretation, double& timestamp,
+                                size_t& max_buffer_size) override {
     if (next_frame_ >= frames_.size()) {
       return nullptr;
     }
@@ -2200,10 +2225,10 @@ class TestOvlpSource : public kdu_membacked_ovlp_source {
     interpretation = static_cast<kdu_uint64>(cur_frame_ + 1);
     timestamp = static_cast<double>(cur_frame_ + 1);
     max_buffer_size = frames_[cur_frame_].size() * 2 + 1024;
-    return reinterpret_cast<const kdu_byte *>(descriptor_.data());
+    return reinterpret_cast<const kdu_byte*>(descriptor_.data());
   }
 
-  kdu_long fetch_data(kdu_long max_bytes, kdu_byte *buf,
+  kdu_long fetch_data(kdu_long max_bytes, kdu_byte* buf,
                       bool blocking) override {
     (void)blocking;
     fetch_calls_++;
@@ -2212,7 +2237,7 @@ class TestOvlpSource : public kdu_membacked_ovlp_source {
       finish_fetching(0);
       return 0;
     }
-    const auto &src = frames_[static_cast<size_t>(cur_frame_)];
+    const auto& src = frames_[static_cast<size_t>(cur_frame_)];
     const size_t n = std::min({static_cast<size_t>(max_bytes), chunk_size_,
                                src.size() - cur_offset_});
     std::memcpy(buf, src.data() + cur_offset_, n);
@@ -2220,8 +2245,8 @@ class TestOvlpSource : public kdu_membacked_ovlp_source {
     return static_cast<kdu_long>(n);
   }
 
-  bool post_open(kdu_long queue_sequence_idx, kdu_thread_queue *queue,
-                 kdu_thread_env *env) override {
+  bool post_open(kdu_long queue_sequence_idx, kdu_thread_queue* queue,
+                 kdu_thread_env* env) override {
     (void)queue_sequence_idx;
     (void)queue;
     (void)env;
@@ -2320,8 +2345,8 @@ TEST_F(CodestreamTest, MultiThreadedTilesStatsAndOvlpMembackedSource) {
 
     in_cs.restart(&src2, &env);
     kdu_dims roi = MakeDims(0, 0, 32, 32);
-    in_cs.apply_input_restrictions(0, 0, 1, 1, &roi,
-                                   KDU_WANT_OUTPUT_COMPONENTS, &env);
+    in_cs.apply_input_restrictions(0, 0, 1, 1, &roi, KDU_WANT_OUTPUT_COMPONENTS,
+                                   &env);
     kdu_tile t00b = in_cs.open_tile(kdu_coords(0, 0), &env);
     ASSERT_TRUE(t00b.exists());
     t00b.close(&env);
@@ -2333,7 +2358,7 @@ TEST_F(CodestreamTest, MultiThreadedTilesStatsAndOvlpMembackedSource) {
   // ovlp_open + ovlp_close + ovlp_service_all_finished + ovlp_shutdown.
   {
     TestOvlpSource ovlp({tgt1.data, tgt2.data}, 64);
-    const kdu_byte *desc = nullptr;
+    const kdu_byte* desc = nullptr;
     size_t desc_len = 0;
     kdu_uint64 interp = 0;
     double ts = 0.0;
@@ -2362,7 +2387,7 @@ TEST_F(CodestreamTest, MultiThreadedTilesStatsAndOvlpMembackedSource) {
     // ovlp_open, pre-discard while open, ovlp_service_all_finished, and
     // ovlp_shutdown.
     ovlp.ResetFrames({tgt1.data, tgt2.data});
-    const kdu_byte *d = nullptr;
+    const kdu_byte* d = nullptr;
     size_t dl = 0;
     kdu_uint64 it = 0;
     double t = 0.0;
@@ -2384,7 +2409,7 @@ TEST_F(CodestreamTest, MultiThreadedTilesStatsAndOvlpMembackedSource) {
     ovlp.ovlp_shutdown(&env);
     EXPECT_EQ(ovlp.ovlp_open(/*blocking=*/false, 3, &env), -1);
     EXPECT_FALSE(
-        static_cast<kdu_core::kdu_membacked_compressed_source &>(ovlp).close());
+        static_cast<kdu_core::kdu_membacked_compressed_source&>(ovlp).close());
   }
 
   env.destroy();
@@ -2620,7 +2645,7 @@ class SlowAsyncNotifier : public kdu_compressed_source_notifier {
 
 class SlowAsyncMembackedSource : public kdu_membacked_compressed_source {
  public:
-  SlowAsyncMembackedSource(const std::vector<kdu_byte> &payload,
+  SlowAsyncMembackedSource(const std::vector<kdu_byte>& payload,
                            size_t step_bytes)
       : payload_(payload), step_bytes_(step_bytes) {}
 
@@ -2629,15 +2654,15 @@ class SlowAsyncMembackedSource : public kdu_membacked_compressed_source {
            KDU_SOURCE_CAP_ASYNC_NOTIFICATION;
   }
 
-  bool enable_stream(int mode, const kdu_byte *desc = nullptr,
+  bool enable_stream(int mode, const kdu_byte* desc = nullptr,
                      size_t desc_len = 0, kdu_uint64 interp = 0,
                      double ts = 0.0, size_t init_bytes = 0,
                      size_t max_bytes = 0) {
-    return kdu_membacked_compressed_source::enable(
-        mode, desc, desc_len, interp, ts, init_bytes, max_bytes);
+    return kdu_membacked_compressed_source::enable(mode, desc, desc_len, interp,
+                                                   ts, init_bytes, max_bytes);
   }
 
-  bool run_service(size_t &total, kdu_int32 &term_code) {
+  bool run_service(size_t& total, kdu_int32& term_code) {
     return kdu_membacked_compressed_source::service(total, term_code);
   }
 
@@ -2663,7 +2688,7 @@ class SlowAsyncMembackedSource : public kdu_membacked_compressed_source {
   }
 
  protected:
-  kdu_long fetch_data(kdu_long max_bytes, kdu_byte *buffer,
+  kdu_long fetch_data(kdu_long max_bytes, kdu_byte* buffer,
                       bool blocking) override {
     std::unique_lock<std::mutex> lock(mu_);
     if (pos_ >= payload_.size()) {
@@ -2704,7 +2729,7 @@ class SlowAsyncMembackedSource : public kdu_membacked_compressed_source {
 // into either main-header PPM markers (`use_ppm == true`) or per-tile PPT
 // markers (`use_ppm == false`), keeping SOP + packet bodies in each tile-part.
 std::vector<kdu_byte> ConvertJ2kSopEphToPackedHeaders(
-    const std::vector<kdu_byte> &src, bool use_ppm, bool split_markers) {
+    const std::vector<kdu_byte>& src, bool use_ppm, bool split_markers) {
   auto read_u16 = [&](size_t off) -> kdu_uint16 {
     return (static_cast<kdu_uint16>(src[off]) << 8) | src[off + 1];
   };
@@ -2713,11 +2738,11 @@ std::vector<kdu_byte> ConvertJ2kSopEphToPackedHeaders(
            (static_cast<kdu_uint32>(src[off + 1]) << 16) |
            (static_cast<kdu_uint32>(src[off + 2]) << 8) | src[off + 3];
   };
-  auto push_u16 = [](std::vector<kdu_byte> &out, kdu_uint16 v) {
+  auto push_u16 = [](std::vector<kdu_byte>& out, kdu_uint16 v) {
     out.push_back(static_cast<kdu_byte>(v >> 8));
     out.push_back(static_cast<kdu_byte>(v & 0xFF));
   };
-  auto push_u32 = [](std::vector<kdu_byte> &out, kdu_uint32 v) {
+  auto push_u32 = [](std::vector<kdu_byte>& out, kdu_uint32 v) {
     out.push_back(static_cast<kdu_byte>((v >> 24) & 0xFF));
     out.push_back(static_cast<kdu_byte>((v >> 16) & 0xFF));
     out.push_back(static_cast<kdu_byte>((v >> 8) & 0xFF));
@@ -2765,8 +2790,7 @@ std::vector<kdu_byte> ConvertJ2kSopEphToPackedHeaders(
       }
       // Header runs through EPH (FF 92)
       const size_t hdr_start = cur;
-      while (cur + 1 < tp_end &&
-             !(src[cur] == 0xFF && src[cur + 1] == 0x92)) {
+      while (cur + 1 < tp_end && !(src[cur] == 0xFF && src[cur + 1] == 0x92)) {
         cur++;
       }
       if (cur + 1 < tp_end && src[cur] == 0xFF && src[cur + 1] == 0x92) {
@@ -2776,9 +2800,9 @@ std::vector<kdu_byte> ConvertJ2kSopEphToPackedHeaders(
       }
       // Packet body runs until next SOP or end of tile-part
       const size_t body_start = cur;
-      while (cur < tp_end && !(cur + 5 < tp_end && src[cur] == 0xFF &&
-                               src[cur + 1] == 0x91 && src[cur + 2] == 0x00 &&
-                               src[cur + 3] == 0x04)) {
+      while (cur < tp_end &&
+             !(cur + 5 < tp_end && src[cur] == 0xFF && src[cur + 1] == 0x91 &&
+               src[cur + 2] == 0x00 && src[cur + 3] == 0x04)) {
         cur++;
       }
       tp.body.insert(tp.body.end(), src.begin() + body_start,
@@ -2791,7 +2815,7 @@ std::vector<kdu_byte> ConvertJ2kSopEphToPackedHeaders(
   std::vector<kdu_byte> out(src.begin(), src.begin() + first_sot);
   if (use_ppm) {
     std::vector<kdu_byte> ppm_stream;
-    for (const auto &tp : tparts) {
+    for (const auto& tp : tparts) {
       push_u32(ppm_stream, static_cast<kdu_uint32>(tp.packed_hdrs.size()));
       ppm_stream.insert(ppm_stream.end(), tp.packed_hdrs.begin(),
                         tp.packed_hdrs.end());
@@ -2813,13 +2837,12 @@ std::vector<kdu_byte> ConvertJ2kSopEphToPackedHeaders(
     }
   }
 
-  for (const auto &tp : tparts) {
+  for (const auto& tp : tparts) {
     std::vector<kdu_byte> tp_bytes = tp.header_prefix;
     if (!use_ppm) {
-      const size_t split_at =
-          split_markers && tp.packed_hdrs.size() > 8
-              ? (tp.packed_hdrs.size() / 2)
-              : tp.packed_hdrs.size();
+      const size_t split_at = split_markers && tp.packed_hdrs.size() > 8
+                                  ? (tp.packed_hdrs.size() / 2)
+                                  : tp.packed_hdrs.size();
       kdu_byte zppt = 0;
       for (size_t off = 0; off < tp.packed_hdrs.size();) {
         const size_t chunk =
@@ -2849,12 +2872,10 @@ TEST_F(CodestreamTest, EnumeratedAtkKernelsAndAppearanceAccessors) {
   // 1. Enumerated Part-2 ATK kernels: R2X2, I2X2, I1X1.
   const std::vector<std::pair<bool, std::vector<std::string>>> atk_cases = {
       {true, {"Ckernels=ATK", "Catk=2", "Kkernels:I2=R2X2"}},
-      {false,
-       {"Ckernels=ATK", "Catk=3", "Kkernels:I3=I2X2", "Creversible=no"}},
-      {false,
-       {"Ckernels=ATK", "Catk=4", "Kkernels:I4=I1X1", "Creversible=no"}},
+      {false, {"Ckernels=ATK", "Catk=3", "Kkernels:I3=I2X2", "Creversible=no"}},
+      {false, {"Ckernels=ATK", "Catk=4", "Kkernels:I4=I1X1", "Creversible=no"}},
   };
-  for (const auto &cfg : atk_cases) {
+  for (const auto& cfg : atk_cases) {
     ImageSpec spec;
     spec.width = 24;
     spec.height = 24;
@@ -3024,8 +3045,8 @@ TEST_F(CodestreamTest, PpmPptPackedPacketHeadersMarkersAndSeekableIo) {
   spec.reversible = true;
   spec.dwt_levels = 2;
   spec.tile_size = kdu_coords(16, 16);  // 3x3 = 9 tiles
-  spec.extra_params = {"Corder=LRCP", "Clayers=1", "Cblk={8,8}",
-                       "Cuse_sop=yes", "Cuse_eph=yes"};
+  spec.extra_params = {"Corder=LRCP", "Clayers=1", "Cblk={8,8}", "Cuse_sop=yes",
+                       "Cuse_eph=yes"};
   const auto planes = MakeTestPlanes(spec);
   const auto raw_bytes = EncodeImage(spec, planes);
 
@@ -3101,8 +3122,8 @@ TEST_F(CodestreamTest, PpmPptPackedPacketHeadersMarkersAndSeekableIo) {
     if (cs.exists()) cs.destroy();
   }
 
-  // Corrupt SOP/SOT lengths in resilient mode + unexpected marker in packet body
-  // (kd_input::read with throw_markers) + trailing bytes after EOC.
+  // Corrupt SOP/SOT lengths in resilient mode + unexpected marker in packet
+  // body (kd_input::read with throw_markers) + trailing bytes after EOC.
   {
     auto corrupt = raw_bytes;
     // Append corrupt SOP (length 5) & corrupt SOT (length 9) near trailing
@@ -3163,9 +3184,10 @@ TEST_F(CodestreamTest, AsyncMembackedNotifierAndServiceEdgePaths) {
   const auto bytes = EncodeImage(spec, planes);
   ASSERT_GT(bytes.size(), 128);
 
-  // 1) PARTIALLY_SERVICED async notifier: prepare_notify -> KDU_SOURCE_WILL_NOTIFY,
-  // change notifier -> will_not_notify, notify via service() on background thread,
-  // then blocking fallback when prepare_notify returns false.
+  // 1) PARTIALLY_SERVICED async notifier: prepare_notify ->
+  // KDU_SOURCE_WILL_NOTIFY, change notifier -> will_not_notify, notify via
+  // service() on background thread, then blocking fallback when prepare_notify
+  // returns false.
   {
     SlowAsyncMembackedSource mb(bytes, 32);
     ASSERT_TRUE(mb.enable_stream(KDU_MEMBACKED_SOURCE_FULLY_SERVICED, nullptr,
@@ -3207,12 +3229,12 @@ TEST_F(CodestreamTest, AsyncMembackedNotifierAndServiceEdgePaths) {
     EXPECT_TRUE(mb.close());
   }
 
-  // 2) FULLY_SERVICED concurrent producer + consumer load_memory with blocking &
-  // async notifier + kd_compressed_input::async_check_would_block_and_notify.
+  // 2) FULLY_SERVICED concurrent producer + consumer load_memory with blocking
+  // & async notifier + kd_compressed_input::async_check_would_block_and_notify.
   {
     SlowAsyncMembackedSource mb(bytes, 32);
-    ASSERT_TRUE(mb.enable_stream(KDU_MEMBACKED_SOURCE_FULLY_SERVICED, nullptr, 0,
-                                 0, 0.0, 64, bytes.size() + 64));
+    ASSERT_TRUE(mb.enable_stream(KDU_MEMBACKED_SOURCE_FULLY_SERVICED, nullptr,
+                                 0, 0, 0.0, 64, bytes.size() + 64));
     ASSERT_TRUE(mb.run_open(false));
 
     size_t total = 0;
@@ -3279,9 +3301,13 @@ TEST_F(CodestreamTest, PcrdOptUnsizedTrimCreslengthsCbrBulkFillAndTransOut) {
     spec.components = 3;
     spec.reversible = false;
     spec.dwt_levels = 2;
-    spec.extra_params = {"Corder=RPCL", "Clayers=4", "Cycc=yes",
-                         "Cprecincts={32,32}", "Qweights=10.0,0.1,1.0",
-                         "ORGgen_plt=yes", "ORGplt_parts=R|L|C"};
+    spec.extra_params = {"Corder=RPCL",
+                         "Clayers=4",
+                         "Cycc=yes",
+                         "Cprecincts={32,32}",
+                         "Qweights=10.0,0.1,1.0",
+                         "ORGgen_plt=yes",
+                         "ORGplt_parts=R|L|C"};
     const auto planes = MakeTestPlanes(spec);
     siz_params siz;
     ConfigureSiz(siz, spec);
@@ -3302,21 +3328,21 @@ TEST_F(CodestreamTest, PcrdOptUnsizedTrimCreslengthsCbrBulkFillAndTransOut) {
 
     // Interchange codestream: trans_pcrd_opt with tight limit triggering
     // sloppy_bytes + trans_out truncation + error 60 + auto_trans_out.
-    auto copy_loaded_tile = [&](kdu_codestream &in_cs, kdu_codestream &out_cs,
-                                kdu_pdescriptor_set &pset, bool shrink_targets) {
+    auto copy_loaded_tile = [&](kdu_codestream& in_cs, kdu_codestream& out_cs,
+                                kdu_pdescriptor_set& pset,
+                                bool shrink_targets) {
       kdu_tile xtile = out_cs.open_tile(kdu_coords(0, 0));
       ASSERT_TRUE(xtile.exists());
       bool tdone = false;
       while (!tdone) {
         kdu_tile itile = in_cs.load_sequential(
             &pset, tdone, 2, 0,
-            KDU_LOAD_SEQUENTIAL_WANT_TILE |
-                KDU_LOAD_SEQUENTIAL_WANT_FLUSH_SET |
+            KDU_LOAD_SEQUENTIAL_WANT_TILE | KDU_LOAD_SEQUENTIAL_WANT_FLUSH_SET |
                 KDU_LOAD_SEQUENTIAL_WANT_PACKET_BYTES,
             nullptr);
         ASSERT_TRUE(itile.exists());
         for (int d = 0; d < pset.get_num_pdescriptors(); ++d) {
-          kdu_pdescriptor *pd = pset.access_pdescriptor(d);
+          kdu_pdescriptor* pd = pset.access_pdescriptor(d);
           kdu_tile_comp itc = itile.access_component(pd->component_idx);
           kdu_resolution ires = itc.access_resolution(pd->resolution_level);
           kdu_precinct iprec = ires.access_precinct(pd->precinct_idx);
@@ -3326,14 +3352,16 @@ TEST_F(CodestreamTest, PcrdOptUnsizedTrimCreslengthsCbrBulkFillAndTransOut) {
           int min_b = ires.which() ? 1 : 0;
           for (int b = min_b; b <= max_b; ++b) {
             kdu_dims blocks;
-            if (!iprec.get_valid_blocks(b, blocks) || blocks.is_empty()) continue;
+            if (!iprec.get_valid_blocks(b, blocks) || blocks.is_empty())
+              continue;
             kdu_subband isub = ires.access_subband(b);
             kdu_subband xsub = xres.access_subband(b);
             for (int r = blocks.pos.y; r < blocks.pos.y + blocks.size.y; ++r) {
-              for (int c = blocks.pos.x; c < blocks.pos.x + blocks.size.x; ++c) {
+              for (int c = blocks.pos.x; c < blocks.pos.x + blocks.size.x;
+                   ++c) {
                 kdu_coords bidx(c, r);
-                kdu_block *ib = isub.open_block(bidx);
-                kdu_block *xb = xsub.open_block(bidx);
+                kdu_block* ib = isub.open_block(bidx);
+                kdu_block* xb = xsub.open_block(bidx);
                 xb->num_passes = ib->num_passes;
                 xb->missing_msbs = ib->missing_msbs;
                 kdu_long total_bytes = 0;
@@ -3355,7 +3383,8 @@ TEST_F(CodestreamTest, PcrdOptUnsizedTrimCreslengthsCbrBulkFillAndTransOut) {
           if (shrink_targets && pd->packet_bytes != nullptr) {
             for (int q = 0; q < pd->packet_bytes_entries; ++q) {
               if (pd->packet_bytes[q] > 2) {
-                pd->packet_bytes[q] = std::max<kdu_long>(1, pd->packet_bytes[q] / 2);
+                pd->packet_bytes[q] =
+                    std::max<kdu_long>(1, pd->packet_bytes[q] / 2);
               }
             }
           }
@@ -3459,8 +3488,9 @@ TEST_F(CodestreamTest, PcrdOptUnsizedTrimCreslengthsCbrBulkFillAndTransOut) {
     cs.destroy();
   }
 
-  // 4. Incremental flush onto StructuredCacheTarget (ready_area < remaining_area)
-  // and sequential auto_flush with Sorder / transposed incremental updates.
+  // 4. Incremental flush onto StructuredCacheTarget (ready_area <
+  // remaining_area) and sequential auto_flush with Sorder / transposed
+  // incremental updates.
   {
     ImageSpec spec;
     spec.width = 64;
@@ -3583,8 +3613,8 @@ TEST_F(CodestreamTest, MultiThreadedTileEnvFragBlocksAndAllocatorFailures) {
     EXPECT_FALSE(error_handler_.history().empty());
   }
 
-  // 3. Large code-buffer count + fragmented block reassembly (256x256, Cblk=16x16)
-  // across multi-tile decode + set_tile_unloading_threshold.
+  // 3. Large code-buffer count + fragmented block reassembly (256x256,
+  // Cblk=16x16) across multi-tile decode + set_tile_unloading_threshold.
   {
     ImageSpec spec;
     spec.width = 256;
@@ -3621,7 +3651,8 @@ TEST_F(CodestreamTest, MultiThreadedTileEnvFragBlocksAndAllocatorFailures) {
   }
 
   // 4. Multithreaded kdu_thread_env encode & tile decode (open_tiles,
-  // access_tile with wait_for_bkgnd=true, close_tiles, auto_flush, cs_terminate).
+  // access_tile with wait_for_bkgnd=true, close_tiles, auto_flush,
+  // cs_terminate).
   {
     ImageSpec spec;
     spec.width = 128;
@@ -3665,8 +3696,8 @@ TEST_F(CodestreamTest, MultiThreadedTileEnvFragBlocksAndAllocatorFailures) {
     in_cs.open_tiles(all_tiles, /*wait_for_bkgnd=*/false, &env);
     for (int ty = 0; ty < all_tiles.size.y; ++ty) {
       for (int tx = 0; tx < all_tiles.size.x; ++tx) {
-        kdu_tile tile =
-            in_cs.access_tile(kdu_coords(tx, ty), /*wait_for_bkgnd=*/true, &env);
+        kdu_tile tile = in_cs.access_tile(kdu_coords(tx, ty),
+                                          /*wait_for_bkgnd=*/true, &env);
         ASSERT_TRUE(tile.exists());
         DecodeTileFirstComponent(in_cs, tile);
       }
@@ -3709,13 +3740,13 @@ TEST_F(CodestreamTest, MarkerErrorsPrintCodesAuxSegmentsAndInputRestart) {
     ASSERT_LT(eph_pos + 1, bytes.size());
 
     const kdu_uint16 marker_codes[] = {
-        KDU_SOC,   KDU_SOT,  KDU_SOD, KDU_SOP,   KDU_EOC,  KDU_SIZ,  KDU_CAP,
-        KDU_PRF,   KDU_CPF,  KDU_CBD, KDU_MCT,   KDU_MCC,  KDU_MCO,  KDU_COD,
-        KDU_COC,   KDU_QCD,  KDU_QCC, KDU_RGN,   KDU_POC,  KDU_CRG,  KDU_DFS,
-        KDU_ADS,   KDU_NLT,  KDU_ATK, KDU_COM,   KDU_TLM,  KDU_PLM,  KDU_PLT,
-        KDU_PPM,   KDU_PPT,  KDU_DCO, KDU_QPD,   KDU_QPC,  KDU_VMS,  KDU_RLT,
-        KDU_SEC,   KDU_INSEC, KDU_NSI, KDU_EPB,  KDU_ESD,  KDU_EPC,  KDU_RED,
-        KDU_HDT,   0xFF12,
+        KDU_SOC, KDU_SOT,   KDU_SOD, KDU_SOP, KDU_EOC, KDU_SIZ, KDU_CAP,
+        KDU_PRF, KDU_CPF,   KDU_CBD, KDU_MCT, KDU_MCC, KDU_MCO, KDU_COD,
+        KDU_COC, KDU_QCD,   KDU_QCC, KDU_RGN, KDU_POC, KDU_CRG, KDU_DFS,
+        KDU_ADS, KDU_NLT,   KDU_ATK, KDU_COM, KDU_TLM, KDU_PLM, KDU_PLT,
+        KDU_PPM, KDU_PPT,   KDU_DCO, KDU_QPD, KDU_QPC, KDU_VMS, KDU_RLT,
+        KDU_SEC, KDU_INSEC, KDU_NSI, KDU_EPB, KDU_ESD, KDU_EPC, KDU_RED,
+        KDU_HDT, 0xFF12,
     };
     for (kdu_uint16 code : marker_codes) {
       std::vector<kdu_byte> corrupted = bytes;
@@ -3730,7 +3761,7 @@ TEST_F(CodestreamTest, MarkerErrorsPrintCodesAuxSegmentsAndInputRestart) {
       error_handler_.clear();
       EXPECT_THROW(
           {
-            kdu_block *blk = sb.open_block(kdu_coords(0, 0));
+            kdu_block* blk = sb.open_block(kdu_coords(0, 0));
             sb.close_block(blk);
           },
           int);
@@ -3742,18 +3773,19 @@ TEST_F(CodestreamTest, MarkerErrorsPrintCodesAuxSegmentsAndInputRestart) {
   // scanning + kd_input::ignore/seek/load_buf.
   {
     struct ChunkedNonSeekableSource : public kdu_compressed_source {
-      explicit ChunkedNonSeekableSource(const std::vector<kdu_byte> &buf)
+      explicit ChunkedNonSeekableSource(const std::vector<kdu_byte>& buf)
           : data(buf) {}
       int get_capabilities() override { return 0; }
-      int read(kdu_byte *buf, int num_bytes) override {
+      int read(kdu_byte* buf, int num_bytes) override {
         if (pos >= data.size() || num_bytes <= 0) return 0;
         const size_t avail = data.size() - pos;
-        const size_t n = std::min<size_t>({avail, static_cast<size_t>(num_bytes), 7});
+        const size_t n =
+            std::min<size_t>({avail, static_cast<size_t>(num_bytes), 7});
         std::copy_n(data.data() + pos, n, buf);
         pos += n;
         return static_cast<int>(n);
       }
-      const std::vector<kdu_byte> &data;
+      const std::vector<kdu_byte>& data;
       size_t pos = 0;
     };
 
@@ -3798,7 +3830,7 @@ TEST_F(CodestreamTest, MarkerErrorsPrintCodesAuxSegmentsAndInputRestart) {
 
     // Non-seekable seek attempt throws KDU_ERROR.
     const std::vector<kdu_byte> truncated_bytes(mct_bytes.begin(),
-                                              mct_bytes.begin() + 24);
+                                                mct_bytes.begin() + 24);
     ChunkedNonSeekableSource truncated(truncated_bytes);
     kdu_codestream fail_cs;
     error_handler_.clear();
@@ -3937,7 +3969,7 @@ TEST_F(CodestreamTest, CbrMultiFrameFlushStatsTightRateAndTransOut) {
 
     kdu_flush_stats fstats = cs.add_flush_stats(0, 5, 0, 1);
     kdu_long frame_budget = 600;
-    auto encode_frame = [&](const std::vector<std::vector<kdu_int32>> &data,
+    auto encode_frame = [&](const std::vector<std::vector<kdu_int32>>& data,
                             kdu_long budget) {
       cs.auto_flush(1, 1, 16, 16, &budget, 1);
       for (int ty = 0; ty < 2; ++ty) {
@@ -4066,8 +4098,8 @@ TEST_F(CodestreamTest, CbrMultiFrameFlushStatsTightRateAndTransOut) {
             for (int by = 0; by < bdims.size.y; ++by) {
               for (int bx = 0; bx < bdims.size.x; ++bx) {
                 const kdu_coords bidx = bdims.pos + kdu_coords(bx, by);
-                kdu_block *iblk = isub.open_block(bidx);
-                kdu_block *oblk = osub.open_block(bidx);
+                kdu_block* iblk = isub.open_block(bidx);
+                kdu_block* oblk = osub.open_block(bidx);
                 oblk->num_passes = iblk->num_passes;
                 if (iblk->num_passes > 0) {
                   oblk->set_max_passes(iblk->num_passes, false);
@@ -4101,14 +4133,16 @@ TEST_F(CodestreamTest, CbrMultiFrameFlushStatsTightRateAndTransOut) {
 TEST_F(CodestreamTest,
        MultiThreadedPlockOvlpAsyncSampleAllocatorAndLoadSequential) {
   // 1. Standalone kdu_sample_allocator multi-fragment pre_alloc + finalize +
-  // alloc32 + seek_permit hard failure (handle_failed_permit return_on_fail=false).
+  // alloc32 + seek_permit hard failure (handle_failed_permit
+  // return_on_fail=false).
   {
     kdu_membroker big_broker(1 << 20);
     kdu_sample_allocator alloc;
     EXPECT_TRUE(alloc.configure(&big_broker, 10));  // 1024-byte fragments
     const size_t off1 = alloc.pre_alloc(KDU_SAMPLE_PREC32, 0, 200);
     const size_t off2 = alloc.pre_alloc(KDU_SAMPLE_PREC32, 0, 200);
-    const size_t off3 = alloc.pre_alloc_block(800);  // crosses fragment boundary
+    const size_t off3 =
+        alloc.pre_alloc_block(800);  // crosses fragment boundary
     (void)off2;
     (void)off3;
     ImageSpec spec;
@@ -4143,8 +4177,8 @@ TEST_F(CodestreamTest,
     spec.reversible = false;
     spec.dwt_levels = 2;
     spec.tile_size = kdu_coords(64, 64);
-    spec.extra_params = {"Cycc=yes", "Corder=PCRL", "Cprecincts={16,16}",
-                         "Cblk={8,8}", "Clayers=2", "ORGgen_tlm=4",
+    spec.extra_params = {"Cycc=yes",      "Corder=PCRL", "Cprecincts={16,16}",
+                         "Cblk={8,8}",    "Clayers=2",   "ORGgen_tlm=4",
                          "ORGgen_plt=yes"};
     const auto planes = MakeTestPlanes(spec);
 
@@ -4169,8 +4203,9 @@ TEST_F(CodestreamTest,
         }
         kdu_tile tile = out_cs.open_tile(kdu_coords(tx, ty), &env);
         kdu_dims tdims;
-        tile.access_component(0).access_resolution(spec.dwt_levels).get_dims(
-            tdims);
+        tile.access_component(0)
+            .access_resolution(spec.dwt_levels)
+            .get_dims(tdims);
         EXPECT_GT(tdims.size.x, 0);
         kdu_thread_queue tile_queue;
         ASSERT_TRUE(env.attach_queue(&tile_queue, nullptr, nullptr));
@@ -4188,14 +4223,15 @@ TEST_F(CodestreamTest,
             out_cs.get_tile_dims(kdu_coords(tx, ty), c, cdims);
             const kdu_coords cpos = cdims.pos;
             if (rows_pushed[c] < csize.y) {
-              kdu_line_buf *line = engine.exchange_line(c, nullptr, &env);
+              kdu_line_buf* line = engine.exchange_line(c, nullptr, &env);
               if (line != nullptr) {
                 const int y = cpos.y + rows_pushed[c];
                 for (int x = 0; x < csize.x; ++x) {
-                  WriteLineSample(line, x,
-                                  planes[c][static_cast<size_t>(y) * spec.width +
-                                            cpos.x + x],
-                                  spec.bit_depth, spec.is_signed);
+                  WriteLineSample(
+                      line, x,
+                      planes[c]
+                            [static_cast<size_t>(y) * spec.width + cpos.x + x],
+                      spec.bit_depth, spec.is_signed);
                 }
                 engine.exchange_line(c, line, &env);
                 rows_pushed[c]++;
@@ -4209,14 +4245,14 @@ TEST_F(CodestreamTest,
           out_cs.get_tile_dims(kdu_coords(tx, ty), c, cdims);
           const kdu_coords cpos = cdims.pos;
           while (rows_pushed[c] < csize.y) {
-            kdu_line_buf *line = engine.exchange_line(c, nullptr, &env);
+            kdu_line_buf* line = engine.exchange_line(c, nullptr, &env);
             ASSERT_NE(line, nullptr);
             const int y = cpos.y + rows_pushed[c];
             for (int x = 0; x < csize.x; ++x) {
-              WriteLineSample(line, x,
-                              planes[c][static_cast<size_t>(y) * spec.width +
-                                        cpos.x + x],
-                              spec.bit_depth, spec.is_signed);
+              WriteLineSample(
+                  line, x,
+                  planes[c][static_cast<size_t>(y) * spec.width + cpos.x + x],
+                  spec.bit_depth, spec.is_signed);
             }
             engine.exchange_line(c, line, &env);
             rows_pushed[c]++;
@@ -4276,11 +4312,11 @@ TEST_F(CodestreamTest,
         bool tile_done = false;
         kdu_tile lt;
         while (!tile_done) {
-          kdu_tile next_lt = seq_cs.load_sequential(
-              &pset, tile_done, 1, 0,
-              KDU_LOAD_SEQUENTIAL_WANT_FLUSH_SET |
-                  KDU_LOAD_SEQUENTIAL_WANT_PACKET_BYTES,
-              &env);
+          kdu_tile next_lt =
+              seq_cs.load_sequential(&pset, tile_done, 1, 0,
+                                     KDU_LOAD_SEQUENTIAL_WANT_FLUSH_SET |
+                                         KDU_LOAD_SEQUENTIAL_WANT_PACKET_BYTES,
+                                     &env);
           if (!next_lt.exists()) break;
           lt = next_lt;
         }
@@ -4308,8 +4344,8 @@ TEST_F(CodestreamTest,
     if (lt_cb.exists()) lt_cb.close();
     kdu_pdescriptor_set pset_skip;
     bool done_skip = false;
-    kdu_tile lt_skip = skip_cs.load_sequential(&pset_skip, done_skip, 0, 0, 0,
-                                               nullptr);
+    kdu_tile lt_skip =
+        skip_cs.load_sequential(&pset_skip, done_skip, 0, 0, 0, nullptr);
     if (lt_skip.exists()) lt_skip.close();
     skip_cs.destroy();
     env.destroy();
@@ -4348,23 +4384,23 @@ TEST_F(CodestreamTest,
 
       int LastPostOpenTiles() const { return last_post_open_tiles_; }
 
-      kdu_long fetch_data(kdu_long max_bytes, kdu_byte *buffer,
+      kdu_long fetch_data(kdu_long max_bytes, kdu_byte* buffer,
                           bool blocking) override {
         (void)blocking;
-        const auto &frame = frames_[cur_frame_];
+        const auto& frame = frames_[cur_frame_];
         if (offset_ >= frame.size()) return 0;
-        const size_t n = std::min<size_t>(
-            {frame.size() - offset_, static_cast<size_t>(max_bytes),
-             chunk_bytes_});
+        const size_t n =
+            std::min<size_t>({frame.size() - offset_,
+                              static_cast<size_t>(max_bytes), chunk_bytes_});
         std::copy_n(frame.data() + offset_, n, buffer);
         offset_ += n;
         return static_cast<kdu_long>(n);
       }
 
-      const kdu_byte *fetch_to_next(size_t &descriptor_length,
-                                    kdu_uint64 &interpretation,
-                                    double &timestamp,
-                                    size_t &max_buffer_size) override {
+      const kdu_byte* fetch_to_next(size_t& descriptor_length,
+                                    kdu_uint64& interpretation,
+                                    double& timestamp,
+                                    size_t& max_buffer_size) override {
         if (fetch_cb_) fetch_cb_(cur_frame_);
         static constexpr kdu_byte kRejectDesc[2] = {0x4E, 0x4F};
         static constexpr kdu_byte kDefaultDesc[4] = {0x4B, 0x44, 0x55, 0x31};
@@ -4383,7 +4419,7 @@ TEST_F(CodestreamTest,
         return kDefaultDesc;
       }
 
-      bool enable(int service_mode, const kdu_byte *descriptor,
+      bool enable(int service_mode, const kdu_byte* descriptor,
                   size_t descriptor_length, kdu_uint64 interpretation,
                   double timestamp, size_t min_buffer_size,
                   size_t max_buffer_size) override {
@@ -4398,8 +4434,8 @@ TEST_F(CodestreamTest,
       int ResetOvlp() { return ovlp_reset(); }
       bool CloseSource() { return close(); }
 
-      bool post_open(kdu_long sequence_idx, kdu_thread_queue *queue,
-                     kdu_thread_env *env) override {
+      bool post_open(kdu_long sequence_idx, kdu_thread_queue* queue,
+                     kdu_thread_env* env) override {
         (void)sequence_idx;
         (void)queue;
         (void)env;
@@ -4473,7 +4509,7 @@ TEST_F(CodestreamTest,
     });
 
     std::thread producer([&]() {
-      const kdu_byte *desc = nullptr;
+      const kdu_byte* desc = nullptr;
       size_t dlen = 0;
       kdu_uint64 interp = 0;
       double ts = 0.0;
@@ -4544,7 +4580,7 @@ TEST_F(CodestreamTest,
     // Service frame 3 directly on main thread to verify standalone ovlp_reset
     // returns 1 when enabled and not yet started.
     {
-      const kdu_byte *desc = nullptr;
+      const kdu_byte* desc = nullptr;
       size_t dlen = 0;
       kdu_uint64 interp = 0;
       double ts = 0.0;
@@ -4590,10 +4626,8 @@ TEST_F(CodestreamTest, MembackedCompressedSourcePartiallyServicedAndNotifier) {
   class RecordingNotifier : public kdu_compressed_source_notifier {
    public:
     void note_blocking() override {
-      {
-        std::lock_guard<std::mutex> lk(mu_);
-        blocking_calls_++;
-      }
+      std::lock_guard<std::mutex> lk(mu_);
+      blocking_calls_++;
       cv_.notify_all();
     }
     void note_unblocked() override {
@@ -4607,10 +4641,8 @@ TEST_F(CodestreamTest, MembackedCompressedSourcePartiallyServicedAndNotifier) {
       return allow_prepare_;
     }
     void notify() override {
-      {
-        std::lock_guard<std::mutex> lk(mu_);
-        notify_calls_++;
-      }
+      std::lock_guard<std::mutex> lk(mu_);
+      notify_calls_++;
       cv_.notify_all();
     }
     void will_not_notify() override {
@@ -4661,17 +4693,18 @@ TEST_F(CodestreamTest, MembackedCompressedSourcePartiallyServicedAndNotifier) {
 
   class PartialSource : public kdu_membacked_compressed_source {
    public:
-    PartialSource(const std::vector<kdu_byte> &payload, size_t step_bytes)
+    PartialSource(const std::vector<kdu_byte>& payload, size_t step_bytes)
         : payload_(payload), step_bytes_(step_bytes) {}
 
-    bool Enable(int mode, size_t min_buf, size_t max_buf) {
-      return kdu_membacked_compressed_source::enable(mode, nullptr, 0, 0, 0.0,
-                                                     min_buf, max_buf);
+    bool Enable(int mode, size_t min_buf, size_t max_buf,
+                const kdu_byte* desc = nullptr, size_t desc_len = 0) {
+      return kdu_membacked_compressed_source::enable(mode, desc, desc_len, 0,
+                                                     0.0, min_buf, max_buf);
     }
     bool Open(bool auto_enable) {
       return kdu_membacked_compressed_source::open(auto_enable);
     }
-    bool Service(size_t &fetched, kdu_int32 &term) {
+    bool Service(size_t& fetched, kdu_int32& term) {
       return kdu_membacked_compressed_source::service(fetched, term);
     }
     int Reset() { return kdu_membacked_compressed_source::reset(); }
@@ -4696,7 +4729,7 @@ TEST_F(CodestreamTest, MembackedCompressedSourcePartiallyServicedAndNotifier) {
     }
 
    protected:
-    kdu_long fetch_data(kdu_long max_bytes, kdu_byte *buffer,
+    kdu_long fetch_data(kdu_long max_bytes, kdu_byte* buffer,
                         bool blocking) override {
       std::unique_lock<std::mutex> lk(mu_);
       ++fetch_count_;
@@ -4834,8 +4867,8 @@ TEST_F(CodestreamTest, MembackedCompressedSourcePartiallyServicedAndNotifier) {
         small_unserviced.Enable(KDU_MEMBACKED_SOURCE_UNSERVICED, 64, 128));
     ASSERT_TRUE(small_unserviced.Open(false));
     small_unserviced.SetFailNonBlockingCount(10);
-    flags =
-        small_unserviced.load_memory(4096, /*blocking=*/false, &unserv_notifier);
+    flags = small_unserviced.load_memory(4096, /*blocking=*/false,
+                                         &unserv_notifier);
     EXPECT_NE(flags & KDU_SOURCE_IS_COMPLETE, 0);
     EXPECT_GE(unserv_notifier.BlockingCalls(), 1);
     EXPECT_TRUE(small_unserviced.close());
@@ -4843,7 +4876,8 @@ TEST_F(CodestreamTest, MembackedCompressedSourcePartiallyServicedAndNotifier) {
     std::vector<kdu_byte> prefix(bytes.begin(), bytes.begin() + 200);
     PartialSource finish_unserv(prefix, 64);
     finish_unserv.SetFinishTermOnEof(7);
-    ASSERT_TRUE(finish_unserv.Enable(KDU_MEMBACKED_SOURCE_UNSERVICED, 64, 4096));
+    ASSERT_TRUE(
+        finish_unserv.Enable(KDU_MEMBACKED_SOURCE_UNSERVICED, 64, 4096));
     ASSERT_TRUE(finish_unserv.Open(false));
     flags = finish_unserv.load_memory(4096, /*blocking=*/true, nullptr);
     EXPECT_NE(flags & KDU_SOURCE_IS_COMPLETE, 0);
@@ -4852,11 +4886,13 @@ TEST_F(CodestreamTest, MembackedCompressedSourcePartiallyServicedAndNotifier) {
 
     PartialSource finish_serv(prefix, 64);
     finish_serv.SetFinishTermOnEof(9);
-    ASSERT_TRUE(finish_serv.Enable(KDU_MEMBACKED_SOURCE_FULLY_SERVICED, 64, 4096));
+    ASSERT_TRUE(
+        finish_serv.Enable(KDU_MEMBACKED_SOURCE_FULLY_SERVICED, 64, 4096));
     ASSERT_TRUE(finish_serv.Open(false));
     size_t serv_fetched = 0;
     kdu_int32 serv_term = 0;
-    std::thread serv_prod([&]() { finish_serv.Service(serv_fetched, serv_term); });
+    std::thread serv_prod(
+        [&]() { finish_serv.Service(serv_fetched, serv_term); });
     flags = finish_serv.load_memory(4096, /*blocking=*/true, nullptr);
     EXPECT_NE(flags & KDU_SOURCE_IS_COMPLETE, 0);
     EXPECT_EQ(finish_serv.get_term_code(), 9);
@@ -4866,7 +4902,8 @@ TEST_F(CodestreamTest, MembackedCompressedSourcePartiallyServicedAndNotifier) {
   }
 
   // 3) FULLY_SERVICED reset()-before-open, switching pending_notifier ->
-  //    will_not_notify, async EOF notification, and note_blocking/note_unblocked.
+  //    will_not_notify, async EOF notification, and
+  //    note_blocking/note_unblocked.
   {
     PartialSource full_src(bytes, 128);
     RecordingNotifier n1;
@@ -4993,7 +5030,8 @@ TEST_F(CodestreamTest,
 
   // 2) Small frag_size (MIN_FRAG_BITS = 256 kB) + large pre_alloc calls forces
   //    advance_pre_frag growth (1 -> 4 -> 16), plus broker deficit expansion,
-  //    invalid release() check, restart + larger realloc, and explicit release().
+  //    invalid release() check, restart + larger realloc, and explicit
+  //    release().
   {
     ExpandableBroker broker(512);
     broker.SetAutoExpand(true);
@@ -5033,7 +5071,8 @@ TEST_F(CodestreamTest,
 
 TEST_F(CodestreamTest, MctOldReversibleSsModelProfilesCtypesAndBuffering) {
   // 1) Old-style reversible MAT SS model: encode reversible MATRIX MCT, clear
-  //    Cmct in the COD marker segment, and restrict output components on decode.
+  //    Cmct in the COD marker segment, and restrict output components on
+  //    decode.
   {
     ImageSpec spec;
     spec.width = 24;
@@ -5120,21 +5159,21 @@ TEST_F(CodestreamTest, MctOldReversibleSsModelProfilesCtypesAndBuffering) {
       engine.create(cs, tile);
       for (int y = 0; y < spec.height; ++y) {
         for (int c = 0; c < 4; ++c) {
-          kdu_line_buf *line = engine.exchange_line(c, nullptr);
+          kdu_line_buf* line = engine.exchange_line(c, nullptr);
           ASSERT_NE(line, nullptr) << "y=" << y << " c=" << c;
-          const kdu_int32 *src = planes[c].data() + y * spec.width;
+          const kdu_int32* src = planes[c].data() + y * spec.width;
           if (line->get_buf16() != nullptr) {
-            kdu_sample16 *dst = line->get_buf16();
+            kdu_sample16* dst = line->get_buf16();
             for (int x = 0; x < spec.width; ++x) {
               dst[x].ival = static_cast<kdu_int16>(src[x]);
             }
           } else if (line->is_absolute()) {
-            kdu_sample32 *dst = line->get_buf32();
+            kdu_sample32* dst = line->get_buf32();
             for (int x = 0; x < spec.width; ++x) {
               dst[x].ival = src[x];
             }
           } else {
-            kdu_sample32 *dst = line->get_buf32();
+            kdu_sample32* dst = line->get_buf32();
             for (int x = 0; x < spec.width; ++x) {
               dst[x].fval = static_cast<float>(src[x]) / 255.0F - 0.5F;
             }
@@ -5149,7 +5188,7 @@ TEST_F(CodestreamTest, MctOldReversibleSsModelProfilesCtypesAndBuffering) {
     kdu_long layer_bytes = 65536;
     cs.flush(&layer_bytes, 1);
     cs.destroy();
-    const auto &bytes = tgt.data;
+    const auto& bytes = tgt.data;
     ASSERT_GE(bytes.size(), 2U);
     EXPECT_EQ(bytes[0], 0xFF);
     EXPECT_EQ(bytes[1], 0x4F);
@@ -5193,7 +5232,7 @@ TEST_F(CodestreamTest, MctOldReversibleSsModelProfilesCtypesAndBuffering) {
   // 3) Profile-0 and Profile-1 construct_common violation warnings + Ctype
   //    visual weights + interchange membroker failure + configure/truncate.
   {
-    auto create_profile_warn = [&](const ImageSpec &s) {
+    auto create_profile_warn = [&](const ImageSpec& s) {
       siz_params siz;
       ConfigureSiz(siz, s);
       MemoryTarget tgt;
@@ -5347,7 +5386,7 @@ TEST_F(CodestreamTest, MctOldReversibleSsModelProfilesCtypesAndBuffering) {
     MemoryTarget ft1, ft2, ft3;
     kdu_codestream fcs;
     fcs.create(&fsiz, &ft1);
-    kdu_params *fcod = fcs.access_siz()->access_cluster(COD_params);
+    kdu_params* fcod = fcs.access_siz()->access_cluster(COD_params);
     fcod->set(Cprecincts, 0, 0, 8);
     fcod->set(Cprecincts, 0, 1, 8);
     ConfigureCodestreamParams(fcs, fspec);
@@ -5439,8 +5478,8 @@ TEST_F(CodestreamTest, CorruptMarkersPocRestartInputAndReslengthConstraints) {
     }
 
     // Corrupt SOP inside code-block body spanning > 1 kd_code_buffer (resilient
-    // ignores invalid length 0x0003 and throws on valid SOP 0x0004; fussy rejects
-    // non-SOP/SOT marker 0xFF99).
+    // ignores invalid length 0x0003 and throws on valid SOP 0x0004; fussy
+    // rejects non-SOP/SOT marker 0xFF99).
     size_t sod_pos = 0;
     for (size_t i = 0; i + 2 < bytes.size(); ++i) {
       if (bytes[i] == 0xFF && bytes[i + 1] == 0x93) {
@@ -5586,8 +5625,8 @@ TEST_F(CodestreamTest, CorruptMarkersPocRestartInputAndReslengthConstraints) {
   }
 
   // 4) Creslengths hard constraints triggering pcrd_trim bisection + warning +
-  //    second-pass finalize + incremental multi-tile cache_write_ready_precincts
-  //    and multi-segment TLM backtrack.
+  //    second-pass finalize + incremental multi-tile
+  //    cache_write_ready_precincts and multi-segment TLM backtrack.
   {
     ImageSpec spec;
     spec.width = 96;
@@ -5724,7 +5763,7 @@ TEST_F(CodestreamTest, CachedTargetAutoFlushCbrUnderflowAndStats) {
   {
     class FailingCachedTarget : public StructuredCacheTarget {
      public:
-      bool write(const kdu_byte * /*buf*/, int /*num_bytes*/) override {
+      bool write(const kdu_byte* /*buf*/, int /*num_bytes*/) override {
         return false;
       }
     };
@@ -5818,8 +5857,9 @@ TEST_F(CodestreamTest, CachedTargetAutoFlushCbrUnderflowAndStats) {
 
   // Construct_cbr_flush_set incompatible parameters + impossible Scbr budget.
   {
-    const char *bad_cbr_cases[] = {"Clayers=2", "Corder=LRCP", "ORGgen_plt=yes"};
-    for (const char *bad_param : bad_cbr_cases) {
+    const char* bad_cbr_cases[] = {"Clayers=2", "Corder=LRCP",
+                                   "ORGgen_plt=yes"};
+    for (const char* bad_param : bad_cbr_cases) {
       ImageSpec spec;
       spec.width = 32;
       spec.height = 16;
@@ -5917,9 +5957,9 @@ TEST_F(CodestreamTest, CachedTargetAutoFlushCbrUnderflowAndStats) {
     mismatch_spec.height = 32;
     mismatch_spec.components = 2;
     mismatch_spec.dwt_levels = 1;
-    mismatch_spec.extra_params = {"Corder=PCRL", "Cprecincts={8,8}",
-                                  "Cprecincts:C1={32,32}", "Cblk={8,8}",
-                                  "Clayers=1", "Scbr={1,64}"};
+    mismatch_spec.extra_params = {
+        "Corder=PCRL", "Cprecincts={8,8}", "Cprecincts:C1={32,32}",
+        "Cblk={8,8}",  "Clayers=1",        "Scbr={1,64}"};
     const auto mm_planes = MakeTestPlanes(mismatch_spec);
     siz_params mm_siz;
     ConfigureSiz(mm_siz, mismatch_spec);
@@ -6182,7 +6222,7 @@ TEST_F(CodestreamTest, BackgroundTileQueuesBlockNotifiersAndThreadContext) {
   in_cs.enable_restart();
   in_cs.change_appearance(/*transpose=*/true, /*vflip=*/false, /*hflip=*/true,
                           &env);
-  auto decode_tile_mt = [&](kdu_tile &tile) {
+  auto decode_tile_mt = [&](kdu_tile& tile) {
     kdu_multi_synthesis synth;
     synth.create(in_cs, tile, &env, nullptr, KDU_MULTI_XFORM_DEFAULT_FLAGS);
     const int num_comps = in_cs.get_num_components(/*want_output_comps=*/true);
@@ -6197,7 +6237,7 @@ TEST_F(CodestreamTest, BackgroundTileQueuesBlockNotifiersAndThreadContext) {
       for (int c = 0; c < num_comps; ++c) {
         if (rows_left[c] <= 0) continue;
         any_left = true;
-        kdu_line_buf *line = synth.get_line(c, &env);
+        kdu_line_buf* line = synth.get_line(c, &env);
         if (line != nullptr) {
           --rows_left[c];
         }
@@ -6217,7 +6257,7 @@ TEST_F(CodestreamTest, BackgroundTileQueuesBlockNotifiersAndThreadContext) {
     t.close(&env, /*close_in_background=*/true);
   }
   in_cs.open_tiles(valid_tiles, /*open_in_background=*/true, &env);
-  kdu_thread_queue *q = nullptr;
+  kdu_thread_queue* q = nullptr;
   {
     kdu_tile t =
         in_cs.access_tile(valid_tiles.pos + kdu_coords(1, 0), true, &env);
@@ -6296,7 +6336,7 @@ TEST_F(CodestreamTest, LoadSequentialVariantsAndTranscodeEdgeCases) {
     cached_cs.destroy();
   }
 
-  const char *orders[] = {"Corder=RPCL", "Corder=PCRL", "Corder=CPRL",
+  const char* orders[] = {"Corder=RPCL", "Corder=PCRL", "Corder=CPRL",
                           "Corder=LRCP", "Corder=RLCP"};
   for (int oi = 0; oi < 5; ++oi) {
     ImageSpec spec;
@@ -6336,10 +6376,10 @@ TEST_F(CodestreamTest, LoadSequentialVariantsAndTranscodeEdgeCases) {
       incomplete_psets[{pt.x, pt.y}] = std::move(first_pset);
     }
 
-    kdu_pdescriptor_set *active_pset = nullptr;
+    kdu_pdescriptor_set* active_pset = nullptr;
     kdu_pdescriptor_set fresh_pset;
     for (int step = 0; step < 256; ++step) {
-      kdu_pdescriptor_set *use_pset =
+      kdu_pdescriptor_set* use_pset =
           (active_pset != nullptr) ? active_pset : &fresh_pset;
       if (active_pset == nullptr) fresh_pset.reset();
       const int flags = KDU_LOAD_SEQUENTIAL_WANT_FLUSH_SET |
@@ -6350,7 +6390,7 @@ TEST_F(CodestreamTest, LoadSequentialVariantsAndTranscodeEdgeCases) {
       if (!t.exists()) {
         if (use_pset->is_empty()) break;
         const kdu_coords tidx = use_pset->get_tile_idx();
-        auto &slot = incomplete_psets[{tidx.x, tidx.y}];
+        auto& slot = incomplete_psets[{tidx.x, tidx.y}];
         if (!slot) {
           slot = std::make_unique<kdu_pdescriptor_set>();
           slot->init(tidx, 3);
@@ -6437,11 +6477,11 @@ TEST_F(CodestreamTest, LoadSequentialVariantsAndTranscodeEdgeCases) {
     bool tile_done = false;
     warning_handler_.clear();
     for (int iter = 0; iter < 64; ++iter) {
-      kdu_tile itile = in_cs.load_sequential(
-          &pset, tile_done, 2, 2,
-          KDU_LOAD_SEQUENTIAL_WANT_FLUSH_SET |
-              KDU_LOAD_SEQUENTIAL_WANT_PACKET_BYTES,
-          &env);
+      kdu_tile itile =
+          in_cs.load_sequential(&pset, tile_done, 2, 2,
+                                KDU_LOAD_SEQUENTIAL_WANT_FLUSH_SET |
+                                    KDU_LOAD_SEQUENTIAL_WANT_PACKET_BYTES,
+                                &env);
       if (!itile.exists()) break;
       const kdu_coords tidx = pset.get_tile_idx();
       const std::pair<int, int> key(tidx.x, tidx.y);
@@ -6452,7 +6492,7 @@ TEST_F(CodestreamTest, LoadSequentialVariantsAndTranscodeEdgeCases) {
       }
       kdu_tile otile = ot_it->second;
       for (int d = 0; d < pset.get_num_pdescriptors(); ++d) {
-        kdu_pdescriptor *pd = pset.access_pdescriptor(d);
+        kdu_pdescriptor* pd = pset.access_pdescriptor(d);
         ASSERT_NE(pd, nullptr);
         kdu_tile_comp ic = itile.access_component(pd->component_idx);
         kdu_resolution ir = ic.access_resolution(pd->resolution_level);
@@ -6470,7 +6510,7 @@ TEST_F(CodestreamTest, LoadSequentialVariantsAndTranscodeEdgeCases) {
           for (int by = 0; by < binds.size.y; ++by) {
             for (int bx = 0; bx < binds.size.x; ++bx) {
               const kdu_coords bidx(binds.pos.x + bx, binds.pos.y + by);
-              kdu_block *ib = isub.open_block(bidx, nullptr, &env);
+              kdu_block* ib = isub.open_block(bidx, nullptr, &env);
               const int num_passes = ib->num_passes;
               const int missing_msbs = ib->missing_msbs;
               std::vector<int> pass_lengths;
@@ -6492,7 +6532,7 @@ TEST_F(CodestreamTest, LoadSequentialVariantsAndTranscodeEdgeCases) {
               }
               isub.close_block(ib, &env);
 
-              kdu_block *ob = osub.open_block(bidx, nullptr, &env);
+              kdu_block* ob = osub.open_block(bidx, nullptr, &env);
               ob->num_passes = num_passes;
               ob->missing_msbs = missing_msbs;
               if (num_passes > 0) {
@@ -6502,7 +6542,8 @@ TEST_F(CodestreamTest, LoadSequentialVariantsAndTranscodeEdgeCases) {
                   ob->pass_slopes[p] = pass_slopes[p];
                 }
                 if (!block_bytes.empty()) {
-                  ob->set_max_bytes(static_cast<int>(block_bytes.size()), false);
+                  ob->set_max_bytes(static_cast<int>(block_bytes.size()),
+                                    false);
                   std::memcpy(ob->byte_buffer, block_bytes.data(),
                               block_bytes.size());
                 }
@@ -6520,7 +6561,7 @@ TEST_F(CodestreamTest, LoadSequentialVariantsAndTranscodeEdgeCases) {
         itile.close(&env);
         in_tiles.erase(key);
         out_cs.auto_trans_out(1, 1, 1, 1, 4000, /*record_in_comseg=*/true,
-                                &env);
+                              &env);
       }
     }
     EXPECT_TRUE(out_tiles.empty());
@@ -6689,7 +6730,7 @@ TEST_F(CodestreamTest, OldMctRxformAuxHeadersTlmPltAndEdgeErrors) {
          "Clayers=1"},
         {"ORGgen_tlm=2", "ORGtlm_style={implied,long}"},
     };
-    for (const auto &extra : bad_tlm_configs) {
+    for (const auto& extra : bad_tlm_configs) {
       ImageSpec tspec = spec;
       tspec.extra_params = extra;
       siz_params siz;
@@ -6759,7 +6800,7 @@ TEST_F(CodestreamTest, OldMctRxformAuxHeadersTlmPltAndEdgeErrors) {
     spec.dwt_levels = 1;
     spec.tile_size = kdu_coords(16, 16);
     spec.extra_params = {"Corder=PCRL", "Cprecincts={8,8}", "Cblk={8,8}",
-                         "Clayers=1", "ORGgen_tlm=1", "ORGgen_plt=yes"};
+                         "Clayers=1",   "ORGgen_tlm=1",     "ORGgen_plt=yes"};
     const auto planes = MakeTestPlanes(spec);
     const auto valid_bytes = EncodeImage(spec, planes);
     ASSERT_GT(valid_bytes.size(), 64);
@@ -6822,8 +6863,9 @@ TEST_F(CodestreamTest, OldMctRxformAuxHeadersTlmPltAndEdgeErrors) {
     // Inject malformed TLM marker (duplicate Ztlm & illegal Stlm) right before
     // first SOT (0xFF 0x90).
     size_t sot_pos = 2;
-    while (sot_pos + 1 < valid_bytes.size() &&
-           !(valid_bytes[sot_pos] == 0xFF && valid_bytes[sot_pos + 1] == 0x90)) {
+    while (
+        sot_pos + 1 < valid_bytes.size() &&
+        !(valid_bytes[sot_pos] == 0xFF && valid_bytes[sot_pos + 1] == 0x90)) {
       ++sot_pos;
     }
     ASSERT_LT(sot_pos, valid_bytes.size());
@@ -6831,8 +6873,8 @@ TEST_F(CodestreamTest, OldMctRxformAuxHeadersTlmPltAndEdgeErrors) {
     // Duplicate Ztlm=0 TLM before SOT.
     {
       std::vector<kdu_byte> dup_tlm = valid_bytes;
-      const kdu_byte extra_tlm[] = {0xFF, 0x55, 0x00, 0x08,
-                                    0x00, 0x40, 0x00, 0x01, 0x00, 0x10};
+      const kdu_byte extra_tlm[] = {0xFF, 0x55, 0x00, 0x08, 0x00,
+                                    0x40, 0x00, 0x01, 0x00, 0x10};
       dup_tlm.insert(dup_tlm.begin() + static_cast<std::ptrdiff_t>(sot_pos),
                      std::begin(extra_tlm), std::end(extra_tlm));
       MemorySource src(dup_tlm.data(), dup_tlm.size(), KDU_SOURCE_CAP_SEEKABLE);
@@ -6855,15 +6897,13 @@ TEST_F(CodestreamTest, OldMctRxformAuxHeadersTlmPltAndEdgeErrors) {
       size_t i = 2;
       while (i + 3 < sot_pos) {
         if (valid_bytes[i] == 0xFF) {
-          kdu_uint16 code =
-              (static_cast<kdu_uint16>(valid_bytes[i]) << 8) | valid_bytes[i + 1];
-          kdu_uint16 len =
-              (static_cast<kdu_uint16>(valid_bytes[i + 2]) << 8) |
-              valid_bytes[i + 3];
+          kdu_uint16 code = (static_cast<kdu_uint16>(valid_bytes[i]) << 8) |
+                            valid_bytes[i + 1];
+          kdu_uint16 len = (static_cast<kdu_uint16>(valid_bytes[i + 2]) << 8) |
+                           valid_bytes[i + 3];
           if (code != 0xFF55) {
-            bad_tlm_stream.insert(
-                bad_tlm_stream.end(), valid_bytes.begin() + i,
-                valid_bytes.begin() + i + 2 + len);
+            bad_tlm_stream.insert(bad_tlm_stream.end(), valid_bytes.begin() + i,
+                                  valid_bytes.begin() + i + 2 + len);
           }
           i += 2 + len;
         } else {
@@ -6872,12 +6912,12 @@ TEST_F(CodestreamTest, OldMctRxformAuxHeadersTlmPltAndEdgeErrors) {
       }
       // Inject Stlm=0x00 (0-byte tnum, 2-byte len) with invalid tile count ->
       // then open tile to force translate_markers.
-      const kdu_byte tlm_st0[] = {0xFF, 0x55, 0x00, 0x08, 0x00, 0x00,
-                                  0x00, 0x10, 0x00, 0x10};
+      const kdu_byte tlm_st0[] = {0xFF, 0x55, 0x00, 0x08, 0x00,
+                                  0x00, 0x00, 0x10, 0x00, 0x10};
       bad_tlm_stream.insert(bad_tlm_stream.end(), std::begin(tlm_st0),
                             std::end(tlm_st0));
-      bad_tlm_stream.insert(bad_tlm_stream.end(),
-                            valid_bytes.begin() + sot_pos, valid_bytes.end());
+      bad_tlm_stream.insert(bad_tlm_stream.end(), valid_bytes.begin() + sot_pos,
+                            valid_bytes.end());
       MemorySource src(bad_tlm_stream.data(), bad_tlm_stream.size(),
                        KDU_SOURCE_CAP_SEEKABLE);
       kdu_codestream cs;
@@ -6914,8 +6954,8 @@ TEST_F(CodestreamTest, OldMctRxformAuxHeadersTlmPltAndEdgeErrors) {
       }
     }
 
-    // Re-open clean stream, verify restart(input) after permanently closing tile
-    // and open_tile on closed tile error 58.
+    // Re-open clean stream, verify restart(input) after permanently closing
+    // tile and open_tile on closed tile error 58.
     {
       MemorySource src(valid_bytes.data(), valid_bytes.size(),
                        KDU_SOURCE_CAP_SEEKABLE);
@@ -6992,8 +7032,8 @@ TEST_F(CodestreamTest, MctLegacyRxformDwtSsModelAndQualityLimiterWeights) {
     qlim.set_display_resolution(600.0F, 600.0F);
     qlim.set_comp_info(0, 1.0F, 1);
     qlim.set_comp_info(1, 1.0F, 2);
-    cs.apply_input_restrictions(0, 0, 0, 0, nullptr,
-                                KDU_WANT_OUTPUT_COMPONENTS, nullptr, &qlim);
+    cs.apply_input_restrictions(0, 0, 0, 0, nullptr, KDU_WANT_OUTPUT_COMPONENTS,
+                                nullptr, &qlim);
     kdu_tile tile = cs.open_tile(kdu_coords(0, 0));
     DecodeTileAllComponents(cs, tile);
     tile.close();
@@ -7039,8 +7079,8 @@ TEST_F(CodestreamTest, MctLegacyRxformDwtSsModelAndQualityLimiterWeights) {
     q2.set_comp_info(0, 1.0F, 1);
     q2.set_comp_info(1, 1.0F, 2);
     q2.set_comp_info(2, 1.0F, 0);
-    cs.apply_input_restrictions(0, 0, 0, 0, nullptr,
-                                KDU_WANT_OUTPUT_COMPONENTS, nullptr, &q2);
+    cs.apply_input_restrictions(0, 0, 0, 0, nullptr, KDU_WANT_OUTPUT_COMPONENTS,
+                                nullptr, &q2);
 
     // Pass B: all 3 color bits set + subset comp_indices -> comps_of_interest.
     kdu_quality_limiter q3(0.02F, false);
@@ -7066,23 +7106,22 @@ TEST_F(CodestreamTest, MctLegacyRxformDwtSsModelAndQualityLimiterWeights) {
   // 3. Direct kdu_quality_limiter visual weights, resize, negative flags, dup.
   {
     kdu_quality_limiter ql_rev(0.01F, true);
-    EXPECT_LT(
-        ql_rev.get_square_visual_weight(HL_BAND, 1, kdu_coords(1, 1), false,
-                                        true),
-        0.0F);
+    EXPECT_LT(ql_rev.get_square_visual_weight(HL_BAND, 1, kdu_coords(1, 1),
+                                              false, true),
+              0.0F);
 
     kdu_quality_limiter ql(0.01F, false);
-    EXPECT_FLOAT_EQ(ql.get_square_visual_weight(LL_BAND, 0, kdu_coords(1, 1),
-                                                false, false),
-                    1.0F);
-    EXPECT_FLOAT_EQ(ql.get_square_visual_weight(HL_BAND, 1, kdu_coords(1, 1),
-                                                false, false),
-                    1.0F);
+    EXPECT_FLOAT_EQ(
+        ql.get_square_visual_weight(LL_BAND, 0, kdu_coords(1, 1), false, false),
+        1.0F);
+    EXPECT_FLOAT_EQ(
+        ql.get_square_visual_weight(HL_BAND, 1, kdu_coords(1, 1), false, false),
+        1.0F);
 
     ql.set_display_resolution(0.0F, 400.0F);
-    EXPECT_FLOAT_EQ(ql.get_square_visual_weight(HL_BAND, 2, kdu_coords(1, 1),
-                                                false, false),
-                    1.0F);
+    EXPECT_FLOAT_EQ(
+        ql.get_square_visual_weight(HL_BAND, 2, kdu_coords(1, 1), false, false),
+        1.0F);
 
     ql.set_display_resolution(1200.0F, 1200.0F);
     for (int rel_depth = 1; rel_depth <= 5; ++rel_depth) {
@@ -7094,12 +7133,12 @@ TEST_F(CodestreamTest, MctLegacyRxformDwtSsModelAndQualityLimiterWeights) {
                 0.0F);
     }
     ql.set_display_resolution(50.0F, 50.0F);
-    EXPECT_GT(ql.get_square_visual_weight(HL_BAND, 1, kdu_coords(1, 1), false,
-                                          false),
-              0.0F);
-    EXPECT_GT(ql.get_square_visual_weight(LH_BAND, 1, kdu_coords(1, 1), true,
-                                          false),
-              0.0F);
+    EXPECT_GT(
+        ql.get_square_visual_weight(HL_BAND, 1, kdu_coords(1, 1), false, false),
+        0.0F);
+    EXPECT_GT(
+        ql.get_square_visual_weight(LH_BAND, 1, kdu_coords(1, 1), true, false),
+        0.0F);
 
     ql.set_comp_info(0, 1.0F, 1);
     ql.set_comp_info(12, 2.0F, -1);
@@ -7113,7 +7152,7 @@ TEST_F(CodestreamTest, MctLegacyRxformDwtSsModelAndQualityLimiterWeights) {
     EXPECT_FLOAT_EQ(sq_w, 0.5F);
     EXPECT_EQ(tflags, 4);
 
-    kdu_quality_limiter *copy = ql.duplicate();
+    kdu_quality_limiter* copy = ql.duplicate();
     ASSERT_NE(copy, nullptr);
     copy->get_comp_info(0, sq_w, tflags);
     EXPECT_FLOAT_EQ(sq_w, 1.0F);
@@ -7136,9 +7175,8 @@ TEST_F(CodestreamTest, ResilientThrowMarkersUnexpectedEocAndCorruptMarkers) {
     planes[0].resize(spec.width * spec.height);
     for (int y = 0; y < spec.height; ++y) {
       for (int x = 0; x < spec.width; ++x) {
-        const int v = ((x * 73) ^ (y * 131) ^ ((x + y) * 37) ^
-                       ((x * y) >> 2)) &
-                      0xFF;
+        const int v =
+            ((x * 73) ^ (y * 131) ^ ((x + y) * 37) ^ ((x * y) >> 2)) & 0xFF;
         planes[0][y * spec.width + x] = v - 128;
       }
     }
@@ -7201,7 +7239,7 @@ TEST_F(CodestreamTest, ResilientThrowMarkersUnexpectedEocAndCorruptMarkers) {
     // followed by 0x00 0x00 triggers non-resilient error during create();
     // plus load_sequential over a mid-stream EOC triggers resilient warning.
     {
-      auto find_main_hdr_end = [](const std::vector<kdu_byte> &buf) -> size_t {
+      auto find_main_hdr_end = [](const std::vector<kdu_byte>& buf) -> size_t {
         size_t pos = 2;
         while (pos + 4 <= buf.size()) {
           const kdu_uint16 m =
@@ -7380,7 +7418,8 @@ TEST_F(CodestreamTest, FragmentedCompressionTlmRewriteAndInvalidFragments) {
     }
     kdu_long layer_sizes[2] = {400, 900};
     cs0.flush(layer_sizes, 2);
-    const kdu_long frag0_bytes = cs0.get_total_bytes(/*exclude_main_header=*/true);
+    const kdu_long frag0_bytes =
+        cs0.get_total_bytes(/*exclude_main_header=*/true);
     cs0.destroy();
     ASSERT_GT(frag0_bytes, 0);
 
@@ -7553,10 +7592,8 @@ TEST_F(CodestreamTest, PpmIgnoreAndTransferPdescriptorTailAndSlopeFlush) {
         straddle[first_ppm + 2] = 0x00;
         straddle[first_ppm + 3] = 0x05;  // Zppm(1) + 2 payload bytes + 2 len
         const std::vector<kdu_byte> next_hdr = {
-            0xFF, 0x60,
-            static_cast<kdu_byte>((rem_data_len + 3) >> 8),
-            static_cast<kdu_byte>((rem_data_len + 3) & 0xFF),
-            0x01};
+            0xFF, 0x60, static_cast<kdu_byte>((rem_data_len + 3) >> 8),
+            static_cast<kdu_byte>((rem_data_len + 3) & 0xFF), 0x01};
         straddle.insert(straddle.begin() + first_ppm + 7, next_hdr.begin(),
                         next_hdr.end());
         // Fix Zppm numbering for any pre-existing split PPM markers after this.
@@ -7887,10 +7924,9 @@ TEST_F(CodestreamTest, AsyncMemoryAndCachedSourceInputPaths) {
 
     int get_capabilities() override { return caps_; }
 
-    int read(kdu_byte *buf, int num_bytes) override {
+    int read(kdu_byte* buf, int num_bytes) override {
       if (pos_ >= avail_ || num_bytes <= 0) return 0;
-      const size_t n =
-          std::min(static_cast<size_t>(num_bytes), avail_ - pos_);
+      const size_t n = std::min(static_cast<size_t>(num_bytes), avail_ - pos_);
       std::memcpy(buf, data_.data() + pos_, n);
       pos_ += n;
       return static_cast<int>(n);
@@ -7903,22 +7939,21 @@ TEST_F(CodestreamTest, AsyncMemoryAndCachedSourceInputPaths) {
       return true;
     }
 
-    kdu_byte *access_memory(kdu_long &pos, kdu_byte *&lim) override {
+    kdu_byte* access_memory(kdu_long& pos, kdu_byte*& lim) override {
       pos = 0;
       lim = current_.data() + current_.size();
       return current_.data();
     }
 
     int load_memory(kdu_long desired_span, bool blocking,
-                    kdu_compressed_source_notifier *notifier) override {
+                    kdu_compressed_source_notifier* notifier) override {
       (void)blocking;
       if (note_block_once_ && notifier != nullptr) {
         note_block_once_ = false;
         notifier->note_blocking();
         notifier->note_unblocked();
       }
-      if (static_cast<size_t>(desired_span) > avail_ &&
-          avail_ < data_.size()) {
+      if (static_cast<size_t>(desired_span) > avail_ && avail_ < data_.size()) {
         if (notifier != nullptr && !blocking) {
           notifier->prepare_notify(desired_span);
         }
@@ -7971,8 +8006,8 @@ TEST_F(CodestreamTest, AsyncMemoryAndCachedSourceInputPaths) {
                  : (KDU_SOURCE_CAP_CACHED | KDU_SOURCE_CAP_SEEKABLE);
     }
 
-    int read(kdu_byte *buf, int num_bytes) override {
-      const auto &active = in_tile_scope_ ? tile_hdr_ : main_;
+    int read(kdu_byte* buf, int num_bytes) override {
+      const auto& active = in_tile_scope_ ? tile_hdr_ : main_;
       if (pos_ >= active.size() || num_bytes <= 0) return 0;
       const size_t n =
           std::min(static_cast<size_t>(num_bytes), active.size() - pos_);
@@ -8031,11 +8066,11 @@ TEST_F(CodestreamTest, AsyncMemoryAndCachedSourceInputPaths) {
   // buffer reallocation, set_max_bytes expansion + truncation, and restart
   // onto a non-memory-backed source (destroying in_notifier).
   {
-    AsyncMemSource async_src(
-        bytes, 64, 64,
-        KDU_SOURCE_CAP_MEMORY_BACKED | KDU_SOURCE_CAP_ASYNC_NOTIFICATION |
-            KDU_SOURCE_CAP_SEEKABLE,
-        /*note_block_once=*/true);
+    AsyncMemSource async_src(bytes, 64, 64,
+                             KDU_SOURCE_CAP_MEMORY_BACKED |
+                                 KDU_SOURCE_CAP_ASYNC_NOTIFICATION |
+                                 KDU_SOURCE_CAP_SEEKABLE,
+                             /*note_block_once=*/true);
     kdu_codestream cs;
     cs.create(&async_src);
     cs.enable_restart();
@@ -8060,10 +8095,10 @@ TEST_F(CodestreamTest, AsyncMemoryAndCachedSourceInputPaths) {
 
   // 2. AsyncMemSource reaching max_bytes_allowed inside load_buf/load_memory.
   {
-    AsyncMemSource capped_src(
-        bytes, 32, 48,
-        KDU_SOURCE_CAP_MEMORY_BACKED | KDU_SOURCE_CAP_ASYNC_NOTIFICATION |
-            KDU_SOURCE_CAP_SEEKABLE);
+    AsyncMemSource capped_src(bytes, 32, 48,
+                              KDU_SOURCE_CAP_MEMORY_BACKED |
+                                  KDU_SOURCE_CAP_ASYNC_NOTIFICATION |
+                                  KDU_SOURCE_CAP_SEEKABLE);
     kdu_codestream cs;
     cs.create(&capped_src);
     cs.set_max_bytes(static_cast<kdu_long>(bytes.size()) - 10);
@@ -8079,11 +8114,12 @@ TEST_F(CodestreamTest, AsyncMemoryAndCachedSourceInputPaths) {
     size_t first_sot = 2;
     size_t first_sod = 0;
     while (first_sot + 4 <= bytes.size()) {
-      const kdu_uint16 m =
-          (static_cast<kdu_uint16>(bytes[first_sot]) << 8) | bytes[first_sot + 1];
+      const kdu_uint16 m = (static_cast<kdu_uint16>(bytes[first_sot]) << 8) |
+                           bytes[first_sot + 1];
       if (m == KDU_SOT) break;
-      const kdu_uint16 len = (static_cast<kdu_uint16>(bytes[first_sot + 2]) << 8) |
-                             bytes[first_sot + 3];
+      const kdu_uint16 len =
+          (static_cast<kdu_uint16>(bytes[first_sot + 2]) << 8) |
+          bytes[first_sot + 3];
       first_sot += 2 + len;
     }
     for (size_t i = first_sot; i + 2 <= bytes.size(); ++i) {
@@ -8096,7 +8132,8 @@ TEST_F(CodestreamTest, AsyncMemoryAndCachedSourceInputPaths) {
     ASSERT_GE(first_sod, first_sot + 12);
 
     // Main header through first SOT segment (SOC..after 12-byte SOT).
-    std::vector<kdu_byte> main_hdr(bytes.begin(), bytes.begin() + first_sot + 12);
+    std::vector<kdu_byte> main_hdr(bytes.begin(),
+                                   bytes.begin() + first_sot + 12);
     // Append second SOT + SOD so 2-tile cached header is syntactically whole.
     main_hdr.insert(main_hdr.end(), bytes.begin() + first_sot,
                     bytes.begin() + first_sot + 12);
@@ -8114,8 +8151,7 @@ TEST_F(CodestreamTest, AsyncMemoryAndCachedSourceInputPaths) {
     large_tile_hdr.push_back(0x00);
     large_tile_hdr.push_back(0x01);
     large_tile_hdr.insert(large_tile_hdr.end(), 1100, 'H');
-    large_tile_hdr.insert(large_tile_hdr.end(),
-                          bytes.begin() + first_sot + 12,
+    large_tile_hdr.insert(large_tile_hdr.end(), bytes.begin() + first_sot + 12,
                           bytes.begin() + first_sod);
 
     CachedHeaderSource cached_prec_err(main_hdr, large_tile_hdr,
@@ -8136,9 +8172,8 @@ TEST_F(CodestreamTest, AsyncMemoryAndCachedSourceInputPaths) {
     guard.synth.create(cs_prec, t0);
     error_handler_.clear();
     EXPECT_THROW(
-        for (int r = 0; r < t0_dims.size.y; ++r) {
-          (void)guard.synth.get_line(0);
-        },
+        for (int r = 0; r < t0_dims.size.y;
+             ++r) { (void)guard.synth.get_line(0); },
         kdu_exception);
     EXPECT_FALSE(error_handler_.history().empty());
     if (t0.exists()) t0.close();
@@ -8180,19 +8215,19 @@ TEST_F(CodestreamTest, MembackedPartiallyServicedBlockingAndErrors) {
       cv_.wait(lock, [this] { return entered_fetch_; });
     }
 
-    bool run_enable(int mode, const kdu_byte *desc, size_t desc_len,
+    bool run_enable(int mode, const kdu_byte* desc, size_t desc_len,
                     kdu_uint64 interp, double ts, size_t min_buf,
                     size_t max_buf) {
       return enable(mode, desc, desc_len, interp, ts, min_buf, max_buf);
     }
     bool run_open(bool auto_enable) { return open(auto_enable); }
-    bool run_service(size_t &total, kdu_int32 &term_code) {
+    bool run_service(size_t& total, kdu_int32& term_code) {
       return service(total, term_code);
     }
     int run_reset() { return reset(); }
 
    protected:
-    kdu_long fetch_data(kdu_long max_bytes, kdu_byte *buf,
+    kdu_long fetch_data(kdu_long max_bytes, kdu_byte* buf,
                         bool blocking) override {
       size_t cur_off = 0;
       size_t n = 0;
@@ -8291,13 +8326,14 @@ TEST_F(CodestreamTest, MembackedPartiallyServicedBlockingAndErrors) {
       bool notified_ = false;
     };
 
-    // Pass bytes in PARTIALLY_SERVICED with nonblocking fetch_data returning -1.
+    // Pass bytes in PARTIALLY_SERVICED with nonblocking fetch_data returning
+    // -1.
     std::vector<kdu_byte> big(262144, 0);
     std::memcpy(big.data(), bytes.data(), bytes.size());
     FlexMembackedSource mb(big, /*block_once=*/false, /*max_step=*/16,
                            /*always_block_nonblocking=*/true);
-    EXPECT_TRUE(mb.run_enable(KDU_MEMBACKED_SOURCE_PARTIALLY_SERVICED,
-                              nullptr, 0, 0, -1.0, 4096, 0));
+    EXPECT_TRUE(mb.run_enable(KDU_MEMBACKED_SOURCE_PARTIALLY_SERVICED, nullptr,
+                              0, 0, -1.0, 4096, 0));
     EXPECT_TRUE(mb.run_open(false));
     size_t total = 0;
     kdu_int32 term_code = 0;
@@ -8352,12 +8388,8 @@ TEST_F(CodestreamTest, FlushStatsCbrBulkFillMctAndTransPcrdPaths) {
     spec.dwt_levels = 2;
     spec.tile_size = kdu_coords(0, 0);
     spec.extra_params = {
-        "Corder=PCRL",
-        "Cprecincts={8,8}",
-        "Cblk={16,16}",
-        "Scbr={1,64}",
-        "Cycc=no",
-        "Ctype=Y,C,Cr",
+        "Corder=PCRL", "Cprecincts={8,8}", "Cblk={16,16}",
+        "Scbr={1,64}", "Cycc=no",          "Ctype=Y,C,Cr",
     };
     const auto planes = MakeTestPlanes(spec);
 
@@ -8544,9 +8576,8 @@ TEST_F(CodestreamTest, FlushStatsCbrBulkFillMctAndTransPcrdPaths) {
     }
     if (t0.exists()) t0.close();
     bool done_next = false;
-    kdu_tile t_mismatch =
-        cs.load_sequential(&pset_a, done_next, 0, 0,
-                           KDU_LOAD_SEQUENTIAL_WANT_TILE, nullptr);
+    kdu_tile t_mismatch = cs.load_sequential(
+        &pset_a, done_next, 0, 0, KDU_LOAD_SEQUENTIAL_WANT_TILE, nullptr);
     (void)t_mismatch;
     cs.destroy();
   }
@@ -8583,7 +8614,8 @@ TEST_F(CodestreamTest, FlushStatsCbrBulkFillMctAndTransPcrdPaths) {
     kdu_sample_allocator no_broker_alloc;
     EXPECT_TRUE(no_broker_alloc.configure(nullptr, 18));
     const kdu_uint64 huge_req = static_cast<kdu_uint64>(1) << 62;
-    EXPECT_TRUE(no_broker_alloc.seek_permit(huge_req, /*return_on_failure=*/true));
+    EXPECT_TRUE(
+        no_broker_alloc.seek_permit(huge_req, /*return_on_failure=*/true));
     EXPECT_FALSE(
         no_broker_alloc.seek_permit(huge_req, /*return_on_failure=*/true));
     error_handler_.clear();
@@ -8595,14 +8627,14 @@ TEST_F(CodestreamTest, FlushStatsCbrBulkFillMctAndTransPcrdPaths) {
   }
 }
 
-void PushAllTiles(kdu_codestream &cs, const ImageSpec &spec,
-                  const std::vector<std::vector<kdu_int32>> &planes) {
+void PushAllTiles(kdu_codestream& cs, const ImageSpec& spec,
+                  const std::vector<std::vector<kdu_int32>>& planes) {
   kdu_dims tiles;
   cs.get_valid_tiles(tiles);
   for (int ty = 0; ty < tiles.size.y; ++ty) {
     for (int tx = 0; tx < tiles.size.x; ++tx) {
-      kdu_tile tile = cs.open_tile(
-          kdu_coords(tiles.pos.x + tx, tiles.pos.y + ty));
+      kdu_tile tile =
+          cs.open_tile(kdu_coords(tiles.pos.x + tx, tiles.pos.y + ty));
       PushTileData(cs, tile, planes, spec);
       tile.close();
     }
@@ -8715,13 +8747,8 @@ TEST_F(CodestreamTest, SequentialModesTilesMctQweightsAndAtkPaths) {
   mt_spec.reversible = false;
   mt_spec.dwt_levels = 2;
   mt_spec.extra_params = {
-      "Clayers=3",
-      "Cycc=yes",
-      "Cuse_sop=yes",
-      "Cuse_eph=yes",
-      "ORGgen_tlm=12",
-      "ORGgen_plt=yes",
-      "ORGtparts=R",
+      "Clayers=3",     "Cycc=yes",       "Cuse_sop=yes", "Cuse_eph=yes",
+      "ORGgen_tlm=12", "ORGgen_plt=yes", "ORGtparts=R",
   };
   const auto mt_planes = MakeTestPlanes(mt_spec);
   std::vector<kdu_byte> mt_bytes;
@@ -8750,14 +8777,12 @@ TEST_F(CodestreamTest, SequentialModesTilesMctQweightsAndAtkPaths) {
     in_cs.set_persistent();
     in_cs.enable_restart();
     error_handler_.clear();
-    EXPECT_THROW(
-        in_cs.apply_input_restrictions(99, 1, 0, 0, nullptr,
-                                       KDU_WANT_CODESTREAM_COMPONENTS),
-        kdu_exception);
-    EXPECT_THROW(
-        in_cs.apply_input_restrictions(99, 1, 0, 0, nullptr,
-                                       KDU_WANT_OUTPUT_COMPONENTS),
-        kdu_exception);
+    EXPECT_THROW(in_cs.apply_input_restrictions(99, 1, 0, 0, nullptr,
+                                                KDU_WANT_CODESTREAM_COMPONENTS),
+                 kdu_exception);
+    EXPECT_THROW(in_cs.apply_input_restrictions(99, 1, 0, 0, nullptr,
+                                                KDU_WANT_OUTPUT_COMPONENTS),
+                 kdu_exception);
     EXPECT_FALSE(error_handler_.history().empty());
 
     kdu_dims tile_indices;
@@ -8780,17 +8805,16 @@ TEST_F(CodestreamTest, SequentialModesTilesMctQweightsAndAtkPaths) {
     MemorySource src2(mt_bytes);
     in_cs.restart(&src2);
     kdu_quality_limiter qlim(0.05F, true);
-    in_cs.apply_input_restrictions(0, 2, 0, 0, nullptr,
-                                   KDU_WANT_CODESTREAM_COMPONENTS, nullptr,
-                                   &qlim);
+    in_cs.apply_input_restrictions(
+        0, 2, 0, 0, nullptr, KDU_WANT_CODESTREAM_COMPONENTS, nullptr, &qlim);
     kdu_tile tile = in_cs.open_tile(kdu_coords(0, 0));
     EXPECT_TRUE(tile.exists());
     tile.close();
     in_cs.destroy();
   }
 
-  // load_sequential with mode_flags == 0 and WANT_PACKET_BYTES only + multi-layer
-  // trans_pcrd_opt trimming.
+  // load_sequential with mode_flags == 0 and WANT_PACKET_BYTES only +
+  // multi-layer trans_pcrd_opt trimming.
   for (int mode : {0, KDU_LOAD_SEQUENTIAL_WANT_PACKET_BYTES}) {
     MemorySource src(mt_bytes);
     kdu_codestream in_cs;
@@ -8826,7 +8850,7 @@ TEST_F(CodestreamTest, SequentialModesTilesMctQweightsAndAtkPaths) {
     MemorySource src(trans_in_bytes);
     kdu_codestream in_cs;
     in_cs.create(&src);
-    siz_params *in_siz = in_cs.access_siz();
+    siz_params* in_siz = in_cs.access_siz();
     ASSERT_NE(in_siz, nullptr);
     siz_params out_siz;
     out_siz.copy_from(in_siz, -1, -1, -1, 0, 0, 0);
@@ -8855,7 +8879,7 @@ TEST_F(CodestreamTest, SequentialModesTilesMctQweightsAndAtkPaths) {
         }
         kdu_tile out_tile = it->second;
         for (int d = 0; d < pset.get_num_pdescriptors(); ++d) {
-          kdu_pdescriptor *pd = pset.access_pdescriptor(d);
+          kdu_pdescriptor* pd = pset.access_pdescriptor(d);
           kdu_tile_comp itc = t.access_component(pd->component_idx);
           kdu_resolution ires = itc.access_resolution(pd->resolution_level);
           kdu_precinct iprec = ires.access_precinct(pd->precinct_idx);
@@ -8871,10 +8895,11 @@ TEST_F(CodestreamTest, SequentialModesTilesMctQweightsAndAtkPaths) {
             kdu_subband isub = ires.access_subband(b);
             kdu_subband xsub = xres.access_subband(b);
             for (int r = blocks.pos.y; r < blocks.pos.y + blocks.size.y; ++r) {
-              for (int c = blocks.pos.x; c < blocks.pos.x + blocks.size.x; ++c) {
+              for (int c = blocks.pos.x; c < blocks.pos.x + blocks.size.x;
+                   ++c) {
                 kdu_coords bidx(c, r);
-                kdu_block *ib = isub.open_block(bidx);
-                kdu_block *xb = xsub.open_block(bidx);
+                kdu_block* ib = isub.open_block(bidx);
+                kdu_block* xb = xsub.open_block(bidx);
                 xb->num_passes = ib->num_passes;
                 xb->missing_msbs = ib->missing_msbs;
                 kdu_long total_bytes = 0;
@@ -8915,7 +8940,7 @@ TEST_F(CodestreamTest, SequentialModesTilesMctQweightsAndAtkPaths) {
         t.close();
       }
     }
-    for (auto &kv : out_tiles) {
+    for (auto& kv : out_tiles) {
       kv.second.close();
     }
     kdu_long out_layers[3] = {150, 300, 400};
@@ -8930,22 +8955,23 @@ TEST_F(CodestreamTest, MembrokerBufMasterCbrTrimAndMembackedMultiBufferPaths) {
   //    add_new_buffer() runs across chunks) + enable error paths.
   class ChunkedMembackedSource : public kdu_membacked_compressed_source {
    public:
-    explicit ChunkedMembackedSource(const std::vector<kdu_byte> &data)
+    explicit ChunkedMembackedSource(const std::vector<kdu_byte>& data)
         : data_(data) {}
 
-    bool Enable(int mode, size_t min_buf, size_t max_buf) {
-      return kdu_membacked_compressed_source::enable(mode, nullptr, 0, 0, 0.0,
-                                                     min_buf, max_buf);
+    bool Enable(int mode, size_t min_buf, size_t max_buf,
+                const kdu_byte* desc = nullptr, size_t desc_len = 0) {
+      return kdu_membacked_compressed_source::enable(mode, desc, desc_len, 0,
+                                                     0.0, min_buf, max_buf);
     }
     bool Open(bool auto_enable) {
       return kdu_membacked_compressed_source::open(auto_enable);
     }
-    bool Service(size_t &fetched, kdu_int32 &term) {
+    bool Service(size_t& fetched, kdu_int32& term) {
       return kdu_membacked_compressed_source::service(fetched, term);
     }
 
    protected:
-    kdu_long fetch_data(kdu_long max_bytes, kdu_byte *buffer,
+    kdu_long fetch_data(kdu_long max_bytes, kdu_byte* buffer,
                         bool blocking) override {
       (void)blocking;
       if (pos_ >= data_.size()) {
@@ -8960,7 +8986,7 @@ TEST_F(CodestreamTest, MembrokerBufMasterCbrTrimAndMembackedMultiBufferPaths) {
     }
 
    private:
-    const std::vector<kdu_byte> &data_;
+    const std::vector<kdu_byte>& data_;
     size_t pos_ = 0;
   };
 
@@ -9047,8 +9073,9 @@ TEST_F(CodestreamTest, MembrokerBufMasterCbrTrimAndMembackedMultiBufferPaths) {
       StructuredCacheTarget cached_tgt;
       MemoryTarget mem_tgt;
       kdu_codestream cs;
-      cs.create(&siz, use_cached ? static_cast<kdu_compressed_target *>(&cached_tgt)
-                                 : static_cast<kdu_compressed_target *>(&mem_tgt));
+      cs.create(&siz, use_cached
+                          ? static_cast<kdu_compressed_target*>(&cached_tgt)
+                          : static_cast<kdu_compressed_target*>(&mem_tgt));
       ConfigureCodestreamParams(cs, spec);
       kdu_tile tile = cs.open_tile(kdu_coords(0, 0));
       EXPECT_FALSE(cs.ready_for_flush());
@@ -9071,12 +9098,8 @@ TEST_F(CodestreamTest, MembrokerBufMasterCbrTrimAndMembackedMultiBufferPaths) {
     cbr.reversible = false;
     cbr.dwt_levels = 1;
     cbr.extra_params = {
-        "Cycc=no",
-        "Ctype=Y,C,Cr",
-        "Corder=PCRL",
-        "Clayers=1",
-        "Cprecincts={16,16}",
-        "Scbr={1,64}",
+        "Cycc=no",   "Ctype=Y,C,Cr",       "Corder=PCRL",
+        "Clayers=1", "Cprecincts={16,16}", "Scbr={1,64}",
     };
     const auto planes = MakeTestPlanes(cbr);
     siz_params siz;
@@ -9094,6 +9117,5571 @@ TEST_F(CodestreamTest, MembrokerBufMasterCbrTrimAndMembackedMultiBufferPaths) {
     cs.flush(cbr_layers, 1, nullptr, /*trim_to_rate=*/true,
              /*record_layer_info_in_comment=*/false, 0.0);
     cs.destroy();
+  }
+}
+
+TEST_F(CodestreamTest, CbrBulkFillPcrdOptTrimTlmPltAndFlushStatsPaths) {
+  // 1. CBR error checks + huge CBR rate target triggering bulk fill & fine fill
+  //    in pcrd_opt_cbr and write_packets_cbr + restart Scbr warning.
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 512;
+    spec.components = 3;
+    spec.reversible = false;
+    spec.dwt_levels = 1;
+    spec.extra_params = {
+        "Cycc=no",   "Ctype=Y,C,Cr",       "Corder=PCRL",
+        "Clayers=1", "Cprecincts={16,16}", "Scbr={1,96}",
+    };
+    const auto planes = MakeTestPlanes(spec);
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    kdu_codestream cs;
+    cs.create(&siz, &tgt);
+    cs.enable_restart();
+    ConfigureCodestreamParams(cs, spec);
+    PushAllTiles(cs, spec, planes);
+
+    // Huge CBR target forces > 8192 bulk fill across non-final flush sets.
+    kdu_long huge_layers[1] = {65536};
+    cs.flush(huge_layers, 1, nullptr, /*trim_to_rate=*/true,
+             /*record_layer_info_in_comment=*/false, 0.0);
+
+    // Restart with changed tile-specific precinct size alters Scbr flush-set
+    // dimensions and triggers warning (10068).
+    MemoryTarget tgt2;
+    cs.restart(&tgt2);
+    ASSERT_TRUE(cs.access_siz()->parse_string("Cprecincts:T0={32,32}"));
+    PushAllTiles(cs, spec, planes);
+    warning_handler_.clear();
+    kdu_long layer2[1] = {65536};
+    cs.flush(layer2, 1, nullptr, /*trim_to_rate=*/true,
+             /*record_layer_info_in_comment=*/false, 0.0);
+    EXPECT_FALSE(warning_handler_.history().empty());
+    cs.destroy();
+  }
+
+  // Invalid Scbr combinations: Clayers=2, Bmax < flush-set lines, tiny rate,
+  // and vertical tiling with sub-tile flush sets.
+  for (const char* bad_case :
+       {"Clayers=2", "Scbr={1,1}", "tiny_rate", "vert_tiles"}) {
+    ImageSpec spec;
+    spec.width = 64;
+    const bool is_vert_tiles = (std::string(bad_case) == "vert_tiles");
+    spec.height = is_vert_tiles ? 128 : 64;
+    if (is_vert_tiles) {
+      spec.tile_size = kdu_coords(64, 64);
+    }
+    spec.components = 1;
+    spec.reversible = false;
+    spec.dwt_levels = 1;
+    spec.extra_params = {"Corder=PCRL", "Cprecincts={16,16}"};
+    const bool is_two_layers = (std::string(bad_case) == "Clayers=2");
+    const bool is_tiny_rate = (std::string(bad_case) == "tiny_rate");
+    const bool is_bad_bmax = (std::string(bad_case) == "Scbr={1,1}");
+    spec.extra_params.push_back(is_bad_bmax ? "Scbr={1,1}" : "Scbr={1,64}");
+    spec.extra_params.push_back(is_two_layers ? "Clayers=2" : "Clayers=1");
+    const auto planes = MakeTestPlanes(spec);
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    kdu_codestream cs;
+    cs.create(&siz, &tgt);
+    ConfigureCodestreamParams(cs, spec);
+    PushAllTiles(cs, spec, planes);
+    kdu_long layers[2] = {is_tiny_rate ? 10 : 4096, 8192};
+    const int nlayers = is_two_layers ? 2 : 1;
+    error_handler_.clear();
+    EXPECT_THROW(cs.flush(layers, nlayers), kdu_exception);
+    EXPECT_FALSE(error_handler_.history().empty());
+    cs.destroy();
+  }
+
+  // 2. pcrd_opt unsized prefix / synthesized 2nd-last layer + pcrd_trim
+  // bisection
+  //    with Creslengths + simulate_output scaling across partial tiles.
+  {
+    ImageSpec spec;
+    spec.width = 96;
+    spec.height = 96;
+    spec.tile_size = kdu_coords(48, 48);
+    spec.components = 3;
+    spec.reversible = false;
+    spec.dwt_levels = 2;
+    spec.extra_params = {
+        "Clayers=5",
+        "Cblk={8,8}",
+        "Cprecincts={16,16}",
+        "Creslengths=128,256,512,1024,0",
+    };
+    const auto planes = MakeTestPlanes(spec);
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    kdu_codestream cs;
+    cs.create(&siz, &tgt);
+    ConfigureCodestreamParams(cs, spec);
+    PushAllTiles(cs, spec, planes);
+    // Zero entries exercise unsized prefix and synthesized second-last target.
+    kdu_long layers[5] = {0, 0, 1200, 0, 0};
+    cs.flush(layers, 5, nullptr, /*trim_to_rate=*/true,
+             /*record_layer_info_in_comment=*/true, 0.05);
+    cs.destroy();
+  }
+
+  // 3. kdu_flush_stats: set_max_passes, advance, attach_flush_stats, mismatch.
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 64;
+    spec.components = 3;
+    spec.reversible = true;
+    spec.dwt_levels = 1;
+    spec.extra_params = {"Clayers=1", "Cprecincts={32,32}"};
+    const auto planes = MakeTestPlanes(spec);
+
+    siz_params siz1;
+    ConfigureSiz(siz1, spec);
+    MemoryTarget tgt1;
+    kdu_codestream cs1;
+    cs1.create(&siz1, &tgt1);
+    cs1.enable_restart();
+    ConfigureCodestreamParams(cs1, spec);
+    kdu_flush_stats fstats = cs1.add_flush_stats(0, 10, 0, 1);
+    fstats.set_max_passes(/*for_hr=*/true, /*for_lr=*/true, -1, 12);
+    fstats.set_max_passes(/*for_hr=*/true, /*for_lr=*/false, 0, 300);
+    fstats.set_max_passes(/*for_hr=*/false, /*for_lr=*/true, 1, -1);
+    PushAllTiles(cs1, spec, planes);
+    kdu_long l1[1] = {4096};
+    cs1.flush(l1, 1);
+
+    siz_params siz2;
+    ConfigureSiz(siz2, spec);
+    MemoryTarget tgt2;
+    kdu_codestream cs2;
+    cs2.create(&siz2, &tgt2);
+    ConfigureCodestreamParams(cs2, spec);
+    error_handler_.clear();
+    EXPECT_THROW(cs2.attach_flush_stats(fstats), kdu_exception);
+    EXPECT_FALSE(error_handler_.history().empty());
+    kdu_flush_stats fstats2 = cs2.add_flush_stats(1, 10, 0, 1);
+    (void)fstats2;
+    EXPECT_TRUE(fstats.advance(1));
+    cs2.attach_flush_stats(fstats);
+    PushAllTiles(cs2, spec, planes);
+    cs2.flush(l1, 1);
+    cs2.destroy();
+
+    // Incompatible Cprecincts triggers attach_tile_comp error.
+    ImageSpec spec3 = spec;
+    spec3.extra_params = {"Clayers=1", "Cprecincts={16,16}"};
+    siz_params siz3;
+    ConfigureSiz(siz3, spec3);
+    MemoryTarget tgt3;
+    kdu_codestream cs3;
+    cs3.create(&siz3, &tgt3);
+    ConfigureCodestreamParams(cs3, spec3);
+    cs3.add_flush_stats(2, 10, 0, 1);
+    cs3.attach_flush_stats(fstats);
+    error_handler_.clear();
+    EXPECT_THROW(
+        {
+          kdu_tile t = cs3.open_tile(kdu_coords(0, 0));
+          t.close();
+        },
+        kdu_exception);
+    EXPECT_FALSE(error_handler_.history().empty());
+    cs3.destroy();
+    cs1.destroy();
+  }
+
+  // 4. Multi-tile ORGgen_tlm + ORGtlm_style + ORGgen_plt + PLT/TLM decoding
+  //    + random tile access seeking.
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 64;
+    spec.tile_size = kdu_coords(32, 32);
+    spec.components = 1;
+    spec.reversible = true;
+    spec.dwt_levels = 1;
+    spec.extra_params = {
+        "Clayers=2",   "ORGgen_tlm=4",   "ORGtlm_style={byte,short}",
+        "ORGtparts=R", "ORGgen_plt=yes", "Cprecincts={16,16}",
+    };
+    const auto planes = MakeTestPlanes(spec);
+    const auto bytes = EncodeImage(spec, planes);
+
+    MemorySource src(bytes);
+    kdu_codestream in_cs;
+    in_cs.create(&src);
+    in_cs.set_fussy();
+    // Open tiles in reverse order to exercise PLT/TLM seeking.
+    for (int tnum = 3; tnum >= 0; --tnum) {
+      kdu_tile t = in_cs.open_tile(kdu_coords(tnum % 2, tnum / 2));
+      DecodeTileFirstComponent(in_cs, t);
+      t.close();
+    }
+    in_cs.destroy();
+  }
+}
+
+TEST_F(CodestreamTest, MctStagesNltProfilesMembackedLoadMemoryAndInputIoPaths) {
+  // 1. Multi-stage MCT + Ctype=alpha,C,R,Y + NLT + Sprofile + MCT
+  //    restrictions and create_stages validation errors.
+  {
+    ImageSpec spec;
+    spec.width = 32;
+    spec.height = 32;
+    spec.components = 4;
+    spec.reversible = false;
+    spec.dwt_levels = 1;
+    spec.extra_params = {
+        "Sprofile=PROFILE1",
+        "Cycc=no",
+        "Ctype=N,C,Cb,Y",
+    };
+    const auto planes = MakeTestPlanes(spec);
+    const auto bytes = EncodeImage(spec, planes);
+    MemorySource src(bytes);
+    const auto decoded = DecodeFullImage(&src);
+    ASSERT_EQ(decoded.size(), 4u);
+  }
+  {
+    ImageSpec spec;
+    spec.width = 32;
+    spec.height = 32;
+    spec.components = 3;
+    spec.reversible = false;
+    spec.dwt_levels = 1;
+    spec.extra_params = {
+        "Sextensions=NLT",
+        "NLTmake={GAMMA,2.4,0.055,64}",
+    };
+    const auto planes = MakeTestPlanes(spec);
+    const auto bytes = EncodeImage(spec, planes);
+    MemorySource src(bytes);
+    const auto decoded = DecodeFullImage(&src);
+    ASSERT_EQ(decoded.size(), 3u);
+  }
+  {
+    ImageSpec spec;
+    spec.width = 32;
+    spec.height = 32;
+    spec.components = 2;
+    spec.reversible = false;
+    spec.dwt_levels = 1;
+    spec.extra_params = {
+        "Sextensions=NLT",
+        "NLType:C0=UMAG",
+        "NLTmake:C1={GAMMA,2.2,0.055,64}",
+    };
+    const auto planes = MakeTestPlanes(spec);
+    const auto bytes = EncodeImage(spec, planes);
+    MemorySource src(bytes);
+    const auto decoded = DecodeFullImage(&src);
+    ASSERT_EQ(decoded.size(), 2u);
+  }
+
+  {
+    ImageSpec mct_spec;
+    mct_spec.width = 64;
+    mct_spec.height = 64;
+    mct_spec.components = 3;
+    mct_spec.reversible = false;
+    mct_spec.dwt_levels = 1;
+    mct_spec.extra_params = {
+        "Sextensions=MCT",
+        "Mcomponents=3",
+        "Mprecision=8",
+        "Msigned=no",
+        "Nprecision=8",
+        "Nsigned=no",
+        // Stage 1: 2x2 diagonal matrix on {0,1} + null transform on {2}.
+        "Mstage_inputs:I1={0,1},{2,2}",
+        "Mstage_outputs:I1={0,1},{2,2}",
+        "Mstage_collections:I1={2,2},{1,1}",
+        "Mstage_xforms:I1={MATRIX,1,0,0,0},{MATRIX,0,0,0,0}",
+        "Mmatrix_size:I1=4",
+        "Mmatrix_coeffs:I1=1,0,0,1",
+        // Stage 2: 3x3 matrix + offset vector on {0,2}.
+        "Mstage_inputs:I2={0,2}",
+        "Mstage_outputs:I2={0,2}",
+        "Mstage_collections:I2={3,3}",
+        "Mstage_xforms:I2={MATRIX,2,1,0,0}",
+        "Mmatrix_size:I2=9",
+        "Mmatrix_coeffs:I2=1,0,0,0,1,0,0,0,1",
+        "Mvector_size:I1=3",
+        "Mvector_coeffs:I1=0,0,0",
+        "Mnum_stages=2",
+        "Mstages=1,2",
+        "Cycc=no",
+    };
+    const auto planes = MakeTestPlanes(mct_spec);
+    const auto mct_bytes = EncodeImage(mct_spec, planes);
+
+    MemorySource src(mct_bytes);
+    kdu_codestream in_cs;
+    in_cs.create(&src);
+    kdu_quality_limiter ql(0.05F, false);
+    in_cs.apply_input_restrictions(0, 2, 0, 0, nullptr,
+                                   KDU_WANT_OUTPUT_COMPONENTS, nullptr, &ql);
+    kdu_tile t = in_cs.open_tile(kdu_coords(0, 0));
+    kdu_multi_synthesis synth;
+    synth.create(in_cs, t);
+    synth.destroy();
+    t.close();
+    in_cs.destroy();
+  }
+
+  // MCT validation errors in kd_mct_stage::create_stages.
+  for (bool bad_vec : {true, false}) {
+    ImageSpec bad_spec;
+    bad_spec.width = 32;
+    bad_spec.height = 32;
+    bad_spec.components = 2;
+    bad_spec.reversible = false;
+    bad_spec.extra_params = {
+        "Sextensions=MCT",
+        "Mcomponents=2",
+        "Mprecision=8",
+        "Msigned=no",
+        "Nprecision=8",
+        "Nsigned=no",
+        "Mstage_inputs:I1={0,1}",
+        "Mstage_outputs:I1={0,1}",
+        "Mstage_collections:I1={2,2}",
+        "Mstage_xforms:I1={MATRIX,1,1,0,0}",
+        bad_vec ? "Mmatrix_size:I1=4" : "Mmatrix_size:I1=2",
+        bad_vec ? "Mmatrix_coeffs:I1=1,0,0,1" : "Mmatrix_coeffs:I1=1,0",
+        bad_vec ? "Mvector_size:I1=1" : "Mvector_size:I1=2",
+        bad_vec ? "Mvector_coeffs:I1=0" : "Mvector_coeffs:I1=0,0",
+        "Mnum_stages=1",
+        "Mstages=1",
+        "Cycc=no",
+    };
+    siz_params siz;
+    ConfigureSiz(siz, bad_spec);
+    MemoryTarget tgt;
+    kdu_codestream cs;
+    error_handler_.clear();
+    EXPECT_THROW(
+        {
+          cs.create(&siz, &tgt);
+          ConfigureCodestreamParams(cs, bad_spec);
+          kdu_tile t = cs.open_tile(kdu_coords(0, 0));
+          t.close();
+        },
+        kdu_exception);
+    EXPECT_FALSE(error_handler_.history().empty());
+    if (cs.exists()) {
+      cs.destroy();
+    }
+  }
+
+  // 2. Large (>12 KB) kdu_membacked_compressed_source across
+  // PARTIALLY_SERVICED,
+  //    UNSERVICED (load_memory), and add_new_buffer() doubling + cleanup.
+  class PagedMembackedSource : public kdu_membacked_compressed_source {
+   public:
+    explicit PagedMembackedSource(const std::vector<kdu_byte>& data)
+        : data_(data) {}
+
+    bool Enable(int mode, size_t min_buf, size_t max_buf,
+                const kdu_byte* desc = nullptr, size_t desc_len = 0) {
+      return kdu_membacked_compressed_source::enable(mode, desc, desc_len, 0,
+                                                     0.0, min_buf, max_buf);
+    }
+    bool Open(bool auto_enable) {
+      return kdu_membacked_compressed_source::open(auto_enable);
+    }
+    bool Service(size_t& fetched, kdu_int32& term) {
+      return kdu_membacked_compressed_source::service(fetched, term);
+    }
+
+   protected:
+    kdu_long fetch_data(kdu_long max_bytes, kdu_byte* buffer,
+                        bool blocking) override {
+      (void)blocking;
+      if (pos_ >= data_.size()) {
+        return 0;
+      }
+      const size_t avail = data_.size() - pos_;
+      const size_t n = std::min(avail, std::min(static_cast<size_t>(max_bytes),
+                                                static_cast<size_t>(256)));
+      std::memcpy(buffer, data_.data() + pos_, n);
+      pos_ += n;
+      return static_cast<kdu_long>(n);
+    }
+
+   private:
+    const std::vector<kdu_byte>& data_;
+    size_t pos_ = 0;
+  };
+
+  {
+    ImageSpec big_spec;
+    big_spec.width = 128;
+    big_spec.height = 128;
+    big_spec.components = 3;
+    big_spec.reversible = true;
+    big_spec.dwt_levels = 2;
+    auto big_planes = MakeTestPlanes(big_spec);
+    // Add deterministic pseudo-noise so compressed size exceeds 16 KB.
+    for (int c = 0; c < 3; ++c) {
+      for (size_t i = 0; i < big_planes[c].size(); ++i) {
+        big_planes[c][i] +=
+            static_cast<kdu_int32>(((i * 37 + c * 13) % 29) - 14);
+      }
+    }
+    const auto big_bytes = EncodeImage(big_spec, big_planes);
+    ASSERT_GT(big_bytes.size(), 12288u);
+
+    {
+      PagedMembackedSource src(big_bytes);
+      EXPECT_TRUE(src.Enable(KDU_MEMBACKED_SOURCE_FULLY_SERVICED,
+                             /*min_buf=*/128, /*max_buf=*/0));
+      EXPECT_TRUE(src.Open(/*auto_enable=*/false));
+      size_t fetched = 0;
+      kdu_int32 term = 0;
+      EXPECT_TRUE(src.Service(fetched, term));
+      EXPECT_EQ(fetched, big_bytes.size());
+      const auto decoded = DecodeFullImage(&src);
+      ASSERT_EQ(decoded.size(), 3u);
+    }
+
+    {
+      PagedMembackedSource src(big_bytes);
+      EXPECT_TRUE(src.Enable(KDU_MEMBACKED_SOURCE_PARTIALLY_SERVICED,
+                             /*min_buf=*/128, /*max_buf=*/0));
+      EXPECT_TRUE(src.Open(/*auto_enable=*/false));
+      const auto decoded = DecodeFullImage(&src);
+      ASSERT_EQ(decoded.size(), 3u);
+    }
+
+    {
+      PagedMembackedSource src(big_bytes);
+      static constexpr kdu_byte kDesc[4] = {0xAA, 0xBB, 0xCC, 0xDD};
+      EXPECT_TRUE(src.Enable(KDU_MEMBACKED_SOURCE_UNSERVICED, /*min_buf=*/128,
+                             /*max_buf=*/0, kDesc, sizeof(kDesc)));
+      EXPECT_TRUE(src.Open(/*auto_enable=*/false));
+      const auto decoded = DecodeFullImage(&src);
+      ASSERT_EQ(decoded.size(), 3u);
+    }
+  }
+
+  // 3. kdu_sample_allocator::release() valid and invalid states +
+  //    trans_pcrd_opt error paths & sloppy_middle=true + load_sequential
+  //    KDU_LOAD_SEQUENTIAL_WANT_FLUSH_SET.
+  {
+    kdu_membroker broker(1 << 20);
+    kdu_sample_allocator alloc;
+    EXPECT_TRUE(alloc.configure(&broker, 16));
+    alloc.restart();
+    alloc.release();
+    alloc.restart();
+    alloc.pre_alloc(KDU_SAMPLE_PREC16, 128, 0, 1);
+    error_handler_.clear();
+    EXPECT_THROW(alloc.release(), kdu_exception);
+    EXPECT_FALSE(error_handler_.history().empty());
+    alloc.restart();
+    alloc.release();
+  }
+
+  {
+    ImageSpec tspec;
+    tspec.width = 64;
+    tspec.height = 64;
+    tspec.tile_size = kdu_coords(32, 64);
+    tspec.components = 1;
+    tspec.reversible = false;
+    tspec.dwt_levels = 1;
+    tspec.extra_params = {"Corder=PCRL", "Clayers=3", "Cprecincts={16,16}",
+                          "Cblk={8,8}"};
+    const auto planes = MakeTestPlanes(tspec);
+    const auto bytes = EncodeImage(tspec, planes);
+
+    MemorySource src(bytes);
+    kdu_codestream in_cs;
+    in_cs.create(&src);
+
+    siz_params trans_siz;
+    ConfigureSiz(trans_siz, tspec);
+    MemoryTarget trans_tgt;
+    kdu_codestream trans_cs;
+    trans_cs.create(&trans_siz, &trans_tgt);
+    ConfigureCodestreamParams(trans_cs, tspec);
+
+    // Invalid trans_pcrd_opt on non-existent tile throws.
+    kdu_pdescriptor_set bad_pset;
+    bad_pset.init(kdu_coords(99, 99), 3);
+    bad_pset.add_pdescriptor(0, 0, kdu_coords(0, 0));
+    error_handler_.clear();
+    EXPECT_THROW(trans_cs.trans_pcrd_opt(&bad_pset, true, true, 0.05),
+                 kdu_exception);
+    EXPECT_FALSE(error_handler_.history().empty());
+
+    // Load sequentially with WANT_FLUSH_SET and transcode with sloppy_middle.
+    std::map<std::pair<int, int>, kdu_tile> out_tiles;
+    kdu_pdescriptor_set pset;
+    bool tile_done = false;
+    while (true) {
+      kdu_tile t =
+          in_cs.load_sequential(&pset, tile_done, 0, 0,
+                                KDU_LOAD_SEQUENTIAL_WANT_FLUSH_SET |
+                                    KDU_LOAD_SEQUENTIAL_WANT_PACKET_BYTES,
+                                nullptr);
+      if (!t.exists()) {
+        break;
+      }
+      if (!pset.is_empty()) {
+        const kdu_coords tidx = pset.get_tile_idx();
+        const std::pair<int, int> key(tidx.x, tidx.y);
+        auto it = out_tiles.find(key);
+        if (it == out_tiles.end()) {
+          it = out_tiles.emplace(key, trans_cs.open_tile(tidx)).first;
+        }
+        kdu_tile out_tile = it->second;
+        for (int d = 0; d < pset.get_num_pdescriptors(); ++d) {
+          kdu_pdescriptor* pd = pset.access_pdescriptor(d);
+          kdu_tile_comp itc = t.access_component(pd->component_idx);
+          kdu_resolution ires = itc.access_resolution(pd->resolution_level);
+          kdu_precinct iprec = ires.access_precinct(pd->precinct_idx);
+          kdu_tile_comp xtc = out_tile.access_component(pd->component_idx);
+          kdu_resolution xres = xtc.access_resolution(pd->resolution_level);
+          const int min_b = ires.which() ? 1 : 0;
+          const int max_b = ires.which() ? 3 : 0;
+          for (int b = min_b; b <= max_b; ++b) {
+            kdu_dims blocks;
+            if (!iprec.get_valid_blocks(b, blocks) || blocks.is_empty()) {
+              continue;
+            }
+            kdu_subband isub = ires.access_subband(b);
+            kdu_subband xsub = xres.access_subband(b);
+            for (int r = blocks.pos.y; r < blocks.pos.y + blocks.size.y; ++r) {
+              for (int c = blocks.pos.x; c < blocks.pos.x + blocks.size.x;
+                   ++c) {
+                kdu_coords bidx(c, r);
+                kdu_block* ib = isub.open_block(bidx);
+                kdu_block* xb = xsub.open_block(bidx);
+                xb->num_passes = ib->num_passes;
+                xb->missing_msbs = ib->missing_msbs;
+                kdu_long total_bytes = 0;
+                for (int p = 0; p < ib->num_passes; ++p) {
+                  xb->pass_lengths[p] = ib->pass_lengths[p];
+                  xb->pass_slopes[p] = ib->pass_slopes[p];
+                  total_bytes += ib->pass_lengths[p];
+                }
+                if (total_bytes > 0) {
+                  xb->set_max_bytes(total_bytes, false);
+                  std::memcpy(xb->byte_buffer, ib->byte_buffer,
+                              static_cast<size_t>(total_bytes));
+                }
+                xsub.close_block(xb);
+                isub.close_block(ib);
+              }
+            }
+          }
+        }
+        EXPECT_GE(trans_cs.trans_pcrd_opt(&pset, /*trim_to_rate=*/true,
+                                          /*sloppy_middle=*/true, 0.05),
+                  0);
+        pset.reset();
+        if (tile_done) {
+          out_tile.close();
+          out_tiles.erase(it);
+        }
+      }
+      if (tile_done) {
+        t.close();
+      }
+    }
+    for (auto& kv : out_tiles) {
+      kv.second.close();
+    }
+    kdu_long out_layers[3] = {100, 200, 300};
+    trans_cs.trans_out(300, out_layers, 3, /*record_in_comseg=*/false);
+    trans_cs.destroy();
+    in_cs.destroy();
+  }
+}
+
+TEST_F(CodestreamTest, SequentialLoadTileLifecycleAndRestartFlushStatsPaths) {
+  // 1. Multi-tile multi-tpart load_sequential with WANT_FLUSH_SET (CPRL &
+  //    PCRL), ROI skipping dead tiles (KD_EXPIRED_TILE + ignore()), tile
+  //    lifecycle APIs (create_tile, open_tiles, access_tile, close_tiles),
+  //    share_buffering, and trans_pcrd_opt validation/error paths.
+  for (const char* order : {"CPRL", "PCRL"}) {
+    ImageSpec spec;
+    spec.width = 128;
+    spec.height = 128;
+    spec.tile_size = kdu_coords(64, 64);
+    spec.components = 3;
+    spec.reversible = false;
+    spec.dwt_levels = 1;
+    spec.extra_params = {
+        std::string("Corder=") + order,
+        "Clayers=3",
+        "Cprecincts={32,32}",
+        "ORGgen_tlm=64",
+        "ORGgen_plt=yes",
+        "ORGtparts=C",
+    };
+    const auto bytes = EncodeImage(spec, MakeTestPlanes(spec));
+
+    // Non-persistent multi-tile lifecycle: create_tile, open_tiles,
+    // access_tile, close_tiles, ready_for_flush (false on input).
+    MemorySource src_life(bytes);
+    kdu_codestream cs_life;
+    cs_life.create(&src_life);
+    EXPECT_FALSE(cs_life.ready_for_flush());
+    kdu_dims valid_tiles;
+    cs_life.get_valid_tiles(valid_tiles);
+    EXPECT_FALSE(cs_life.access_tile(valid_tiles.pos, false, nullptr).exists());
+    cs_life.create_tile(valid_tiles.pos, nullptr);
+    cs_life.open_tiles(valid_tiles, false, nullptr);
+    kdu_tile t0 = cs_life.access_tile(valid_tiles.pos, false, nullptr);
+    EXPECT_TRUE(t0.exists());
+    // Re-opening already-open tile range skips existing open tiles.
+    cs_life.open_tiles(valid_tiles, false, nullptr);
+    cs_life.close_tiles(valid_tiles, nullptr);
+    cs_life.destroy();
+
+    // Persistent input with restart + create_tile reinit and share_buffering.
+    MemorySource src_seq(bytes);
+    kdu_codestream cs_seq;
+    cs_seq.create(&src_seq);
+    cs_seq.set_persistent();
+    cs_seq.enable_restart();
+    cs_seq.create_tile(kdu_coords(0, 0), nullptr);
+
+    kdu_codestream cs_share;
+    siz_params trans_siz;
+    ConfigureSiz(trans_siz, spec);
+    MemoryTarget trans_tgt;
+    cs_share.create(&trans_siz, &trans_tgt);
+    cs_share.share_buffering(cs_seq);
+    ConfigureCodestreamParams(cs_share, spec);
+
+    // Transcode tile (0,0) with pset containing packet_bytes_entries=1 on a
+    // 3-layer target to exercise synthesized layer entries and sloppy_middle=0.
+    kdu_pdescriptor_set pset;
+    kdu_tile in_t0 = cs_seq.open_tile(kdu_coords(0, 0));
+    kdu_tile out_t0 = cs_share.open_tile(kdu_coords(0, 0));
+    pset.init(kdu_coords(0, 0), 1);
+    for (int c = 0; c < 3; ++c) {
+      kdu_tile_comp ic = in_t0.access_component(c);
+      kdu_tile_comp xc = out_t0.access_component(c);
+      int num_res = ic.get_num_resolutions();
+      for (int r = 0; r < num_res; ++r) {
+        kdu_resolution ir = ic.access_resolution(r);
+        kdu_resolution xr = xc.access_resolution(r);
+        kdu_dims pd_dims;
+        ir.get_valid_precincts(pd_dims);
+        int idx = pset.add_pdescriptor(c, r, pd_dims.pos);
+        kdu_pdescriptor* pd = pset.access_pdescriptor(idx);
+        pd->packet_bytes[0] = 64;
+        pd->num_packets = 1;
+        for (int b = (r == 0 ? 0 : 1); b < (r == 0 ? 1 : 4); ++b) {
+          kdu_subband isub = ir.access_subband(b == 0 ? LL_BAND : b);
+          kdu_subband xsub = xr.access_subband(b == 0 ? LL_BAND : b);
+          kdu_dims blocks;
+          isub.get_valid_blocks(blocks);
+          for (int by = 0; by < blocks.size.y; ++by) {
+            for (int bx = 0; bx < blocks.size.x; ++bx) {
+              kdu_coords bidx = blocks.pos + kdu_coords(bx, by);
+              kdu_block* ib = isub.open_block(bidx);
+              kdu_block* xb = xsub.open_block(bidx);
+              xb->num_passes = ib->num_passes;
+              xb->missing_msbs = ib->missing_msbs;
+              kdu_long tot = 0;
+              for (int p = 0; p < ib->num_passes; ++p) {
+                xb->pass_lengths[p] = ib->pass_lengths[p];
+                xb->pass_slopes[p] = ib->pass_slopes[p];
+                tot += ib->pass_lengths[p];
+              }
+              if (tot > 0) {
+                xb->set_max_bytes(tot, false);
+                std::memcpy(xb->byte_buffer, ib->byte_buffer,
+                            static_cast<size_t>(tot));
+              }
+              xsub.close_block(xb);
+              isub.close_block(ib);
+            }
+          }
+        }
+      }
+    }
+    EXPECT_GE(cs_share.trans_pcrd_opt(&pset, /*trim_to_rate=*/true,
+                                      /*sloppy_middle=*/false, 0.05),
+              0);
+
+    // Error paths on trans_pcrd_opt: empty pset returns 0, bad tile/precinct/
+    // closed tile/missing packet_bytes/set_max_bytes throw.
+    kdu_pdescriptor_set empty_pset;
+    EXPECT_EQ(cs_share.trans_pcrd_opt(&empty_pset, false, false, 0.0), 0);
+
+    kdu_pdescriptor_set bad_tile_pset;
+    bad_tile_pset.init(kdu_coords(9, 9), 3);
+    bad_tile_pset.add_pdescriptor(0, 0, kdu_coords(0, 0));
+    error_handler_.clear();
+    EXPECT_THROW(cs_share.trans_pcrd_opt(&bad_tile_pset, false, false, 0.0),
+                 kdu_exception);
+
+    kdu_pdescriptor_set unopened_tile_pset;
+    unopened_tile_pset.init(kdu_coords(1, 0), 3);
+    unopened_tile_pset.add_pdescriptor(0, 0, kdu_coords(0, 0));
+    EXPECT_THROW(
+        cs_share.trans_pcrd_opt(&unopened_tile_pset, false, false, 0.0),
+        kdu_exception);
+
+    kdu_pdescriptor_set nopbytes_pset;
+    nopbytes_pset.init(kdu_coords(0, 0), 0);
+    nopbytes_pset.add_pdescriptor(0, 0, kdu_coords(0, 0));
+    EXPECT_THROW(cs_share.trans_pcrd_opt(&nopbytes_pset, false, false, 0.0),
+                 kdu_exception);
+
+    kdu_pdescriptor_set bad_prec_pset;
+    bad_prec_pset.init(kdu_coords(0, 0), 3);
+    bad_prec_pset.add_pdescriptor(99, 0, kdu_coords(0, 0));
+    EXPECT_THROW(cs_share.trans_pcrd_opt(&bad_prec_pset, false, false, 0.0),
+                 kdu_exception);
+
+    out_t0.close();
+    in_t0.close();
+    kdu_pdescriptor_set unopened_pset;
+    unopened_pset.init(kdu_coords(1, 0), 3);
+    unopened_pset.add_pdescriptor(0, 0, kdu_coords(0, 0));
+    EXPECT_THROW(cs_share.trans_pcrd_opt(&unopened_pset, false, false, 0.0),
+                 kdu_exception);
+    cs_share.destroy();
+
+    {
+      siz_params smb_siz;
+      ConfigureSiz(smb_siz, spec);
+      MemoryTarget smb_tgt;
+      kdu_codestream cs_smb;
+      cs_smb.create(&smb_siz, &smb_tgt);
+      ConfigureCodestreamParams(cs_smb, spec);
+      cs_smb.set_max_bytes(512);
+      EXPECT_THROW(cs_smb.trans_pcrd_opt(&pset, false, false, 0.0),
+                   kdu_exception);
+      cs_smb.destroy();
+    }
+
+    // Restart persistent input codestream to test create_tile reinit.
+    MemorySource src_seq2(bytes);
+    cs_seq.restart(&src_seq2);
+    cs_seq.create_tile(kdu_coords(0, 0), nullptr);
+    cs_seq.destroy();
+
+    // Fresh input codestream for load_sequential with WANT_FLUSH_SET and
+    // tile-mismatch pset preservation.
+    MemorySource src_lseq(bytes);
+    kdu_codestream cs_lseq;
+    cs_lseq.create(&src_lseq);
+    kdu_pdescriptor_set seq_pset;
+    for (int step = 0; step < 64; ++step) {
+      bool tile_done = false;
+      kdu_tile t = cs_lseq.load_sequential(
+          &seq_pset, tile_done, /*min_pdescriptors=*/1, /*min_code_blocks=*/1,
+          KDU_LOAD_SEQUENTIAL_WANT_FLUSH_SET |
+              KDU_LOAD_SEQUENTIAL_WANT_PACKET_BYTES,
+          nullptr);
+      if (!t.exists()) {
+        if (seq_pset.is_empty()) break;
+        seq_pset.reset();
+        continue;
+      }
+      if (step == 0 && !seq_pset.is_empty() && !tile_done) {
+        // Second call without resetting seq_pset exercises non-empty resume.
+        bool more_done = false;
+        kdu_tile t_more =
+            cs_lseq.load_sequential(&seq_pset, more_done, 2, 1,
+                                    KDU_LOAD_SEQUENTIAL_WANT_FLUSH_SET |
+                                        KDU_LOAD_SEQUENTIAL_WANT_PACKET_BYTES,
+                                    nullptr);
+        if (more_done && t_more.exists()) {
+          t_more.close();
+          seq_pset.reset();
+          continue;
+        }
+      }
+      if (tile_done) {
+        seq_pset.reset();
+        t.close();
+      }
+    }
+    cs_lseq.destroy();
+
+    // Fresh non-persistent stream with ROI covering only tile (1,1) forces
+    // load_sequential to skip dead tiles (KD_EXPIRED_TILE) via ignore().
+    if (std::string(order) == "PCRL") {
+      MemorySource src_roi(bytes);
+      kdu_codestream cs_roi;
+      cs_roi.create(&src_roi);
+      kdu_dims roi;
+      roi.pos = kdu_coords(64, 64);
+      roi.size = kdu_coords(64, 64);
+      cs_roi.apply_input_restrictions(0, 0, 0, 0, &roi);
+      kdu_pdescriptor_set roi_pset;
+      for (int it = 0; it < 16; ++it) {
+        bool roi_done = false;
+        kdu_tile t = cs_roi.load_sequential(
+            &roi_pset, roi_done, 1, 1, KDU_LOAD_SEQUENTIAL_WANT_TILE, nullptr);
+        roi_pset.reset();
+        if (!t.exists()) break;
+        t.close();
+      }
+      cs_roi.destroy();
+    }
+  }
+
+  // 2. CBR primary bulk fill (> 8192 bytes per flush set on smooth frame),
+  //    set_min_slope_threshold with Scbr, kd_flush_stats::link_tile_comp
+  //    across restarts (+ mismatch error), and pcrd_trim tight Creslengths.
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 128;
+    spec.components = 3;
+    spec.reversible = false;
+    spec.dwt_levels = 1;
+    spec.extra_params = {
+        "Cycc=no",   "Ctype=Y,C,Cr",       "Corder=PCRL",
+        "Clayers=1", "Cprecincts={16,16}", "Scbr={1,96}",
+    };
+    std::vector<std::vector<kdu_int32>> smooth(
+        3, std::vector<kdu_int32>(64 * 128, 1));
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt1;
+    kdu_codestream cs;
+    cs.create(&siz, &tgt1);
+    cs.enable_restart();
+    cs.set_min_slope_threshold(30000);
+    ConfigureCodestreamParams(cs, spec);
+    kdu_flush_stats fstats = cs.add_flush_stats(0, 5, 0, 1);
+    PushAllTiles(cs, spec, smooth);
+    kdu_long massive_cbr[1] = {120000};
+    cs.flush(massive_cbr, 1, nullptr, /*trim_to_rate=*/true,
+             /*record_layer_info_in_comment=*/false, 0.0);
+
+    // Frame 2 links tile_comp flush stats via link_tile_comp.
+    MemoryTarget tgt2;
+    cs.restart(&tgt2);
+    fstats.advance(1);
+    PushAllTiles(cs, spec, smooth);
+    kdu_long normal_cbr[1] = {16384};
+    cs.flush(normal_cbr, 1, nullptr, /*trim_to_rate=*/true,
+             /*record_layer_info_in_comment=*/false, 0.0);
+
+    // Frame 3 with altered Cprecincts triggers flush_stats mismatch error.
+    MemoryTarget tgt3;
+    cs.restart(&tgt3);
+    fstats.advance(1);
+    ASSERT_TRUE(cs.access_siz()->parse_string("Cprecincts:T0={8,8}"));
+    error_handler_.clear();
+    EXPECT_THROW(
+        {
+          PushAllTiles(cs, spec, smooth);
+          cs.flush(normal_cbr, 1, nullptr, /*trim_to_rate=*/true,
+                   /*record_layer_info_in_comment=*/false, 0.0);
+        },
+        kdu_exception);
+    cs.destroy();
+  }
+
+  {
+    ImageSpec tight;
+    tight.width = 128;
+    tight.height = 128;
+    tight.components = 1;
+    tight.reversible = false;
+    tight.dwt_levels = 2;
+    tight.extra_params = {"Clayers=2", "Cblk={8,8}", "Creslengths=1,1,1,0"};
+    const auto planes = MakeTestPlanes(tight);
+    siz_params siz;
+    ConfigureSiz(siz, tight);
+    MemoryTarget tgt;
+    kdu_codestream cs;
+    cs.create(&siz, &tgt);
+    ConfigureCodestreamParams(cs, tight);
+    PushAllTiles(cs, tight, planes);
+    warning_handler_.clear();
+    kdu_uint16 slopes[2] = {45000, 40000};
+    cs.flush(nullptr, 2, slopes, /*trim_to_rate=*/false,
+             /*record_layer_info_in_comment=*/false, 0.0);
+    EXPECT_FALSE(warning_handler_.history().empty());
+    cs.destroy();
+  }
+}
+
+TEST_F(CodestreamTest, MctValidationOutputRestrictionsTlmPltAndAllocatorPaths) {
+  // 1. kd_mct_stage::create_stages validation errors and stage-output
+  //    augmentation + permuted KDU_WANT_OUTPUT_COMPONENTS /
+  //    KDU_WANT_CODESTREAM_COMPONENTS with kdu_quality_limiter.
+  {
+    const std::vector<std::vector<std::string>> bad_mct_configs = {
+        // Missing collection for stage 99
+        {"Sextensions=MCT", "Mcomponents=3", "Mprecision=8", "Msigned=no",
+         "Mnum_stages=1", "Mstages=99"},
+        // Zero inputs in collection
+        {"Sextensions=MCT", "Mcomponents=3", "Mprecision=8", "Msigned=no",
+         "Mnum_stages=1", "Mstages=1", "Mstage_collections:I1={0,3}",
+         "Mstage_inputs:I1={0,2}", "Mstage_outputs:I1={0,2}"},
+        // Insufficient stage inputs
+        {"Sextensions=MCT", "Mcomponents=3", "Mprecision=8", "Msigned=no",
+         "Mnum_stages=1", "Mstages=1", "Mstage_collections:I1={3,3}",
+         "Mstage_inputs:I1={0,0}", "Mstage_outputs:I1={0,2}"},
+        // Insufficient stage outputs
+        {"Sextensions=MCT", "Mcomponents=3", "Mprecision=8", "Msigned=no",
+         "Mnum_stages=1", "Mstages=1", "Mstage_collections:I1={3,3}",
+         "Mstage_inputs:I1={0,2}", "Mstage_outputs:I1={0,0}"},
+        // Too many stage-1 inputs (> num_input_components)
+        {"Sextensions=MCT", "Mcomponents=3", "Mprecision=8", "Msigned=no",
+         "Mnum_stages=1", "Mstages=1", "Mstage_collections:I1={4,4}",
+         "Mstage_inputs:I1={0,3}", "Mstage_outputs:I1={0,3}"},
+    };
+    for (const auto& cfg : bad_mct_configs) {
+      ImageSpec spec;
+      spec.width = 32;
+      spec.height = 32;
+      spec.components = 3;
+      spec.reversible = true;
+      spec.dwt_levels = 1;
+      spec.extra_params = cfg;
+      siz_params siz;
+      ConfigureSiz(siz, spec);
+      MemoryTarget tgt;
+      kdu_codestream cs;
+      cs.create(&siz, &tgt);
+      error_handler_.clear();
+      EXPECT_THROW(
+          {
+            ConfigureCodestreamParams(cs, spec);
+            cs.open_tile(kdu_coords(0, 0));
+          },
+          kdu_exception);
+      cs.destroy();
+    }
+
+    // 2-stage MCT exercising apply_output_restrictions with explicit permuted
+    // component indices and kdu_quality_limiter under both modes.
+    ImageSpec mct2;
+    mct2.width = 64;
+    mct2.height = 64;
+    mct2.components = 3;
+    mct2.reversible = false;
+    mct2.dwt_levels = 1;
+    mct2.extra_params = {
+        "Cycc=no",
+        "Sextensions=MCT",
+        "Mcomponents=3",
+        "Mprecision=8",
+        "Msigned=no",
+        "Mnum_stages=2",
+        "Mstages=1,2",
+        "Mstage_collections:I1={3,3}",
+        "Mstage_inputs:I1={0,2}",
+        "Mstage_outputs:I1={0,2}",
+        "Mstage_xforms:I1={MATRIX,1,0,0,0}",
+        "Mmatrix_size:I1=9",
+        "Mmatrix_coeffs:I1=1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0",
+        "Mstage_collections:I2={2,2},{1,1}",
+        "Mstage_inputs:I2={0,2}",
+        "Mstage_outputs:I2={0,2}",
+        "Mstage_xforms:I2={MATRIX,2,0,0,0},{MATRIX,3,0,0,0}",
+        "Mmatrix_size:I2=4",
+        "Mmatrix_coeffs:I2=1.0,0.0,0.0,1.0",
+        "Mmatrix_size:I3=1",
+        "Mmatrix_coeffs:I3=1.0",
+    };
+    const auto bytes = EncodeImage(mct2, MakeTestPlanes(mct2));
+    MemorySource src(bytes);
+    kdu_codestream cs;
+    cs.create(&src);
+    cs.set_persistent();
+    kdu_quality_limiter limiter(4.0f, false);
+    int out_order[3] = {2, 0, 99};
+    cs.apply_input_restrictions(3, out_order, 0, 0, nullptr,
+                                KDU_WANT_OUTPUT_COMPONENTS, nullptr, &limiter);
+    EXPECT_EQ(cs.get_num_components(true), 2);
+    kdu_tile t = cs.open_tile(kdu_coords(0, 0));
+    EXPECT_TRUE(t.exists());
+    t.close();
+    int cs_order[2] = {1, 0};
+    cs.apply_input_restrictions(2, cs_order, 0, 0, nullptr,
+                                KDU_WANT_CODESTREAM_COMPONENTS, nullptr,
+                                &limiter);
+    EXPECT_EQ(cs.get_num_components(true), 2);
+    cs.destroy();
+  }
+
+  // 2. Malformed TLM and PLT marker parsing on modified in-memory headers.
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 64;
+    spec.tile_size = kdu_coords(32, 32);
+    spec.components = 1;
+    spec.reversible = true;
+    spec.dwt_levels = 1;
+    spec.extra_params = {"Clayers=1", "ORGgen_tlm=2",
+                         "ORGtlm_style={byte,short}", "ORGgen_plt=yes"};
+    const auto base = EncodeImage(spec, MakeTestPlanes(spec));
+
+    auto find_marker = [](const std::vector<kdu_byte>& buf,
+                          kdu_byte marker_lo) -> size_t {
+      for (size_t i = 0; i + 4 < buf.size(); ++i) {
+        if (buf[i] == 0xFF && buf[i + 1] == marker_lo) return i;
+      }
+      return buf.size();
+    };
+
+    const size_t tlm_off = find_marker(base, 0x55);
+    ASSERT_LT(tlm_off, base.size());
+    // Illegal Stlm (bits 4..5 == 3)
+    {
+      auto bad = base;
+      bad[tlm_off + 5] = 0x30;
+      MemorySource src(bad);
+      kdu_codestream cs;
+      error_handler_.clear();
+      EXPECT_THROW(cs.create(&src), kdu_exception);
+      cs.destroy();
+    }
+    // TLM entry length < 14 -> warning (2065)
+    {
+      auto bad = base;
+      bad[tlm_off + 5] = 0x10;
+      bad[tlm_off + 7] = 0x00;
+      bad[tlm_off + 8] = 0x04;
+      MemorySource src(bad);
+      kdu_codestream cs;
+      warning_handler_.clear();
+      cs.create(&src);
+      EXPECT_FALSE(warning_handler_.history().empty());
+      cs.destroy();
+    }
+    // TLM invalid tnum >= num_tiles
+    {
+      auto bad = base;
+      bad[tlm_off + 6] = 200;
+      MemorySource src(bad);
+      kdu_codestream cs;
+      error_handler_.clear();
+      EXPECT_THROW(cs.create(&src), kdu_exception);
+      cs.destroy();
+    }
+    // TLM malformed length (shrink L_tlm by 1)
+    {
+      auto bad = base;
+      bad[tlm_off + 3] -= 1;
+      bad.erase(bad.begin() + static_cast<std::ptrdiff_t>(tlm_off + 6));
+      MemorySource src(bad);
+      kdu_codestream cs;
+      error_handler_.clear();
+      EXPECT_THROW(cs.create(&src), kdu_exception);
+      cs.destroy();
+    }
+
+    const size_t plt_off = find_marker(base, 0x58);
+    ASSERT_LT(plt_off, base.size());
+    // Out-of-order Zplt
+    {
+      auto bad = base;
+      bad[plt_off + 4] = 3;
+      MemorySource src(bad);
+      kdu_codestream cs;
+      cs.create(&src);
+      error_handler_.clear();
+      EXPECT_THROW(cs.open_tile(kdu_coords(0, 0)), kdu_exception);
+      cs.destroy();
+    }
+    // Truncated multi-byte varint at end of PLT
+    {
+      auto bad = base;
+      const int lplt = (bad[plt_off + 2] << 8) + bad[plt_off + 3];
+      bad[plt_off + 2 + lplt - 1] |= 0x80;
+      MemorySource src(bad);
+      kdu_codestream cs;
+      cs.create(&src);
+      error_handler_.clear();
+      EXPECT_THROW(cs.open_tile(kdu_coords(0, 0)), kdu_exception);
+      cs.destroy();
+    }
+  }
+
+  // 3. kdu_sample_allocator fragment expansion, premature release() error,
+  //    brokered release(), and broker deficit failure.
+  {
+    ImageSpec dummy;
+    dummy.width = 32;
+    dummy.height = 32;
+    dummy.components = 1;
+    siz_params siz;
+    ConfigureSiz(siz, dummy);
+    MemoryTarget tgt;
+    kdu_codestream cs;
+    cs.create(&siz, &tgt);
+
+    kdu_membroker broker(1 << 20);
+    kdu_sample_allocator alloc;
+    alloc.configure(&broker, 10);  // 1024-byte fragments -> fast expansion
+    for (int i = 0; i < 64; ++i) alloc.pre_alloc(KDU_SAMPLE_PREC32, 64, 0, 1);
+    error_handler_.clear();
+    EXPECT_THROW(alloc.release(), kdu_exception);
+    alloc.finalize(cs);
+    alloc.restart();
+    alloc.release();
+    EXPECT_EQ(broker.get_allocated_bytes(false), 0);
+
+    // Exceed tight broker limit in do_finalize.
+    kdu_membroker tiny_broker(256);
+    kdu_sample_allocator tiny_alloc;
+    tiny_alloc.configure(&tiny_broker, 10);
+    tiny_alloc.pre_alloc(KDU_SAMPLE_PREC32, 512, 0, 1);
+    error_handler_.clear();
+    EXPECT_THROW(tiny_alloc.finalize(cs), kdu_exception);
+    cs.destroy();
+  }
+}
+
+TEST_F(CodestreamTest, AdditionalSingleThreadedCodestreamPaths) {
+  // 1. membroker refusal on all 3 create() overloads, apply_input_restrictions
+  //    state validation errors, and missing ATK kernel error.
+  {
+    ImageSpec spec;
+    spec.width = 32;
+    spec.height = 32;
+    spec.components = 1;
+    spec.reversible = true;
+    spec.dwt_levels = 1;
+    const auto bytes = EncodeImage(spec, MakeTestPlanes(spec));
+
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    kdu_membroker tiny_broker(0);
+
+    kdu_codestream cs_out;
+    error_handler_.clear();
+    EXPECT_THROW(
+        cs_out.create(&siz, &tgt, nullptr, 0, 0, nullptr, &tiny_broker),
+        kdu_exception);
+    if (cs_out.exists()) cs_out.destroy();
+
+    MemorySource src(bytes);
+    kdu_codestream cs_in;
+    error_handler_.clear();
+    EXPECT_THROW(cs_in.create(&src, nullptr, &tiny_broker), kdu_exception);
+    if (cs_in.exists()) cs_in.destroy();
+
+    kdu_codestream cs_ich;
+    error_handler_.clear();
+    EXPECT_THROW(cs_ich.create(&siz, nullptr, &tiny_broker), kdu_exception);
+    if (cs_ich.exists()) cs_ich.destroy();
+
+    // Missing ATK kernel error on decoded codestream with ATK marker stripped.
+    ImageSpec atk_spec = spec;
+    atk_spec.extra_params = {"Ckernels=ATK", "Catk=2", "Kkernels:I2=R1X1"};
+    auto atk_bytes = EncodeImage(atk_spec, MakeTestPlanes(atk_spec));
+    for (size_t i = 0; i + 4 < atk_bytes.size(); ++i) {
+      if (atk_bytes[i] == 0xFF && atk_bytes[i + 1] == 0x79) {
+        const size_t len = 2 + (atk_bytes[i + 2] << 8) + atk_bytes[i + 3];
+        atk_bytes.erase(atk_bytes.begin() + i, atk_bytes.begin() + i + len);
+        break;
+      }
+    }
+    MemorySource atk_src(atk_bytes);
+    kdu_codestream cs_atk;
+    error_handler_.clear();
+    EXPECT_THROW(
+        {
+          cs_atk.create(&atk_src);
+          cs_atk.open_tile(kdu_coords(0, 0));
+        },
+        kdu_exception);
+    if (cs_atk.exists()) cs_atk.destroy();
+
+    // apply_input_restrictions validation errors.
+    siz_params out_siz;
+    ConfigureSiz(out_siz, spec);
+    MemoryTarget out_tgt;
+    kdu_codestream out_check;
+    out_check.create(&out_siz, &out_tgt);
+    error_handler_.clear();
+    EXPECT_THROW(out_check.apply_input_restrictions(1, 0, 0, 0, nullptr),
+                 kdu_exception);
+    out_check.destroy();
+
+    MemorySource src_nonp(bytes);
+    kdu_codestream in_check;
+    in_check.create(&src_nonp);
+    kdu_tile t = in_check.open_tile(kdu_coords(0, 0));
+    error_handler_.clear();
+    EXPECT_THROW(in_check.apply_input_restrictions(1, 0, 0, 0, nullptr),
+                 kdu_exception);
+    t.close();
+    error_handler_.clear();
+    EXPECT_THROW(in_check.apply_input_restrictions(1, 0, 0, 0, nullptr),
+                 kdu_exception);
+    in_check.destroy();
+  }
+
+  // 2. close_tiles before access, open_tiles after restart (needs_reinit), and
+  //    open_tiles / open_tile after permanent output tile closure.
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 64;
+    spec.tile_size = kdu_coords(32, 32);
+    spec.components = 1;
+    spec.reversible = true;
+    spec.dwt_levels = 1;
+    const auto planes = MakeTestPlanes(spec);
+    const auto bytes = EncodeImage(spec, planes);
+
+    MemorySource src1(bytes), src2(bytes);
+    kdu_codestream cs;
+    cs.create(&src1);
+    cs.set_persistent();
+    cs.enable_restart();
+    kdu_dims all_tiles;
+    cs.get_valid_tiles(all_tiles);
+    cs.close_tiles(all_tiles, nullptr);  // Before any tiles are accessed.
+    cs.open_tiles(all_tiles, false, nullptr);
+    cs.close_tiles(all_tiles, nullptr);
+    cs.restart(&src2);
+    cs.open_tiles(all_tiles, false, nullptr);  // Reinitializes needs_reinit.
+    cs.close_tiles(all_tiles, nullptr);
+    cs.destroy();
+
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    kdu_codestream cs_out;
+    cs_out.create(&siz, &tgt);
+    ConfigureCodestreamParams(cs_out, spec);
+    PushAllTiles(cs_out, spec, planes);
+    kdu_long lsz[1] = {4096};
+    cs_out.flush(lsz, 1);
+    cs_out.open_tiles(all_tiles, false,
+                      nullptr);  // Ignores permanently closed.
+    error_handler_.clear();
+    EXPECT_THROW(cs_out.open_tile(kdu_coords(0, 0)), kdu_exception);
+    cs_out.destroy();
+  }
+
+  // 3. Partial-tile incremental flush scaling in simulate_output, pcrd_trim
+  //    with KDU_FLUSH_USES_THRESHOLDS_AND_SIZES + Creslengths,
+  //    KDU_FLUSH_THRESHOLDS_ARE_HINTS, and LRCP incremental flush error.
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 64;
+    spec.tile_size = kdu_coords(32, 32);
+    spec.components = 3;
+    spec.reversible = false;
+    spec.dwt_levels = 1;
+    spec.extra_params = {"Corder=RPCL", "Clayers=2"};
+    const auto planes = MakeTestPlanes(spec);
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    kdu_codestream cs;
+    cs.create(&siz, &tgt);
+    ConfigureCodestreamParams(cs, spec);
+
+    auto push_one_tile = [&](int tx, int ty) {
+      kdu_tile t = cs.open_tile(kdu_coords(tx, ty));
+      PushTileData(cs, t, planes, spec);
+      t.close();
+    };
+    push_one_tile(0, 0);
+    kdu_long inc_sizes[2] = {1200, 2400};
+    cs.flush(inc_sizes, 2, nullptr, /*trim_to_rate=*/true, false, 0.05);
+    push_one_tile(1, 0);
+    cs.flush(inc_sizes, 2, nullptr, /*trim_to_rate=*/true, false, 0.05);
+    push_one_tile(0, 1);
+    push_one_tile(1, 1);
+    cs.flush(inc_sizes, 2, nullptr, /*trim_to_rate=*/true, false, 0.05);
+    cs.destroy();
+
+    // pcrd_trim with min_sizes + Creslengths
+    // (KDU_FLUSH_USES_THRESHOLDS_AND_SIZES)
+    ImageSpec trim_spec;
+    trim_spec.width = 64;
+    trim_spec.height = 64;
+    trim_spec.components = 1;
+    trim_spec.reversible = false;
+    trim_spec.dwt_levels = 2;
+    trim_spec.extra_params = {"Clayers=2", "Cblk={8,8}",
+                              "Creslengths=256,512,0"};
+    const auto tplanes = MakeTestPlanes(trim_spec);
+    {
+      siz_params tsiz;
+      ConfigureSiz(tsiz, trim_spec);
+      MemoryTarget ttgt;
+      kdu_codestream tcs;
+      tcs.create(&tsiz, &ttgt);
+      ConfigureCodestreamParams(tcs, trim_spec);
+      PushAllTiles(tcs, trim_spec, tplanes);
+      kdu_long min_sz[2] = {4000, 8000};
+      kdu_uint16 slopes[2] = {49000, 44000};
+      tcs.flush(min_sz, 2, slopes, /*trim_to_rate=*/true, false, 0.0, nullptr,
+                KDU_FLUSH_USES_THRESHOLDS_AND_SIZES);
+      tcs.destroy();
+    }
+    // KDU_FLUSH_THRESHOLDS_ARE_HINTS
+    {
+      siz_params hsiz;
+      ConfigureSiz(hsiz, trim_spec);
+      MemoryTarget htgt;
+      kdu_codestream hcs;
+      hcs.create(&hsiz, &htgt);
+      ConfigureCodestreamParams(hcs, trim_spec);
+      PushAllTiles(hcs, trim_spec, tplanes);
+      kdu_long sz[2] = {400, 1200};
+      kdu_uint16 hints[2] = {48000, 44000};
+      hcs.flush(sz, 2, hints, /*trim_to_rate=*/true, false, 0.0, nullptr,
+                KDU_FLUSH_THRESHOLDS_ARE_HINTS);
+      hcs.destroy();
+    }
+  }
+
+  // 4. load_sequential without TLM/PLT skipping dead tiles + mismatched pset
+  //    across tiles + PLT addressable precincts.
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 64;
+    spec.tile_size = kdu_coords(32, 32);
+    spec.components = 2;
+    spec.reversible = true;
+    spec.dwt_levels = 1;
+    spec.extra_params = {"Clayers=2", "Corder=PCRL", "Cprecincts={16,16}",
+                         "Cblk={8,8}"};
+    const auto bytes = EncodeImage(spec, MakeTestPlanes(spec));
+
+    // ROI excludes top 3 tiles; load_sequential skips them without TLM.
+    MemorySource src_roi(bytes);
+    kdu_codestream cs_roi;
+    cs_roi.create(&src_roi);
+    kdu_dims roi;
+    roi.pos = kdu_coords(32, 32);
+    roi.size = kdu_coords(32, 32);
+    cs_roi.apply_input_restrictions(0, 0, 0, 0, &roi);
+    kdu_pdescriptor_set pset_roi;
+    for (int iter = 0; iter < 16; ++iter) {
+      bool tile_done = false;
+      kdu_tile t =
+          cs_roi.load_sequential(&pset_roi, tile_done, 1, 1,
+                                 KDU_LOAD_SEQUENTIAL_WANT_FLUSH_SET, nullptr);
+      if (!t.exists()) break;
+      pset_roi.reset();
+    }
+    cs_roi.destroy();
+
+    // Non-empty pset from tile (0,0) hit against tile (1,0) boundary.
+    MemorySource src_mis(bytes);
+    kdu_codestream cs_mis;
+    cs_mis.create(&src_mis);
+    kdu_pdescriptor_set pset_t0;
+    for (int iter = 0; iter < 32; ++iter) {
+      bool tile_done = false;
+      kdu_tile t =
+          cs_mis.load_sequential(&pset_t0, tile_done, 1, 1, 0, nullptr);
+      if (!t.exists()) break;
+      // Intentionally do NOT reset after first partial tile load so the next
+      // tile triggers tile incompatibility stop.
+      if (pset_t0.get_tile_idx() != kdu_coords(0, 0)) break;
+      if (iter > 4 && pset_t0.get_num_complete() == 0) break;
+    }
+    cs_mis.destroy();
+
+    // Addressable precincts via PLT + partial-component decode before
+    // load_sequential.
+    ImageSpec plt_spec = spec;
+    plt_spec.width = 64;
+    plt_spec.height = 64;
+    plt_spec.tile_size = kdu_coords(0, 0);
+    plt_spec.extra_params.push_back("ORGgen_plt=yes");
+    plt_spec.extra_params[1] = "Corder=CPRL";
+    const auto plt_bytes = EncodeImage(plt_spec, MakeTestPlanes(plt_spec));
+    MemorySource src_plt(plt_bytes);
+    kdu_codestream cs_plt;
+    cs_plt.create(&src_plt);
+    kdu_pdescriptor_set pset_plt;
+    for (int iter = 0; iter < 16; ++iter) {
+      bool tile_done = false;
+      kdu_tile t =
+          cs_plt.load_sequential(&pset_plt, tile_done, 1, 1,
+                                 KDU_LOAD_SEQUENTIAL_WANT_FLUSH_SET, nullptr);
+      if (!t.exists()) break;
+      pset_plt.reset();
+    }
+    cs_plt.destroy();
+  }
+
+  // 5. SeekableSource (>16KB reverse tile order, fail_seek, truncated TLM
+  // seek),
+  //    SequentialSource discard/ignore, and reordered CBD marker.
+  {
+    ImageSpec big;
+    big.width = 160;
+    big.height = 160;
+    big.tile_size = kdu_coords(80, 80);
+    big.components = 3;
+    big.reversible = true;
+    big.dwt_levels = 2;
+    big.extra_params = {"Clayers=2", "ORGgen_tlm=4"};
+    const auto bytes = EncodeImage(big, MakeTestPlanes(big));
+    ASSERT_GT(bytes.size(), 8192U);
+
+    // Seekable non-in-memory source: open tile (1,1) first then (0,0).
+    MemorySource seek_src(bytes,
+                          KDU_SOURCE_CAP_SEQUENTIAL | KDU_SOURCE_CAP_SEEKABLE);
+    kdu_codestream cs_seek;
+    cs_seek.create(&seek_src);
+    {
+      kdu_tile t11 = cs_seek.open_tile(kdu_coords(1, 1));
+      DecodeTileAllComponents(cs_seek, t11);
+      t11.close();
+      kdu_tile t00 = cs_seek.open_tile(kdu_coords(0, 0));
+      DecodeTileAllComponents(cs_seek, t00);
+      t00.close();
+    }
+    cs_seek.destroy();
+
+    // Failed seek error path.
+    MemorySource bad_seek_src(
+        bytes, KDU_SOURCE_CAP_SEQUENTIAL | KDU_SOURCE_CAP_SEEKABLE);
+    kdu_codestream cs_badseek;
+    cs_badseek.create(&bad_seek_src);
+    bad_seek_src.fail_seek = true;
+    error_handler_.clear();
+    EXPECT_THROW(
+        {
+          kdu_tile t11 = cs_badseek.open_tile(kdu_coords(1, 1));
+          t11.close();
+        },
+        kdu_exception);
+    cs_badseek.destroy();
+
+    // Non-seekable sequential source skipping higher levels/layers.
+    MemorySource seq_src(bytes, KDU_SOURCE_CAP_SEQUENTIAL);
+    kdu_codestream cs_seq;
+    cs_seq.create(&seq_src);
+    cs_seq.apply_input_restrictions(0, 0, 1, 1, nullptr);
+    kdu_dims vt;
+    cs_seq.get_valid_tiles(vt);
+    for (int ty = 0; ty < vt.size.y; ++ty) {
+      for (int tx = 0; tx < vt.size.x; ++tx) {
+        kdu_tile t = cs_seq.open_tile(kdu_coords(vt.pos.x + tx, vt.pos.y + ty));
+        DecodeTileAllComponents(cs_seq, t);
+        t.close();
+      }
+    }
+    cs_seq.destroy();
+
+    // CBD marker reordered after COD/QCD -> triggers need_to_seek_back on
+    // seekable source and warning on non-seekable source.
+    ImageSpec cbd_spec;
+    cbd_spec.width = 32;
+    cbd_spec.height = 32;
+    cbd_spec.components = 3;
+    cbd_spec.reversible = true;
+    cbd_spec.dwt_levels = 1;
+    cbd_spec.extra_params = {
+        "Cycc=no",
+        "Sextensions=MCT",
+        "Mcomponents=3",
+        "Mprecision=8",
+        "Msigned=no",
+        "Mnum_stages=1",
+        "Mstages=1",
+        "Mstage_inputs:I1={0,2}",
+        "Mstage_outputs:I1={0,2}",
+        "Mstage_collections:I1={3,3}",
+        "Mstage_xforms:I1={MATRIX,0,0,0,0}",
+    };
+    auto cbd_bytes = EncodeImage(cbd_spec, MakeTestPlanes(cbd_spec));
+    auto find_m = [](const std::vector<kdu_byte>& b, kdu_byte lo,
+                     size_t start = 0) -> size_t {
+      for (size_t i = start; i + 3 < b.size(); ++i) {
+        if (b[i] == 0xFF && b[i + 1] == lo) return i;
+      }
+      return b.size();
+    };
+    const size_t cbd_pos = find_m(cbd_bytes, 0x78);  // FF 78 = CBD
+    const size_t cod_pos = find_m(cbd_bytes, 0x52);  // FF 52 = COD
+    if (cbd_pos < cod_pos && cod_pos + 4 < cbd_bytes.size()) {
+      const size_t cbd_len =
+          2 + (cbd_bytes[cbd_pos + 2] << 8) + cbd_bytes[cbd_pos + 3];
+      std::vector<kdu_byte> cbd_seg(cbd_bytes.begin() + cbd_pos,
+                                    cbd_bytes.begin() + cbd_pos + cbd_len);
+      cbd_bytes.erase(cbd_bytes.begin() + cbd_pos,
+                      cbd_bytes.begin() + cbd_pos + cbd_len);
+      const size_t sot_pos = find_m(cbd_bytes, 0x90);
+      ASSERT_LT(sot_pos, cbd_bytes.size());
+      cbd_bytes.insert(cbd_bytes.begin() + sot_pos, cbd_seg.begin(),
+                       cbd_seg.end());
+
+      MemorySource s1(cbd_bytes,
+                      KDU_SOURCE_CAP_SEQUENTIAL | KDU_SOURCE_CAP_SEEKABLE);
+      kdu_codestream c1;
+      c1.create(&s1);
+      c1.destroy();
+
+      MemorySource s2(cbd_bytes, KDU_SOURCE_CAP_SEQUENTIAL);
+      kdu_codestream c2;
+      warning_handler_.clear();
+      c2.create(&s2);
+      EXPECT_FALSE(warning_handler_.history().empty());
+      c2.destroy();
+    }
+  }
+
+  // 6. TestMembackedSource chunked UNSERVICED (add_new_buffer + load_buf
+  //    relocation) and PARTIALLY_SERVICED with service thread + notifier.
+  {
+    ImageSpec big;
+    big.width = 160;
+    big.height = 160;
+    big.components = 3;
+    big.reversible = true;
+    big.dwt_levels = 2;
+    const auto bytes = EncodeImage(big, MakeTestPlanes(big));
+    ASSERT_GT(bytes.size(), 8192U);
+
+    TestMembackedSource unserv(bytes, 512);
+    ASSERT_TRUE(unserv.enable_stream(KDU_MEMBACKED_SOURCE_UNSERVICED, nullptr,
+                                     0, 0, -1.0, 1024, bytes.size() + 4096));
+    ASSERT_TRUE(unserv.run_open(false));
+    EXPECT_FALSE(DecodeFullImage(&unserv).empty());
+    EXPECT_FALSE(unserv.close());  // Already closed by cs.destroy() inside
+                                   // DecodeFullImage.
+
+    struct SyncNotifier : public kdu_compressed_source_notifier {
+      std::mutex mu;
+      std::condition_variable cv;
+      bool notified = false;
+      int blocked_calls = 0;
+      bool prepare_notify(kdu_long) override { return true; }
+      void note_blocking() override { ++blocked_calls; }
+      void notify() override {
+        std::lock_guard<std::mutex> lk(mu);
+        notified = true;
+        cv.notify_all();
+      }
+      void wait_done() {
+        std::unique_lock<std::mutex> lk(mu);
+        cv.wait(lk, [&] { return notified; });
+      }
+    };
+
+    TestMembackedSource pserv(bytes, 512);
+    ASSERT_TRUE(pserv.enable_stream(KDU_MEMBACKED_SOURCE_PARTIALLY_SERVICED,
+                                    nullptr, 0, 0, -1.0, 1024,
+                                    bytes.size() + 4096));
+    std::atomic<bool> svc_started{false};
+    size_t svc_fetched = 0;
+    kdu_int32 svc_term = 0;
+    std::thread svc_thread([&]() {
+      svc_started.store(true);
+      pserv.run_service(svc_fetched, svc_term);
+    });
+    while (!svc_started.load()) {
+      std::this_thread::yield();
+    }
+    // Wait briefly so `service()` locks `mutex` and enters `in_service = true`
+    // before `DecodeFullImage(&pserv)` closes the source.
+    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    ASSERT_TRUE(pserv.run_open(false));
+    SyncNotifier notifier;
+    const int lf = pserv.load_memory(4096, false, &notifier);
+    if (lf & KDU_SOURCE_WILL_NOTIFY) {
+      notifier.wait_done();
+    }
+    EXPECT_FALSE(DecodeFullImage(&pserv).empty());
+    EXPECT_FALSE(pserv.close());  // Already closed by cs.destroy() inside
+                                  // DecodeFullImage.
+    svc_thread.join();
+  }
+}
+
+TEST_F(CodestreamTest, CbrMctMembackedTransAndBufferPoolPaths) {
+  // 1. Scbr constant-bit-rate flushing, Cplex=EST, flush_stats +
+  //    aux_flush_stats, restart, and Sprofile=PROFILE0 warnings.
+  {
+    ImageSpec spec;
+    spec.width = 128;
+    spec.height = 128;
+    spec.components = 1;
+    spec.reversible = true;
+    spec.dwt_levels = 2;
+    spec.extra_params = {"Corder=PCRL", "Cprecincts={32,32}", "Scbr={1,200}"};
+    const auto planes = MakeTestPlanes(spec);
+
+    siz_params siz1;
+    ConfigureSiz(siz1, spec);
+    MemoryTarget tgt1;
+    kdu_codestream cs1;
+    cs1.create(&siz1, &tgt1);
+    ConfigureCodestreamParams(cs1, spec);
+    cs1.enable_restart();
+    kdu_flush_stats fstats1 = cs1.add_flush_stats(0, 1, 0, 2);
+    fstats1.auto_advance(2);
+
+    auto encode_and_flush_cbr = [&](kdu_codestream& c) {
+      kdu_tile tile = c.open_tile(kdu_coords(0, 0));
+      PushTileData(c, tile, planes, spec);
+      tile.close();
+      kdu_long cbr_sizes[1] = {5000};
+      kdu_uint16 slopes[1] = {0};
+      c.flush(cbr_sizes, 1, slopes, true);
+    };
+
+    encode_and_flush_cbr(cs1);
+    EXPECT_FALSE(tgt1.data.empty());
+
+    // Restart cs1 (advances flush_stats) and also test aux_flush_stats on cs2.
+    MemoryTarget tgt1b;
+    cs1.restart(&tgt1b);
+    encode_and_flush_cbr(cs1);
+
+    siz_params siz2;
+    ConfigureSiz(siz2, spec);
+    MemoryTarget tgt2;
+    kdu_codestream cs2;
+    cs2.create(&siz2, &tgt2);
+    ConfigureCodestreamParams(cs2, spec);
+    (void)cs2.add_flush_stats(1, 1, 0, 2);
+    cs2.attach_flush_stats(fstats1);
+    encode_and_flush_cbr(cs2);
+
+    cs2.destroy();
+    cs1.destroy();
+
+    MemorySource src_cbr(tgt2.data);
+    EXPECT_FALSE(DecodeFullImage(&src_cbr).empty());
+  }
+
+  // Scbr validation error paths and Sprofile=PROFILE0 warnings.
+  {
+    ImageSpec spec;
+    spec.width = 128;
+    spec.height = 128;
+    spec.components = 1;
+    spec.reversible = true;
+    spec.dwt_levels = 2;
+    const auto planes = MakeTestPlanes(spec);
+
+    // Invalid Scbr={0,200}.
+    ImageSpec bad_v = spec;
+    bad_v.extra_params = {"Corder=PCRL", "Cprecincts={32,32}", "Scbr={0,200}"};
+    EXPECT_THROW(EncodeImage(bad_v, planes), kdu_exception);
+
+    // Scbr with horizontal tiling.
+    ImageSpec htile = spec;
+    htile.tile_size = kdu_coords(64, 128);
+    htile.extra_params = {"Corder=PCRL", "Cprecincts={32,32}", "Scbr={1,200}"};
+    EXPECT_THROW(EncodeImage(htile, planes), kdu_exception);
+
+    // Sprofile=PROFILE0 warning on >1 tile not 128x128, non-zero origin, and
+    // non-power-of-2 subsampling.
+    {
+      siz_params siz;
+      siz.set(Sprofile, 0, 0, Sprofile_PROFILE0);
+      siz.set(Scomponents, 0, 0, 1);
+      siz.set(Sdims, 0, 0, 128);
+      siz.set(Sdims, 0, 1, 128);
+      siz.set(Stiles, 0, 0, 64);
+      siz.set(Stiles, 0, 1, 64);
+      siz.set(Sprecision, 0, 0, 8);
+      siz.set(Ssigned, 0, 0, false);
+      siz.finalize_all();
+      MemoryTarget tgt;
+      kdu_codestream cs;
+      warning_handler_.clear();
+      cs.create(&siz, &tgt);
+      EXPECT_FALSE(warning_handler_.history().empty());
+      cs.destroy();
+    }
+    {
+      siz_params siz;
+      siz.set(Sprofile, 0, 0, Sprofile_PROFILE0);
+      siz.set(Scomponents, 0, 0, 1);
+      siz.set(Sorigin, 0, 0, 4);
+      siz.set(Sorigin, 0, 1, 4);
+      siz.set(Sdims, 0, 0, 132);
+      siz.set(Sdims, 0, 1, 132);
+      siz.set(Sprecision, 0, 0, 8);
+      siz.set(Ssigned, 0, 0, false);
+      siz.finalize_all();
+      MemoryTarget tgt;
+      kdu_codestream cs;
+      warning_handler_.clear();
+      cs.create(&siz, &tgt);
+      EXPECT_FALSE(warning_handler_.history().empty());
+      cs.destroy();
+    }
+    {
+      siz_params siz;
+      siz.set(Sprofile, 0, 0, Sprofile_PROFILE0);
+      siz.set(Scomponents, 0, 0, 1);
+      siz.set(Sdims, 0, 0, 128);
+      siz.set(Sdims, 0, 1, 128);
+      siz.set(Ssampling, 0, 0, 3);
+      siz.set(Ssampling, 0, 1, 3);
+      siz.set(Sprecision, 0, 0, 8);
+      siz.set(Ssigned, 0, 0, false);
+      siz.finalize_all();
+      MemoryTarget tgt;
+      kdu_codestream cs;
+      warning_handler_.clear();
+      cs.create(&siz, &tgt);
+      EXPECT_FALSE(warning_handler_.history().empty());
+      cs.destroy();
+    }
+  }
+
+  // 2. Unsized prefix layers in pcrd_opt & multi-layer trans_pcrd_opt +
+  //    trans_out Creslengths warning.
+  {
+    ImageSpec spec;
+    spec.width = 96;
+    spec.height = 96;
+    spec.components = 3;
+    spec.reversible = true;
+    spec.dwt_levels = 2;
+    spec.extra_params = {"Clayers=3"};
+    const auto planes = MakeTestPlanes(spec);
+
+    auto encode_with_layer_bytes = [&](const kdu_long(&sizes)[3]) {
+      siz_params siz;
+      ConfigureSiz(siz, spec);
+      MemoryTarget tgt;
+      kdu_codestream cs;
+      cs.create(&siz, &tgt);
+      ConfigureCodestreamParams(cs, spec);
+      kdu_tile t = cs.open_tile(kdu_coords(0, 0));
+      PushTileData(cs, t, planes, spec);
+      t.close();
+      kdu_long local_sizes[3] = {sizes[0], sizes[1], sizes[2]};
+      cs.flush(local_sizes, 3);
+      cs.destroy();
+      return tgt.data;
+    };
+
+    const auto bytes_mid0 = encode_with_layer_bytes({2000, 0, 8000});
+    EXPECT_FALSE(bytes_mid0.empty());
+
+    const auto bytes_lead0 = encode_with_layer_bytes({0, 0, 8000});
+    EXPECT_FALSE(bytes_lead0.empty());
+
+    // Multi-layer trans_pcrd_opt via load_sequential +
+    // KDU_LOAD_SEQUENTIAL_WANT_PACKET_BYTES.
+    const auto bytes_3l = encode_with_layer_bytes({1500, 3000, 6000});
+    MemorySource src_3l(bytes_3l);
+    kdu_codestream cs_in;
+    cs_in.create(&src_3l);
+    kdu_pdescriptor_set pset;
+    bool tile_done = false;
+    kdu_tile t = cs_in.load_sequential(
+        &pset, tile_done, 1, 1,
+        KDU_LOAD_SEQUENTIAL_WANT_TILE | KDU_LOAD_SEQUENTIAL_WANT_PACKET_BYTES,
+        nullptr);
+    ASSERT_TRUE(t.exists());
+    EXPECT_THROW(cs_in.trans_pcrd_opt(&pset, true, true, 0.05, nullptr),
+                 kdu_exception);
+    t.close();
+
+    // restart(input) switching to missing SOC triggers error.
+    cs_in.destroy();
+    {
+      MemorySource src_r(bytes_3l);
+      kdu_codestream cs_r;
+      cs_r.create(&src_r);
+      cs_r.enable_restart();
+      TestMembackedSource mb_r(bytes_3l, 0);
+      ASSERT_TRUE(mb_r.run_open(true));
+      cs_r.restart(&mb_r);  // Non-MB -> MB creates in_notifier.
+      std::vector<kdu_byte> bad_soc = {0xFF, 0x00, 0x00, 0x00};
+      MemorySource bad_src(bad_soc);
+      EXPECT_THROW(cs_r.restart(&bad_src), kdu_exception);
+      cs_r.destroy();
+    }
+
+    // trans_out with Creslengths attribute on output triggers warning.
+    ImageSpec spec_tr = spec;
+    spec_tr.extra_params = {"Creslengths=512,512,512"};
+    siz_params siz_tr;
+    ConfigureSiz(siz_tr, spec_tr);
+    MemoryTarget tgt_tr;
+    kdu_codestream cs_tr;
+    warning_handler_.clear();
+    cs_tr.create(&siz_tr, &tgt_tr);
+    ConfigureCodestreamParams(cs_tr, spec_tr);
+    cs_tr.access_siz()->finalize_all();
+    cs_tr.trans_out(-1, nullptr, 0, false);
+    EXPECT_FALSE(warning_handler_.history().empty());
+    cs_tr.destroy();
+  }
+
+  // 3. Multi-stage MCT + comps_of_interest output restrictions.
+  {
+    ImageSpec mct_spec;
+    mct_spec.width = 64;
+    mct_spec.height = 64;
+    mct_spec.components = 3;
+    mct_spec.reversible = false;
+    mct_spec.dwt_levels = 1;
+    mct_spec.extra_params = {
+        "Sextensions=MCT",
+        "Mcomponents=3",
+        "Msigned=no",
+        "Mprecision=8",
+        "Mmatrix_size:I1=9",
+        "Mmatrix_coeffs:I1=1,0,0,0,1,0,0,0,1",
+        "Mmatrix_size:I2=9",
+        "Mmatrix_coeffs:I2=1,0,0,0,1,0,0,0,1",
+        "Mstage_inputs:I1={0,2}",
+        "Mstage_outputs:I1={0,2}",
+        "Mstage_collections:I1={3,3}",
+        "Mstage_xforms:I1={MATRIX,1,0,0,0}",
+        "Mstage_inputs:I2={0,2}",
+        "Mstage_outputs:I2={0,2}",
+        "Mstage_collections:I2={3,3}",
+        "Mstage_xforms:I2={MATRIX,2,0,0,0}",
+        "Mnum_stages=2",
+        "Mstages=1,2",
+    };
+    const auto mct_bytes = EncodeImage(mct_spec, MakeTestPlanes(mct_spec));
+    MemorySource src_mct(mct_bytes);
+    kdu_codestream cs_mct;
+    cs_mct.create(&src_mct);
+    int coi[2] = {0, 2};
+    cs_mct.apply_input_restrictions(
+        2, coi, 0, 0, nullptr, KDU_WANT_OUTPUT_COMPONENTS, nullptr, nullptr);
+    EXPECT_EQ(cs_mct.get_num_components(true), 2);
+    kdu_tile t = cs_mct.open_tile(kdu_coords(0, 0));
+    t.close();
+    cs_mct.destroy();
+  }
+
+  // 4. BlockingMembackedSource for UNSERVICED / PARTIALLY_SERVICED blocking
+  //    notifications, max_mem cap, and destructor while in_service.
+  {
+    ImageSpec spec;
+    spec.width = 160;
+    spec.height = 160;
+    spec.components = 3;
+    spec.reversible = true;
+    spec.dwt_levels = 2;
+    const auto bytes = EncodeImage(spec, MakeTestPlanes(spec));
+    ASSERT_GT(bytes.size(), 8192U);
+
+    class BlockingMembackedSource : public kdu_membacked_compressed_source {
+     public:
+      using kdu_membacked_compressed_source::enable;
+      using kdu_membacked_compressed_source::open;
+      using kdu_membacked_compressed_source::service;
+
+      BlockingMembackedSource(const std::vector<kdu_byte>& payload,
+                              size_t chunk_bytes, int block_nonblocking_count)
+          : payload_(payload),
+            chunk_bytes_(chunk_bytes),
+            block_nonblocking_count_(block_nonblocking_count) {}
+
+     protected:
+      kdu_long fetch_data(kdu_long max_bytes, kdu_byte* buf,
+                          bool blocking) override {
+        if (!blocking && block_nonblocking_count_ > 0) {
+          --block_nonblocking_count_;
+          return -1;
+        }
+        if (pos_ >= payload_.size()) return 0;
+        size_t avail = payload_.size() - pos_;
+        size_t take = avail;
+        if (max_bytes > 0 && static_cast<size_t>(max_bytes) < take) {
+          take = static_cast<size_t>(max_bytes);
+        }
+        if (chunk_bytes_ > 0 && chunk_bytes_ < take) {
+          take = chunk_bytes_;
+        }
+        std::memcpy(buf, payload_.data() + pos_, take);
+        pos_ += take;
+        return static_cast<kdu_long>(take);
+      }
+
+     private:
+      const std::vector<kdu_byte>& payload_;
+      size_t chunk_bytes_;
+      size_t pos_ = 0;
+      int block_nonblocking_count_;
+    };
+
+    struct BlockingNotifier : public kdu_compressed_source_notifier {
+      std::mutex mu;
+      std::condition_variable cv;
+      bool notified = false;
+      int blocked_calls = 0;
+      bool prepare_notify(kdu_long) override { return true; }
+      void note_blocking() override { ++blocked_calls; }
+      void notify() override {
+        std::lock_guard<std::mutex> lk(mu);
+        notified = true;
+        cv.notify_all();
+      }
+      void wait_done() {
+        std::unique_lock<std::mutex> lk(mu);
+        cv.wait(lk, [&] { return notified; });
+      }
+    };
+
+    // UNSERVICED with blocking note_blocking() and memory exhaustion max_mem.
+    {
+      BlockingMembackedSource u_block(bytes, 512, 1);
+      ASSERT_TRUE(u_block.enable(KDU_MEMBACKED_SOURCE_UNSERVICED, nullptr, 0, 0,
+                                 -1.0, 256, 512));
+      ASSERT_TRUE(u_block.open(false));
+      BlockingNotifier n;
+      u_block.load_memory(4096, true, &n);
+      EXPECT_GE(n.blocked_calls, 1);
+      EXPECT_TRUE(u_block.close());
+    }
+
+    // PARTIALLY_SERVICED with non-blocking WILL_NOTIFY + blocking
+    // note_blocking.
+    {
+      BlockingMembackedSource p_block(bytes, 512, 2);
+      ASSERT_TRUE(p_block.enable(KDU_MEMBACKED_SOURCE_PARTIALLY_SERVICED,
+                                 nullptr, 0, 0, -1.0, 1024,
+                                 bytes.size() + 4096));
+      std::atomic<bool> svc_started{false};
+      size_t fetched = 0;
+      kdu_int32 term_code = 0;
+      std::thread svc([&]() {
+        svc_started.store(true);
+        p_block.service(fetched, term_code);
+      });
+      while (!svc_started.load()) {
+        std::this_thread::yield();
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(25));
+      ASSERT_TRUE(p_block.open(false));
+      BlockingNotifier n1;
+      const int f1 = p_block.load_memory(4096, false, &n1);
+      if (f1 & KDU_SOURCE_WILL_NOTIFY) {
+        n1.wait_done();
+      }
+      BlockingNotifier n2;
+      p_block.load_memory(bytes.size() + 1, true, &n2);
+      EXPECT_TRUE(p_block.close());
+      svc.join();
+    }
+  }
+
+  // 5. Tight kdu_membroker code-buffer exhaustion and multi-tile block pool
+  //    fragmentation + TLM clamping (>255 tparts / >256 tiles).
+  {
+    ImageSpec small_tlm;
+    small_tlm.width = 170;
+    small_tlm.height = 170;
+    small_tlm.tile_size = kdu_coords(10, 10);  // 289 tiles
+    small_tlm.components = 1;
+    small_tlm.dwt_levels = 0;
+    small_tlm.extra_params = {"ORGgen_tlm=300"};  // clamped >255, exceeds 256
+    EXPECT_FALSE(EncodeImage(small_tlm, MakeTestPlanes(small_tlm)).empty());
+
+    // Code-buffer fragmentation: 256x256, 3 comps, small 16x16 codeblocks, open
+    // tiles in non-persistent decode / flush cycle to release >64 code buffers.
+    ImageSpec frag_spec;
+    frag_spec.width = 256;
+    frag_spec.height = 256;
+    frag_spec.tile_size = kdu_coords(64, 64);
+    frag_spec.components = 3;
+    frag_spec.reversible = true;
+    frag_spec.dwt_levels = 2;
+    frag_spec.extra_params = {"Cblk={16,16}", "Cprecincts={32,32}"};
+    const auto frag_bytes = EncodeImage(frag_spec, MakeTestPlanes(frag_spec));
+    MemorySource src_frag(frag_bytes);
+    kdu_codestream cs_frag;
+    cs_frag.create(&src_frag);
+    cs_frag.set_persistent();
+    for (int ty = 0; ty < 4; ++ty) {
+      for (int tx = 0; tx < 4; ++tx) {
+        kdu_tile t = cs_frag.open_tile(kdu_coords(tx, ty));
+        t.close(nullptr, false);  // Non-persistent close releases code buffers
+      }
+    }
+    cs_frag.destroy();
+
+    // Tight membroker failing mid-encode.
+    kdu_membroker tiny_broker(32768);
+    siz_params siz;
+    ConfigureSiz(siz, frag_spec);
+    MemoryTarget tgt;
+    kdu_codestream cs_tight;
+    try {
+      cs_tight.create(&siz, &tgt, nullptr, 0, 0.0, nullptr, &tiny_broker);
+      const auto planes = MakeTestPlanes(frag_spec);
+      kdu_tile t = cs_tight.open_tile(kdu_coords(0, 0));
+      PushTileData(cs_tight, t, planes, frag_spec);
+      t.close();
+      cs_tight.destroy();
+    } catch (...) {
+      if (cs_tight.exists()) cs_tight.destroy();
+    }
+  }
+}
+
+struct ScopedCodestream {
+  kdu_codestream cs;
+  ~ScopedCodestream() {
+    if (cs.exists()) cs.destroy();
+  }
+};
+
+TEST_F(CodestreamTest, SingleThreadedProfileStreamTrimAndMctPaths) {
+  // 1. Sprofile=PROFILE1 warnings: non-square tiles and tiles > 1024.
+  {
+    siz_params siz;
+    siz.set(Sprofile, 0, 0, Sprofile_PROFILE1);
+    siz.set(Scomponents, 0, 0, 1);
+    siz.set(Sdims, 0, 0, 128);
+    siz.set(Sdims, 0, 1, 128);
+    siz.set(Stiles, 0, 0, 32);
+    siz.set(Stiles, 0, 1, 64);
+    siz.set(Sprecision, 0, 0, 8);
+    siz.set(Ssigned, 0, 0, false);
+    siz.finalize_all();
+    MemoryTarget tgt;
+    ScopedCodestream sc;
+    warning_handler_.clear();
+    sc.cs.create(&siz, &tgt);
+    EXPECT_FALSE(warning_handler_.history().empty());
+  }
+  {
+    siz_params siz;
+    siz.set(Sprofile, 0, 0, Sprofile_PROFILE1);
+    siz.set(Scomponents, 0, 0, 1);
+    siz.set(Sdims, 0, 0, 2050);
+    siz.set(Sdims, 0, 1, 2050);
+    siz.set(Stiles, 0, 0, 1025);
+    siz.set(Stiles, 0, 1, 1025);
+    siz.set(Sprecision, 0, 0, 8);
+    siz.set(Ssigned, 0, 0, false);
+    siz.finalize_all();
+    MemoryTarget tgt;
+    ScopedCodestream sc;
+    warning_handler_.clear();
+    sc.cs.create(&siz, &tgt);
+    EXPECT_FALSE(warning_handler_.history().empty());
+  }
+
+  // 2. Non-memory-backed seekable StreamSeekSource covering
+  // kd_compressed_input::load_buf, seek, kd_input::read/ignore, and
+  // load_sequential skipping dead tiles + partial flush-set errors.
+  {
+    class StreamSeekSource : public kdu_compressed_source {
+     public:
+      StreamSeekSource(std::vector<kdu_byte> data, size_t max_chunk)
+          : data_(std::move(data)), max_chunk_(max_chunk) {}
+      int get_capabilities() override {
+        return KDU_SOURCE_CAP_SEEKABLE | KDU_SOURCE_CAP_SEQUENTIAL;
+      }
+      int read(kdu_byte* buf, int num_bytes) override {
+        if (pos_ >= data_.size() || num_bytes <= 0) return 0;
+        const size_t avail = data_.size() - pos_;
+        const size_t n =
+            std::min({static_cast<size_t>(num_bytes), avail, max_chunk_});
+        std::memcpy(buf, data_.data() + pos_, n);
+        pos_ += n;
+        return static_cast<int>(n);
+      }
+      bool seek(kdu_long offset) override {
+        if (offset < 0 || static_cast<size_t>(offset) > data_.size()) {
+          return false;
+        }
+        pos_ = static_cast<size_t>(offset);
+        return true;
+      }
+
+     private:
+      std::vector<kdu_byte> data_;
+      size_t max_chunk_;
+      size_t pos_ = 0;
+    };
+
+    ImageSpec spec;
+    spec.width = 192;
+    spec.height = 192;
+    spec.tile_size = kdu_coords(64, 64);  // 3x3 = 9 tiles
+    spec.components = 3;
+    spec.reversible = true;
+    spec.dwt_levels = 2;
+    spec.extra_params = {"Clayers=2", "ORGgen_plt=yes", "ORGtparts=R",
+                         "Cprecincts={32,32}"};
+    const auto bytes = EncodeImage(spec, MakeTestPlanes(spec));
+    ASSERT_GT(bytes.size(), 9000U);
+
+    // Random tile access forcing forward/backward seeks and multi-buf reads.
+    {
+      StreamSeekSource ssrc(bytes, 47);
+      ScopedCodestream sc;
+      sc.cs.create(&ssrc);
+      sc.cs.set_persistent();
+      kdu_dims roi22;
+      roi22.pos = kdu_coords(128, 128);
+      roi22.size = kdu_coords(64, 64);
+      sc.cs.apply_input_restrictions(0, 0, 0, 0, &roi22);
+      kdu_tile t22 = sc.cs.open_tile(kdu_coords(2, 2));
+      t22.close();
+      kdu_dims roi00;
+      roi00.pos = kdu_coords(0, 0);
+      roi00.size = kdu_coords(64, 64);
+      sc.cs.apply_input_restrictions(0, 0, 0, 0, &roi00);
+      kdu_tile t00 = sc.cs.open_tile(kdu_coords(0, 0));
+      t00.close();
+    }
+
+    // load_sequential skipping dead tiles via region restriction.
+    {
+      StreamSeekSource ssrc(bytes, 47);
+      ScopedCodestream sc;
+      sc.cs.create(&ssrc);
+      kdu_dims roi22;
+      roi22.pos = kdu_coords(128, 128);
+      roi22.size = kdu_coords(64, 64);
+      sc.cs.apply_input_restrictions(0, 0, 0, 0, &roi22);
+      int loaded_tiles = 0;
+      for (;;) {
+        kdu_pdescriptor_set pset;
+        bool tile_done = false;
+        kdu_tile t = sc.cs.load_sequential(
+            &pset, tile_done, 1, 1, KDU_LOAD_SEQUENTIAL_WANT_TILE, nullptr);
+        if (!t.exists()) break;
+        ++loaded_tiles;
+        t.close();
+      }
+      EXPECT_EQ(loaded_tiles, 1);
+    }
+
+    // Corrupt SOT tile index during load_sequential throws 0x15082102.
+    {
+      std::vector<kdu_byte> bad_sot = bytes;
+      for (size_t i = 2; i + 12 <= bad_sot.size(); ++i) {
+        if (bad_sot[i] == 0xFF && bad_sot[i + 1] == 0x90) {
+          bad_sot[i + 4] = 0x09;
+          bad_sot[i + 5] = 0x99;
+          break;
+        }
+      }
+      StreamSeekSource ssrc(bad_sot, 64);
+      ScopedCodestream sc;
+      sc.cs.create(&ssrc);
+      kdu_pdescriptor_set pset;
+      bool tile_done = false;
+      EXPECT_THROW(
+          sc.cs.load_sequential(&pset, tile_done, 1, 1,
+                                KDU_LOAD_SEQUENTIAL_WANT_TILE, nullptr),
+          kdu_exception);
+    }
+
+    // Partial flush-set stopping mid-tile + layer-tparts incomplete pset error.
+    {
+      MemorySource msrc(bytes);
+      ScopedCodestream sc;
+      sc.cs.create(&msrc);
+      kdu_pdescriptor_set pset1;
+      bool tile_done = false;
+      kdu_tile t = sc.cs.load_sequential(
+          &pset1, tile_done, 1, 1, KDU_LOAD_SEQUENTIAL_WANT_FLUSH_SET, nullptr);
+      ASSERT_TRUE(t.exists());
+      t.close();
+
+      ImageSpec lspec;
+      lspec.width = 64;
+      lspec.height = 64;
+      lspec.components = 1;
+      lspec.reversible = true;
+      lspec.dwt_levels = 0;
+      lspec.extra_params = {"Clayers=2", "Corder=LRCP", "ORGtparts=L"};
+      const auto lbytes = EncodeImage(lspec, MakeTestPlanes(lspec));
+      MemorySource lsrc(lbytes);
+      ScopedCodestream lsc;
+      lsc.cs.create(&lsrc);
+      kdu_pdescriptor_set pset_a;
+      bool ldone = false;
+      // Call 1 returns the partial tile (layer 0), call 2 finishes layer 1.
+      EXPECT_TRUE(
+          lsc.cs.load_sequential(&pset_a, ldone, 0, 0, 0, nullptr).exists());
+      EXPECT_FALSE(ldone);
+      lsc.cs.load_sequential(&pset_a, ldone, 1, 1, 0, nullptr);
+      EXPECT_TRUE(ldone);
+    }
+  }
+
+  // 3. kd_precinct_pointer_server::pop_address error paths on mutated PLT.
+  {
+    ImageSpec spec;
+    spec.width = 128;
+    spec.height = 128;
+    spec.components = 1;
+    spec.reversible = true;
+    spec.dwt_levels = 2;
+    spec.extra_params = {"Corder=PCRL", "Cprecincts={32,32}", "Clayers=2",
+                         "ORGgen_plt=yes"};
+    const auto bytes = EncodeImage(spec, MakeTestPlanes(spec));
+    size_t plt_off = 0;
+    for (size_t i = 2; i + 8 < bytes.size(); ++i) {
+      if (bytes[i] == 0xFF && bytes[i + 1] == 0x58) {
+        plt_off = i;
+        break;
+      }
+    }
+    ASSERT_GT(plt_off, 0U);
+    const kdu_uint16 plt_len =
+        (static_cast<kdu_uint16>(bytes[plt_off + 2]) << 8) | bytes[plt_off + 3];
+    ASSERT_GE(plt_len, 6U);
+
+    // Overflow entry > tpart_bytes_left -> KDU_ERROR(23).
+    {
+      std::vector<kdu_byte> bad_plt = bytes;
+      bad_plt[plt_off + 5] = 0xFF;
+      bad_plt[plt_off + 6] = 0x7F;
+      MemorySource src(bad_plt, KDU_SOURCE_CAP_SEEKABLE);
+      EXPECT_THROW(DecodeFullImage(&src), kdu_exception);
+    }
+
+    // Keep the first PLT entry intact so `something_served` becomes true, then
+    // collapse the remaining entries into a single small varint so PLT runs
+    // out of addresses before `tpart_bytes_left == 0` -> KDU_ERROR(22).
+    {
+      std::vector<kdu_byte> short_plt = bytes;
+      const size_t entry_end = plt_off + 2 + plt_len;
+      size_t p = plt_off + 5;
+      while (p + 1 < entry_end && (short_plt[p] & 0x80)) {
+        ++p;
+      }
+      ++p;
+      if (p + 2 <= entry_end) {
+        for (; p + 1 < entry_end; ++p) {
+          short_plt[p] = 0x80;
+        }
+        short_plt[entry_end - 1] = 0x01;
+        MemorySource src(short_plt, KDU_SOURCE_CAP_SEEKABLE);
+        EXPECT_THROW(DecodeFullImage(&src), kdu_exception);
+      }
+    }
+  }
+
+  // 4. kd_packet_sequencer::next_progression (multi-POC, PROFILE0 POC
+  //    warning, bounds clamping, non-power-of-2 subsampling with PCRL) +
+  //    pcrd_trim non-monotonic slope clamping + simulate_output early exit +
+  //    Creslengths:T0.
+  {
+    // Sprofile=PROFILE0 with Porder res_min=1 warning.
+    {
+      siz_params siz;
+      siz.set(Sprofile, 0, 0, Sprofile_PROFILE0);
+      siz.set(Scomponents, 0, 0, 3);
+      siz.set(Sdims, 0, 0, 64);
+      siz.set(Sdims, 0, 1, 64);
+      siz.set(Sprecision, 0, 0, 8);
+      siz.set(Ssigned, 0, 0, false);
+      siz.finalize_all();
+      MemoryTarget tgt;
+      ScopedCodestream sc;
+      warning_handler_.clear();
+      sc.cs.create(&siz, &tgt);
+      ASSERT_TRUE(sc.cs.access_siz()->parse_string("Clayers=2"));
+      ASSERT_TRUE(sc.cs.access_siz()->parse_string("Clevels=2"));
+      ASSERT_TRUE(sc.cs.access_siz()->parse_string("Porder={1,0,5,5,5,LRCP}"));
+      ASSERT_TRUE(sc.cs.access_siz()->parse_string("ORGtparts=R"));
+      sc.cs.access_siz()->finalize_all();
+      ImageSpec s;
+      s.width = 64;
+      s.height = 64;
+      s.components = 3;
+      s.dwt_levels = 2;
+      const auto planes = MakeTestPlanes(s);
+      auto run_poc = [&]() {
+        kdu_tile t = sc.cs.open_tile(kdu_coords(0, 0));
+        PushTileData(sc.cs, t, planes, s);
+        t.close();
+        kdu_long fl[2] = {0, 0};
+        sc.cs.flush(fl, 2);
+      };
+      EXPECT_THROW(run_poc(), kdu_exception);
+      EXPECT_FALSE(warning_handler_.history().empty());
+
+      // Bounds-clamped multi-record POC succeeding cleanly.
+      MemoryTarget tgt_ok;
+      ScopedCodestream sc_ok;
+      sc_ok.cs.create(&siz, &tgt_ok);
+      ASSERT_TRUE(sc_ok.cs.access_siz()->parse_string("Clayers=2"));
+      ASSERT_TRUE(sc_ok.cs.access_siz()->parse_string("Clevels=2"));
+      ASSERT_TRUE(sc_ok.cs.access_siz()->parse_string(
+          "Porder={0,0,5,2,5,LRCP},{0,0,2,3,5,RLCP}"));
+      ASSERT_TRUE(sc_ok.cs.access_siz()->parse_string("ORGtparts=R"));
+      sc_ok.cs.access_siz()->finalize_all();
+      kdu_tile tok = sc_ok.cs.open_tile(kdu_coords(0, 0));
+      PushTileData(sc_ok.cs, tok, planes, s);
+      tok.close();
+      kdu_long fl_ok[2] = {0, 0};
+      sc_ok.cs.flush(fl_ok, 2);
+      EXPECT_FALSE(tgt_ok.data.empty());
+    }
+
+    // Non-power-of-2 subsampling with Corder=PCRL throws error 25.
+    {
+      ImageSpec s;
+      s.width = 64;
+      s.height = 64;
+      s.components = 1;
+      s.dwt_levels = 1;
+      s.subsampling = {kdu_coords(3, 3)};
+      s.extra_params = {"Corder=PCRL"};
+      siz_params siz;
+      ConfigureSiz(siz, s);
+      MemoryTarget tgt;
+      ScopedCodestream sc;
+      sc.cs.create(&siz, &tgt);
+      ConfigureCodestreamParams(sc.cs, s);
+      EXPECT_THROW(
+          {
+            kdu_tile t = sc.cs.open_tile(kdu_coords(0, 0));
+            t.close();
+          },
+          kdu_exception);
+    }
+
+    // pcrd_trim with non-decreasing thresholds + Creslengths:T0, and
+    // simulate_output early exit when layer budget < main/tile header size.
+    {
+      ImageSpec s;
+      s.width = 64;
+      s.height = 64;
+      s.components = 1;
+      s.reversible = true;
+      s.dwt_levels = 2;
+      s.extra_params = {"Clayers=3", "Creslengths:T0=128,256,512"};
+      const auto planes = MakeTestPlanes(s);
+
+      siz_params siz;
+      ConfigureSiz(siz, s);
+      MemoryTarget tgt;
+      ScopedCodestream sc;
+      sc.cs.create(&siz, &tgt);
+      ConfigureCodestreamParams(sc.cs, s);
+      kdu_tile t = sc.cs.open_tile(kdu_coords(0, 0));
+      PushTileData(sc.cs, t, planes, s);
+      t.close();
+      kdu_long min_sizes[3] = {300, 600, 1200};
+      kdu_uint16 non_dec_thresh[3] = {25000, 35000, 45000};
+      sc.cs.flush(min_sizes, 3, non_dec_thresh, true, true, 0.0, nullptr,
+                  KDU_FLUSH_USES_THRESHOLDS_AND_SIZES);
+      EXPECT_FALSE(tgt.data.empty());
+    }
+    {
+      ImageSpec s;
+      s.width = 64;
+      s.height = 64;
+      s.components = 1;
+      s.reversible = true;
+      s.dwt_levels = 2;
+      s.extra_params = {"Clayers=2"};
+      const auto planes = MakeTestPlanes(s);
+      siz_params siz;
+      ConfigureSiz(siz, s);
+      MemoryTarget tgt;
+      ScopedCodestream sc;
+      sc.cs.create(&siz, &tgt);
+      ConfigureCodestreamParams(sc.cs, s);
+      kdu_tile t = sc.cs.open_tile(kdu_coords(0, 0));
+      PushTileData(sc.cs, t, planes, s);
+      t.close();
+      kdu_long tiny_sizes[2] = {4, 500};
+      sc.cs.flush(tiny_sizes, 2);
+      EXPECT_FALSE(tgt.data.empty());
+    }
+  }
+
+  // 5. construct_cbr_flush_set validation errors + write_packets_cbr trailing
+  // empty precincts.
+  {
+    ImageSpec base;
+    base.width = 128;
+    base.height = 128;
+    base.components = 2;
+    base.reversible = true;
+    base.dwt_levels = 1;
+    auto planes = MakeTestPlanes(base);
+    std::fill(planes[1].begin(), planes[1].end(),
+              0);  // Empty comp-1 precincts.
+
+    auto try_cbr = [&](const std::vector<std::string>& extra, kdu_long b0) {
+      ImageSpec sp = base;
+      sp.extra_params = extra;
+      siz_params siz;
+      ConfigureSiz(siz, sp);
+      MemoryTarget tgt;
+      ScopedCodestream sc;
+      sc.cs.create(&siz, &tgt);
+      ConfigureCodestreamParams(sc.cs, sp);
+      kdu_tile t = sc.cs.open_tile(kdu_coords(0, 0));
+      PushTileData(sc.cs, t, planes, sp);
+      t.close();
+      kdu_long sizes[2] = {b0, b0 * 2};
+      kdu_uint16 slopes[2] = {0, 0};
+      int nlayers =
+          (std::find(extra.begin(), extra.end(), "Clayers=2") != extra.end())
+              ? 2
+              : 1;
+      sc.cs.flush(sizes, nlayers, slopes, true);
+    };
+
+    EXPECT_THROW(try_cbr({"Clayers=2", "Corder=PCRL", "Cprecincts={32,32}",
+                          "Scbr={1,200}"},
+                         4000),
+                 kdu_exception);
+    EXPECT_THROW(
+        try_cbr({"Corder=LRCP", "Cprecincts={32,32}", "Scbr={1,200}"}, 4000),
+        kdu_exception);
+    EXPECT_THROW(try_cbr({"Corder=PCRL", "Cprecincts={32,32}", "ORGgen_plt=yes",
+                          "Scbr={1,200}"},
+                         4000),
+                 kdu_exception);
+    EXPECT_THROW(
+        try_cbr({"Corder=PCRL", "Cprecincts={32,32}", "Scbr={1,1}"}, 4000),
+        kdu_exception);
+    // Valid CBR with trailing zeroed component precincts.
+    EXPECT_NO_THROW(
+        try_cbr({"Corder=PCRL", "Cprecincts={32,32}", "Scbr={1,200}"}, 5000));
+  }
+
+  // 6. Sextensions=MCT|NLT main-header CBD scan + DWT MCT subsetting +
+  // change_appearance on subsampled stream (construct_output_comp_info).
+  {
+    ImageSpec mct_dwt;
+    mct_dwt.width = 64;
+    mct_dwt.height = 64;
+    mct_dwt.components = 4;
+    mct_dwt.reversible = false;
+    mct_dwt.dwt_levels = 1;
+    mct_dwt.extra_params = {
+        "Sextensions=MCT",
+        "Mcomponents=4",
+        "Msigned=no",
+        "Mprecision=8",
+        "Mstage_inputs:I1={0,3}",
+        "Mstage_outputs:I1={0,3}",
+        "Mstage_collections:I1={4,4}",
+        "Mstage_xforms:I1={DWT,0,0,2,0}",
+        "Mnum_stages=1",
+        "Mstages=1",
+    };
+    const auto bytes = EncodeImage(mct_dwt, MakeTestPlanes(mct_dwt));
+    MemorySource src(bytes, KDU_SOURCE_CAP_SEEKABLE);
+    ScopedCodestream sc;
+    sc.cs.create(&src);
+    int coi[2] = {0, 3};
+    sc.cs.apply_input_restrictions(2, coi, 0, 0, nullptr,
+                                   KDU_WANT_OUTPUT_COMPONENTS);
+    EXPECT_EQ(sc.cs.get_num_components(true), 2);
+    kdu_tile t = sc.cs.open_tile(kdu_coords(0, 0));
+    t.close();
+
+    MemorySource src_null(bytes, KDU_SOURCE_CAP_SEEKABLE);
+    ScopedCodestream sc_null;
+    sc_null.cs.create(&src_null);
+    sc_null.cs.apply_input_restrictions(0, 2, 0, 0, nullptr,
+                                        KDU_WANT_OUTPUT_COMPONENTS);
+    EXPECT_EQ(sc_null.cs.get_num_components(true), 2);
+    kdu_tile tn = sc_null.cs.open_tile(kdu_coords(0, 0));
+    tn.close();
+
+    // Change appearance with transpose/vflip/hflip on non-MCT subsampled image.
+    ImageSpec sub;
+    sub.width = 64;
+    sub.height = 64;
+    sub.components = 3;
+    sub.dwt_levels = 1;
+    sub.subsampling = {kdu_coords(1, 1), kdu_coords(2, 2), kdu_coords(2, 2)};
+    const auto sub_bytes = EncodeImage(sub, MakeTestPlanes(sub));
+    MemorySource ssrc(sub_bytes);
+    ScopedCodestream sc2;
+    sc2.cs.create(&ssrc);
+    sc2.cs.change_appearance(true, true, true);
+    kdu_tile st = sc2.cs.open_tile(kdu_coords(0, 0));
+    st.close();
+  }
+}
+
+TEST_F(CodestreamTest, SingleThreadedCommentTlmSizMctInputAndErrorPaths) {
+  // 1. kd_codestream_comment put_data edge cases, readonly check, and TLM.
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 64;
+    spec.tile_size = kdu_coords(32, 32);  // 2x2 tiles
+    spec.components = 1;
+    spec.reversible = true;
+    spec.dwt_levels = 1;
+    spec.extra_params = {"ORGgen_tlm=1", "ORGtlm_style={implied,short}"};
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    ScopedCodestream sc;
+    sc.cs.create(&siz, &tgt);
+    sc.cs.set_disabled_auto_comments(0);
+    ConfigureCodestreamParams(sc.cs, spec);
+
+    kdu_codestream_comment c_bin = sc.cs.add_comment();
+    ASSERT_TRUE(c_bin.exists());
+    std::vector<kdu_byte> big(70000, 0x41);
+    EXPECT_TRUE(c_bin.put_data(big.data(), 0));
+    EXPECT_TRUE(c_bin.put_data(big.data(), static_cast<int>(big.size())));
+    kdu_codestream_comment c_txt = sc.cs.add_comment();
+    ASSERT_TRUE(c_txt.exists());
+    EXPECT_TRUE(c_txt.put_text(""));
+    EXPECT_FALSE(c_bin.check_readonly());
+
+    const auto planes = MakeTestPlanes(spec);
+    for (int ty = 0; ty < 2; ++ty) {
+      for (int tx = 0; tx < 2; ++tx) {
+        kdu_tile t = sc.cs.open_tile(kdu_coords(tx, ty));
+        PushTileData(sc.cs, t, planes, spec);
+        t.close();
+      }
+    }
+    kdu_long fl = 0;
+    sc.cs.flush(&fl, 1);
+    EXPECT_TRUE(c_bin.check_readonly());
+    EXPECT_FALSE(tgt.data.empty());
+  }
+
+  // Non-rewritable target with ORGgen_tlm emits warning 17; invalid TLM throws.
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 68;
+    spec.tile_size = kdu_coords(4, 4);  // 16x17 = 272 tiles
+    spec.components = 1;
+    spec.reversible = true;
+    spec.dwt_levels = 0;
+    const auto planes = MakeTestPlanes(spec);
+
+    {
+      ImageSpec s_warn = spec;
+      s_warn.tile_size = kdu_coords(32, 34);
+      s_warn.extra_params = {"ORGgen_tlm=1"};
+      siz_params siz;
+      ConfigureSiz(siz, s_warn);
+      MemoryTarget tgt;
+      tgt.allow_rewrite = false;
+      ScopedCodestream sc;
+      warning_handler_.clear();
+      sc.cs.create(&siz, &tgt);
+      ConfigureCodestreamParams(sc.cs, s_warn);
+      for (int ty = 0; ty < 2; ++ty) {
+        for (int tx = 0; tx < 2; ++tx) {
+          kdu_tile t = sc.cs.open_tile(kdu_coords(tx, ty));
+          PushTileData(sc.cs, t, planes, s_warn);
+          t.close();
+        }
+      }
+      kdu_long fl = 0;
+      sc.cs.flush(&fl, 1);
+      EXPECT_FALSE(warning_handler_.history().empty());
+    }
+
+    auto try_tlm_err = [&](const std::vector<std::string>& extra) {
+      ImageSpec se = spec;
+      se.extra_params = extra;
+      siz_params siz;
+      ConfigureSiz(siz, se);
+      MemoryTarget tgt;
+      ScopedCodestream sc;
+      sc.cs.create(&siz, &tgt);
+      ConfigureCodestreamParams(sc.cs, se);
+      for (int ty = 0; ty < 17; ++ty) {
+        for (int tx = 0; tx < 16; ++tx) {
+          kdu_tile t = sc.cs.open_tile(kdu_coords(tx, ty));
+          PushTileData(sc.cs, t, planes, se);
+          t.close();
+        }
+      }
+      kdu_long fl = 0;
+      sc.cs.flush(&fl, 1);
+    };
+    EXPECT_THROW(try_tlm_err({"ORGgen_tlm=2", "ORGtlm_style={implied,short}"}),
+                 kdu_exception);
+    EXPECT_THROW(try_tlm_err({"ORGgen_tlm=1", "ORGtlm_style={byte,short}"}),
+                 kdu_exception);
+  }
+
+  // 2. construct_common SIZ parameter validation errors.
+  {
+    auto try_siz = [&](const std::function<void(siz_params&)>& fill) {
+      siz_params siz;
+      fill(siz);
+      MemoryTarget tgt;
+      ScopedCodestream sc;
+      sc.cs.create(&siz, &tgt);
+    };
+    EXPECT_THROW(try_siz([](siz_params& s) {
+                   s.set(Scomponents, 0, 0, 1);
+                   s.set(Sdims, 0, 0, 16);
+                   s.set(Sdims, 0, 1, 16);
+                 }),
+                 kdu_exception);
+    EXPECT_THROW(try_siz([](siz_params& s) {
+                   s.set(Scomponents, 0, 0, 1);
+                   s.set(Sdims, 0, 0, 16);
+                   s.set(Sdims, 0, 1, 16);
+                   s.set(Sprecision, 0, 0, 8);
+                 }),
+                 kdu_exception);
+    EXPECT_THROW(try_siz([](siz_params& s) {
+                   s.set(Scomponents, 0, 0, 16385);
+                   s.set(Sdims, 0, 0, 16);
+                   s.set(Sdims, 0, 1, 16);
+                   s.set(Sprecision, 0, 0, 8);
+                   s.set(Ssigned, 0, 0, false);
+                   s.finalize_all();
+                 }),
+                 kdu_exception);
+    EXPECT_THROW(try_siz([](siz_params& s) {
+                   s.set(Scomponents, 0, 0, 1);
+                   s.set(Sdims, 0, 0, 64);
+                   s.set(Sdims, 0, 1, 64);
+                   s.set(Sorigin, 0, 0, 32);
+                   s.set(Sorigin, 0, 1, 32);
+                   s.set(Stile_origin, 0, 0, 0);
+                   s.set(Stile_origin, 0, 1, 0);
+                   s.set(Stiles, 0, 0, 16);
+                   s.set(Stiles, 0, 1, 16);
+                   s.set(Sprecision, 0, 0, 8);
+                   s.set(Ssigned, 0, 0, false);
+                   s.finalize_all();
+                 }),
+                 kdu_exception);
+  }
+
+  // 3. Multi-stage MCT augmenting previous stage outputs + output restriction
+  // + MCT parameter error cases.
+  {
+    auto try_mct_err = [&](int components,
+                           const std::vector<std::string>& extra) {
+      ImageSpec spec;
+      spec.width = 64;
+      spec.height = 64;
+      spec.components = components;
+      spec.reversible = false;
+      spec.dwt_levels = 1;
+      spec.extra_params = extra;
+      siz_params siz;
+      ConfigureSiz(siz, spec);
+      MemoryTarget tgt;
+      ScopedCodestream sc;
+      sc.cs.create(&siz, &tgt);
+      ConfigureCodestreamParams(sc.cs, spec);
+      kdu_tile t = sc.cs.open_tile(kdu_coords(0, 0));
+      t.close();
+    };
+    EXPECT_THROW(
+        try_mct_err(
+            4,
+            {"Sextensions=MCT", "Mcomponents=4", "Msigned=no", "Mprecision=8",
+             "Mnum_stages=2", "Mstages=1,2", "Mstage_inputs:I1={0,1}",
+             "Mstage_outputs:I1={0,0}", "Mstage_collections:I1={2,1}",
+             "Mstage_xforms:I1={MATRIX,0,0,0,0}", "Mmatrix_size:I1=2",
+             "Mmatrix_coeffs:I1=0.5,0.5", "Mstage_inputs:I2={0,2}",
+             "Mstage_outputs:I2={0,2}", "Mstage_collections:I2={3,3}",
+             "Mstage_xforms:I2={MATRIX,1,0,0,0}", "Mmatrix_size:I2=9",
+             "Mmatrix_coeffs:I2=1,0,0,0,1,0,0,0,1"}),
+        kdu_exception);
+    EXPECT_THROW(
+        try_mct_err(
+            3,
+            {"Sextensions=MCT", "Mcomponents=3", "Msigned=no", "Mprecision=8",
+             "Mnum_stages=2", "Mstages=1,2", "Mstage_inputs:I1={0,2}",
+             "Mstage_outputs:I1={0,0}", "Mstage_collections:I1={3,1}",
+             "Mstage_xforms:I1={MATRIX,0,0,0,0}", "Mmatrix_size:I1=3",
+             "Mmatrix_coeffs:I1=1,0,0", "Mstage_inputs:I2={0,2}",
+             "Mstage_outputs:I2={0,2}", "Mstage_collections:I2={3,3}",
+             "Mstage_xforms:I2={MATRIX,1,0,0,0}", "Mmatrix_size:I2=9",
+             "Mmatrix_coeffs:I2=1,0,0,0,1,0,0,0,1"}),
+        kdu_exception);
+
+    // Valid 2-stage MCT with 3->5 expansion + output component restriction.
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 64;
+    spec.components = 3;
+    spec.reversible = false;
+    spec.dwt_levels = 1;
+    spec.extra_params = {
+        "Sextensions=MCT",
+        "Mcomponents=5",
+        "Msigned=no",
+        "Mprecision=8",
+        "Mnum_stages=2",
+        "Mstages=1,2",
+        "Mstage_inputs:I1={0,2}",
+        "Mstage_outputs:I1={0,2}",
+        "Mstage_collections:I1={3,3}",
+        "Mstage_xforms:I1={MATRIX,1,0,0,0}",
+        "Mmatrix_size:I1=9",
+        "Mmatrix_coeffs:I1=1,0,0,0,1,0,0,0,1",
+        "Mstage_inputs:I2={0,2}",
+        "Mstage_outputs:I2={0,4}",
+        "Mstage_collections:I2={3,5}",
+        "Mstage_xforms:I2={MATRIX,0,0,0,0}",
+        "Mmatrix_size:I2=15",
+        "Mmatrix_coeffs:I2=1,0,0,0,1,0,0,0,1,1,0,0,0,1,0",
+    };
+    const auto planes = MakeTestPlanes(spec);
+    const auto bytes = EncodeImage(spec, planes);
+    MemorySource src(bytes);
+    ScopedCodestream dcs;
+    dcs.cs.create(&src);
+    int coi[2] = {3, 4};
+    dcs.cs.apply_input_restrictions(2, coi, 0, 0, nullptr,
+                                    KDU_WANT_OUTPUT_COMPONENTS);
+    EXPECT_EQ(dcs.cs.get_num_components(true), 2);
+    kdu_tile dt = dcs.cs.open_tile(kdu_coords(0, 0));
+    dt.close();
+  }
+
+  // 4. pcrd_opt unsized prefix + tolerance + pcrd_trim Creslengths warning +
+  // multi-tile CBR.
+  {
+    ImageSpec spec;
+    spec.width = 128;
+    spec.height = 64;
+    spec.tile_size = kdu_coords(64, 64);
+    spec.components = 3;
+    spec.reversible = true;
+    spec.dwt_levels = 2;
+    spec.extra_params = {"Clayers=4"};
+    const auto planes = MakeTestPlanes(spec);
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    ScopedCodestream sc;
+    sc.cs.create(&siz, &tgt);
+    ConfigureCodestreamParams(sc.cs, spec);
+    for (int tx = 0; tx < 2; ++tx) {
+      kdu_tile t = sc.cs.open_tile(kdu_coords(tx, 0));
+      PushTileData(sc.cs, t, planes, spec);
+      t.close();
+    }
+    kdu_long fl4[4] = {0, 0, 0, 2400};
+    sc.cs.flush(fl4, 4, nullptr, true, true, 0.05);
+    EXPECT_FALSE(tgt.data.empty());
+  }
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 64;
+    spec.components = 1;
+    spec.reversible = true;
+    spec.dwt_levels = 2;
+    spec.extra_params = {"Clayers=3", "Creslengths:T0=1,1,1"};
+    const auto planes = MakeTestPlanes(spec);
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    ScopedCodestream sc;
+    warning_handler_.clear();
+    sc.cs.create(&siz, &tgt);
+    ConfigureCodestreamParams(sc.cs, spec);
+    kdu_tile t = sc.cs.open_tile(kdu_coords(0, 0));
+    PushTileData(sc.cs, t, planes, spec);
+    t.close();
+    kdu_long min_sizes[3] = {2000, 3000, 4000};
+    kdu_uint16 thresh[3] = {50000, 40000, 30000};
+    sc.cs.flush(min_sizes, 3, thresh, true, true, 0.0, nullptr,
+                KDU_FLUSH_USES_THRESHOLDS_AND_SIZES);
+    EXPECT_FALSE(tgt.data.empty());
+  }
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 128;
+    spec.tile_size = kdu_coords(64, 64);
+    spec.components = 2;
+    spec.reversible = true;
+    spec.dwt_levels = 1;
+    spec.extra_params = {"Corder=PCRL", "Cprecincts={32,32}", "Scbr={1,200}"};
+    const auto planes = MakeTestPlanes(spec);
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    ScopedCodestream sc;
+    sc.cs.create(&siz, &tgt);
+    ConfigureCodestreamParams(sc.cs, spec);
+    for (int ty = 0; ty < 2; ++ty) {
+      kdu_tile t = sc.cs.open_tile(kdu_coords(0, ty));
+      PushTileData(sc.cs, t, planes, spec);
+      t.close();
+    }
+    kdu_long cbr_sizes[1] = {4000};
+    kdu_uint16 slopes[1] = {0};
+    sc.cs.flush(cbr_sizes, 1, slopes, true);
+    EXPECT_FALSE(tgt.data.empty());
+  }
+
+  // 5. Large (>KD_IBUF_SIZE) pseudo-random image for multi-buffer StreamSource,
+  // set_max_bytes truncation, and KDU_PPM read_main_header checks.
+  {
+    ImageSpec big;
+    big.width = 256;
+    big.height = 256;
+    big.tile_size = kdu_coords(128, 128);
+    big.components = 3;
+    big.reversible = true;
+    big.dwt_levels = 2;
+    big.extra_params = {"Sprofile=PROFILE0", "ORGgen_plt=yes"};
+    std::vector<std::vector<kdu_int32>> planes(3);
+    kdu_uint32 rng = 0x12345678u;
+    for (int c = 0; c < 3; ++c) {
+      planes[c].resize(256 * 256);
+      for (size_t i = 0; i < planes[c].size(); ++i) {
+        rng = rng * 1664525u + 1013904223u;
+        planes[c][i] = static_cast<kdu_int32>((rng >> 24) & 0xFF);
+      }
+    }
+    const auto bytes = EncodeImage(big, planes);
+    ASSERT_GT(bytes.size(), 30000U);
+
+    class PlainSeekSource : public kdu_compressed_source {
+     public:
+      explicit PlainSeekSource(const std::vector<kdu_byte>& buf) : data_(buf) {}
+      int get_capabilities() override {
+        return KDU_SOURCE_CAP_SEEKABLE | KDU_SOURCE_CAP_SEQUENTIAL;
+      }
+      int read(kdu_byte* buf, int num_bytes) override {
+        if (pos_ >= data_.size() || num_bytes <= 0) return 0;
+        const size_t n = std::min<size_t>(data_.size() - pos_,
+                                          std::min<size_t>(num_bytes, 251));
+        std::memcpy(buf, data_.data() + pos_, n);
+        pos_ += n;
+        return static_cast<int>(n);
+      }
+      bool seek(kdu_long offset) override {
+        if (offset < 0 || static_cast<size_t>(offset) > data_.size()) {
+          return false;
+        }
+        pos_ = static_cast<size_t>(offset);
+        return true;
+      }
+      kdu_long get_pos() override { return static_cast<kdu_long>(pos_); }
+
+     private:
+      std::vector<kdu_byte> data_;
+      size_t pos_ = 0;
+    };
+
+    {
+      PlainSeekSource psrc(bytes);
+      ScopedCodestream sc;
+      sc.cs.create(&psrc);
+      sc.cs.set_persistent();
+      kdu_dims all_tiles;
+      all_tiles.pos = kdu_coords(0, 0);
+      all_tiles.size = kdu_coords(2, 2);
+      sc.cs.open_tiles(all_tiles, false, nullptr);
+      sc.cs.close_tiles(all_tiles, nullptr);
+      kdu_dims br;
+      br.pos = kdu_coords(128, 128);
+      br.size = kdu_coords(128, 128);
+      sc.cs.apply_input_restrictions(0, 0, 0, 0, &br);
+      kdu_tile t11 = sc.cs.open_tile(kdu_coords(1, 1));
+      t11.close();
+      kdu_dims tl;
+      tl.pos = kdu_coords(0, 0);
+      tl.size = kdu_coords(128, 128);
+      sc.cs.apply_input_restrictions(0, 0, 0, 0, &tl);
+      kdu_tile t00 = sc.cs.open_tile(kdu_coords(0, 0));
+      t00.close();
+    }
+
+    // set_max_bytes smaller than stream triggers read/seek truncation paths.
+    {
+      PlainSeekSource psrc(bytes);
+      ScopedCodestream sc;
+      sc.cs.create(&psrc);
+      sc.cs.set_max_bytes(4096, false, false);
+      kdu_dims br;
+      br.pos = kdu_coords(128, 128);
+      br.size = kdu_coords(128, 128);
+      sc.cs.apply_input_restrictions(0, 0, 0, 0, &br);
+      kdu_tile t = sc.cs.open_tile(kdu_coords(1, 1));
+      t.close();
+    }
+    {
+      MemorySource msrc(bytes, KDU_SOURCE_CAP_MEMORY_BACKED |
+                                   KDU_SOURCE_CAP_SEEKABLE |
+                                   KDU_SOURCE_CAP_SEQUENTIAL);
+      ScopedCodestream sc;
+      sc.cs.create(&msrc);
+      sc.cs.set_persistent();
+      sc.cs.set_max_bytes(4096, false, false);
+      kdu_dims br;
+      br.pos = kdu_coords(128, 128);
+      br.size = kdu_coords(128, 128);
+      sc.cs.apply_input_restrictions(0, 0, 0, 0, &br);
+      kdu_tile t11 = sc.cs.open_tile(kdu_coords(1, 1));
+      t11.close();
+      kdu_dims tl;
+      tl.pos = kdu_coords(0, 0);
+      tl.size = kdu_coords(128, 128);
+      sc.cs.apply_input_restrictions(0, 0, 0, 0, &tl);
+      kdu_tile t00 = sc.cs.open_tile(kdu_coords(0, 0));
+      t00.close();
+    }
+
+    // Inject KDU_PPM marker before first SOT for PROFILE0 warning and cached
+    // error 36.
+    std::vector<kdu_byte> with_ppm = bytes;
+    for (size_t i = 2; i + 2 <= with_ppm.size(); ++i) {
+      if (with_ppm[i] == 0xFF && with_ppm[i + 1] == 0x90) {
+        const kdu_byte ppm_seg[] = {0xFF, 0x60, 0x00, 0x07, 0x00,
+                                    0x00, 0x00, 0x00, 0x00};
+        with_ppm.insert(with_ppm.begin() + static_cast<ptrdiff_t>(i),
+                        std::begin(ppm_seg), std::end(ppm_seg));
+        break;
+      }
+    }
+    {
+      MemorySource psrc(with_ppm);
+      ScopedCodestream sc;
+      warning_handler_.clear();
+      EXPECT_NO_THROW(sc.cs.create(&psrc));
+      EXPECT_FALSE(warning_handler_.history().empty());
+    }
+    {
+      MemorySource csrc(with_ppm, KDU_SOURCE_CAP_CACHED |
+                                      KDU_SOURCE_CAP_SEEKABLE |
+                                      KDU_SOURCE_CAP_SEQUENTIAL);
+      ScopedCodestream sc;
+      EXPECT_THROW(sc.cs.create(&csrc), kdu_exception);
+    }
+  }
+}
+
+TEST_F(CodestreamTest, SingleThreadedAllocatorCbrSequentialAndPcrdPaths) {
+  // 1. kdu_sample_allocator brokered/unbrokered, multi-fragment & error paths.
+  {
+    struct DenyBroker : public kdu_membroker {
+      explicit DenyBroker(kdu_int64 limit_bytes) : kdu_membroker(limit_bytes) {}
+      kdu_int64 request(kdu_int64, kdu_int64, kdu_int64) override { return 0; }
+    };
+    kdu_membroker broker1(1 << 22);
+    kdu_membroker broker2(1 << 22);
+    DenyBroker deny_broker(1 << 22);
+
+    {
+      kdu_sample_allocator alloc;
+      EXPECT_TRUE(alloc.configure(&broker1, 12));
+      EXPECT_TRUE(alloc.configure(&broker1, 12));  // Same broker & frag_bits.
+      EXPECT_TRUE(alloc.seek_permit(64));
+      EXPECT_THROW(alloc.configure(&broker2, 12), kdu_exception);
+      alloc.release_permit(64);
+      EXPECT_TRUE(alloc.configure(nullptr, 12));  // Detach existing broker.
+    }
+    {
+      kdu_sample_allocator alloc;
+      EXPECT_TRUE(alloc.seek_permit(64));
+      EXPECT_THROW(alloc.configure(&deny_broker, 12), kdu_exception);
+      alloc.release_permit(64);
+    }
+    {
+      kdu_sample_allocator alloc;
+      EXPECT_TRUE(alloc.configure(&broker1, 18));  // MIN_FRAG_BITS = 18 (256KB)
+      EXPECT_TRUE(alloc.configure(&broker1, 12));  // Clamped to 18 (same).
+      alloc.pre_alloc(KDU_SAMPLE_PREC32, 0, 512);
+      EXPECT_THROW(alloc.configure(&broker1, 19), kdu_exception);
+    }
+    {
+      kdu_sample_allocator alloc;
+      EXPECT_TRUE(alloc.configure(&broker1, 29));  // Clamped to MAX_FRAG_BITS.
+      EXPECT_TRUE(alloc.configure(&broker1, 18));  // 256KB fragments.
+      for (int i = 0; i < 4; ++i) {
+        alloc.pre_alloc(KDU_SAMPLE_PREC32, 0, 70000);  // ~280KB -> multi-frag.
+      }
+      alloc.finalize(kdu_codestream());
+      EXPECT_THROW(alloc.release(), kdu_exception);
+      alloc.restart();
+      alloc.release();
+    }
+    {
+      kdu_membroker tight_broker(300000);  // Fits 1st frag, fails 2nd frag.
+      kdu_sample_allocator alloc;
+      EXPECT_TRUE(alloc.configure(&tight_broker, 18));
+      alloc.pre_alloc(KDU_SAMPLE_PREC32, 0, 70000);
+      alloc.pre_alloc(KDU_SAMPLE_PREC32, 0, 70000);
+      EXPECT_THROW(alloc.finalize(kdu_codestream()), kdu_exception);
+    }
+    {
+      kdu_membroker small_broker(64);
+      kdu_sample_allocator alloc;
+      EXPECT_TRUE(alloc.configure(&small_broker, 12));
+      EXPECT_FALSE(alloc.seek_permit(200, true));
+      EXPECT_THROW(alloc.seek_permit(200, false), kdu_exception);
+    }
+    {
+      kdu_sample_allocator alloc;
+      EXPECT_TRUE(alloc.seek_permit(static_cast<size_t>(KDU_INT64_MAX - 10)));
+      EXPECT_FALSE(alloc.seek_permit(100, true));
+      EXPECT_THROW(alloc.seek_permit(100, false), kdu_exception);
+      alloc.release_permit(static_cast<size_t>(KDU_INT64_MAX - 10));
+    }
+  }
+
+  // 2. CBR (Scbr) tiny budget error, uniform oversized budget, and incremental
+  // multi-flush write_packets_cbr paths.
+  {
+    ImageSpec spec;
+    spec.width = 128;
+    spec.height = 128;
+    spec.components = 1;
+    spec.dwt_levels = 2;
+    spec.extra_params = {"Cprecincts={32,32}", "Corder=PCRL", "Scbr={1,128}",
+                         "Clayers=1"};
+    auto planes = MakeTestPlanes(spec);
+    for (size_t i = 0; i < planes[0].size(); ++i) {
+      planes[0][i] =
+          static_cast<kdu_int32>((i * 73 + (i >> 5) * 19) & 0xFF) - 128;
+    }
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    ScopedCodestream sc;
+    sc.cs.create(&siz, &tgt);
+    ConfigureCodestreamParams(sc.cs, spec);
+    kdu_tile tile = sc.cs.open_tile(kdu_coords(0, 0));
+    PushTileData(sc.cs, tile, planes, spec);
+    tile.close();
+    kdu_long tiny = 50;
+    EXPECT_THROW(sc.cs.flush(&tiny, 1), kdu_exception);
+  }
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 64;
+    spec.components = 1;
+    spec.dwt_levels = 1;
+    spec.extra_params = {"Cprecincts={32,32}", "Corder=PCRL", "Scbr={1,128}",
+                         "Clayers=1"};
+    std::vector<std::vector<kdu_int32>> zero_planes(
+        1, std::vector<kdu_int32>(64 * 64, 0));
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    ScopedCodestream sc;
+    sc.cs.create(&siz, &tgt);
+    ConfigureCodestreamParams(sc.cs, spec);
+    kdu_tile tile = sc.cs.open_tile(kdu_coords(0, 0));
+    PushTileData(sc.cs, tile, zero_planes, spec);
+    tile.close();
+    kdu_long huge = 500000;
+    sc.cs.flush(&huge, 1);
+    EXPECT_GT(tgt.data.size(), 0U);
+  }
+  for (bool trim : {true, false}) {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 256;
+    spec.components = 2;
+    spec.dwt_levels = 2;
+    spec.extra_params = {"Cprecincts={8,8}", "Cblk={8,8}", "Scbr={1,128}",
+                         "Clayers=1", "Corder=PCRL"};
+    auto planes = MakeTestPlanes(spec);
+    for (int c = 0; c < spec.components; ++c) {
+      for (size_t i = 0; i < planes[c].size(); ++i) {
+        planes[c][i] =
+            static_cast<kdu_int32>(((i * 97 + c * 41) ^ (i >> 3)) & 0xFF) - 128;
+      }
+    }
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    ScopedCodestream sc;
+    sc.cs.create(&siz, &tgt);
+    ConfigureCodestreamParams(sc.cs, spec);
+    kdu_long layer_bytes = 6000;
+    kdu_tile tile = sc.cs.open_tile(kdu_coords(0, 0));
+    PushTileData(sc.cs, tile, planes, spec);
+    tile.close();
+    if (sc.cs.ready_for_flush()) {
+      sc.cs.flush(&layer_bytes, 1, nullptr, trim, true, 0.0, nullptr, 0);
+    }
+    EXPECT_GT(tgt.data.size(), 100U);
+  }
+  {
+    // Vertical tiling with flush sets smaller than tile height throws.
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 128;
+    spec.components = 1;
+    spec.dwt_levels = 2;
+    spec.tile_size = kdu_coords(64, 64);
+    spec.extra_params = {"Cprecincts={8,8}", "Cblk={8,8}", "Scbr={1,128}",
+                         "Clayers=1", "Corder=PCRL"};
+    auto planes = MakeTestPlanes(spec);
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    ScopedCodestream sc;
+    sc.cs.create(&siz, &tgt);
+    ConfigureCodestreamParams(sc.cs, spec);
+    kdu_tile tile = sc.cs.open_tile(kdu_coords(0, 0));
+    PushTileData(sc.cs, tile, planes, spec);
+    tile.close();
+    kdu_long layer_bytes = 4000;
+    EXPECT_THROW(sc.cs.flush(&layer_bytes, 1), kdu_exception);
+  }
+
+  // 3. Non-seekable PlainSequentialSource: large COM refill (kd_input::read),
+  // ROI skipping early tiles (kd_input::ignore), load_sequential modes, and
+  // PPM / PPT packed packet headers (kd_pph_input::load_buf).
+  class PlainSequentialSource : public kdu_compressed_source {
+   public:
+    explicit PlainSequentialSource(const std::vector<kdu_byte>& data)
+        : data_(data) {}
+    int get_capabilities() override { return KDU_SOURCE_CAP_SEQUENTIAL; }
+    int read(kdu_byte* buf, int num_bytes) override {
+      if (pos_ >= data_.size()) return 0;
+      const size_t avail = data_.size() - pos_;
+      const size_t n = std::min(static_cast<size_t>(num_bytes), avail);
+      std::copy(data_.data() + pos_, data_.data() + pos_ + n, buf);
+      pos_ += n;
+      return static_cast<int>(n);
+    }
+    bool seek(kdu_long) override { return false; }
+    kdu_long get_pos() override { return static_cast<kdu_long>(pos_); }
+
+   private:
+    const std::vector<kdu_byte>& data_;
+    size_t pos_ = 0;
+  };
+
+  {
+    ImageSpec spec;
+    spec.width = 256;
+    spec.height = 256;
+    spec.components = 3;
+    spec.dwt_levels = 2;
+    spec.tile_size = kdu_coords(128, 128);
+    spec.extra_params = {"Cprecincts={32,32}", "ORGtparts=R", "Clayers=3"};
+    auto planes = MakeTestPlanes(spec);
+    for (int c = 0; c < spec.components; ++c) {
+      for (size_t i = 0; i < planes[c].size(); ++i) {
+        planes[c][i] =
+            static_cast<kdu_int32>(((i * 53 + c * 29) ^ (i >> 4)) & 0xFF) - 128;
+      }
+    }
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    {
+      ScopedCodestream enc;
+      enc.cs.create(&siz, &tgt);
+      ConfigureCodestreamParams(enc.cs, spec);
+      kdu_codestream_comment cmt = enc.cs.add_comment();
+      std::vector<kdu_byte> big_cmt(40000, 0x42);
+      cmt.put_data(big_cmt.data(), static_cast<int>(big_cmt.size()));
+      for (int ty = 0; ty < 2; ++ty) {
+        for (int tx = 0; tx < 2; ++tx) {
+          kdu_tile tile = enc.cs.open_tile(kdu_coords(tx, ty));
+          PushTileData(enc.cs, tile, planes, spec);
+          tile.close();
+        }
+      }
+      kdu_long layers[3] = {8000, 16000, 32000};
+      enc.cs.flush(layers, 3);
+    }
+
+    // ROI restricted to bottom-right tile -> kd_input::ignore skips early
+    // tiles; 40KB COM exercises kd_input::read across buffer boundaries.
+    {
+      PlainSequentialSource ssrc(tgt.data);
+      ScopedCodestream dec;
+      dec.cs.create(&ssrc);
+      kdu_dims roi = MakeDims(128, 128, 128, 128);
+      dec.cs.apply_input_restrictions(0, 0, 0, 3, &roi,
+                                      KDU_WANT_OUTPUT_COMPONENTS);
+      kdu_dims valid_tiles;
+      dec.cs.get_valid_tiles(valid_tiles);
+      for (int ty = valid_tiles.pos.y;
+           ty < valid_tiles.pos.y + valid_tiles.size.y; ++ty) {
+        for (int tx = valid_tiles.pos.x;
+             tx < valid_tiles.pos.x + valid_tiles.size.x; ++tx) {
+          kdu_tile t = dec.cs.open_tile(kdu_coords(tx, ty));
+          kdu_resolution res = t.access_component(0).access_resolution(0);
+          kdu_subband sb = res.access_subband(LL_BAND);
+          kdu_dims blocks;
+          sb.get_valid_blocks(blocks);
+          if (blocks.area() > 0) {
+            kdu_block* blk = sb.open_block(blocks.pos);
+            sb.close_block(blk);
+          }
+          t.close();
+        }
+      }
+    }
+
+    // Sequential load_sequential without CACHED source:
+    // WANT_FLUSH_SET | WANT_PACKET_BYTES (no WANT_TILE) across all tile-parts.
+    {
+      PlainSequentialSource ssrc(tgt.data);
+      ScopedCodestream dec;
+      dec.cs.create(&ssrc);
+      for (int ty = 0; ty < 2; ++ty) {
+        for (int tx = 0; tx < 2; ++tx) {
+          kdu_pdescriptor_set pset;
+          ASSERT_TRUE(pset.init(kdu_coords(tx, ty), 3));
+          bool tile_done = false;
+          kdu_tile open_t;
+          while (!tile_done) {
+            kdu_tile nt = dec.cs.load_sequential(
+                &pset, tile_done, 1, 0,
+                KDU_LOAD_SEQUENTIAL_WANT_FLUSH_SET |
+                    KDU_LOAD_SEQUENTIAL_WANT_PACKET_BYTES,
+                nullptr);
+            if (nt.exists()) open_t = nt;
+            if (!nt.exists() && !tile_done) break;
+          }
+          if (open_t.exists()) open_t.close();
+        }
+      }
+    }
+
+    // load_sequential with WANT_PACKET_BYTES only + min_code_blocks and errors.
+    {
+      PlainSequentialSource ssrc(tgt.data);
+      ScopedCodestream dec;
+      dec.cs.create(&ssrc);
+      kdu_pdescriptor_set pset;
+      ASSERT_TRUE(pset.init(kdu_coords(0, 0), 3));
+      bool tile_done = false;
+      kdu_tile t = dec.cs.load_sequential(&pset, tile_done, 0, 2,
+                                          KDU_LOAD_SEQUENTIAL_WANT_PACKET_BYTES,
+                                          nullptr);
+      if (t.exists()) t.close();
+
+      // Calling load_sequential when pdescriptor_set is bound to a different
+      // tile returns an empty kdu_tile without advancing past that tile.
+      PlainSequentialSource ssrc_mismatch(tgt.data);
+      ScopedCodestream dec_mismatch;
+      dec_mismatch.cs.create(&ssrc_mismatch);
+      kdu_pdescriptor_set bad_pset;
+      ASSERT_TRUE(bad_pset.init(kdu_coords(1, 1), 3));
+      bad_pset.add_pdescriptor(0, 0, kdu_coords(0, 0));
+      bool td2 = false;
+      kdu_tile mismatch_t = dec_mismatch.cs.load_sequential(
+          &bad_pset, td2, 0, 0,
+          KDU_LOAD_SEQUENTIAL_WANT_TILE | KDU_LOAD_SEQUENTIAL_WANT_FLUSH_SET,
+          nullptr);
+      EXPECT_FALSE(mismatch_t.exists());
+
+      // Exercises non-empty pset re-init rejection, reset+re-init with
+      // different packet_bytes_entries, and load_sequential with a smaller
+      // packet_bytes_entries than num_layers.
+      PlainSequentialSource ssrc_badlen(tgt.data);
+      ScopedCodestream dec_badlen;
+      dec_badlen.cs.create(&ssrc_badlen);
+      kdu_pdescriptor_set bad_len_pset;
+      ASSERT_TRUE(bad_len_pset.init(kdu_coords(0, 0), 1));
+      bad_len_pset.add_pdescriptor(0, 0, kdu_coords(0, 0));
+      EXPECT_FALSE(bad_len_pset.init(kdu_coords(0, 0), 2));
+      bad_len_pset.reset();
+      EXPECT_TRUE(bad_len_pset.init(kdu_coords(0, 0), 2));
+      kdu_tile blt = dec_badlen.cs.load_sequential(
+          &bad_len_pset, td2, 0, 0,
+          KDU_LOAD_SEQUENTIAL_WANT_TILE | KDU_LOAD_SEQUENTIAL_WANT_PACKET_BYTES,
+          nullptr);
+      if (blt.exists()) blt.close();
+    }
+    {
+      MemorySource cached_src(tgt.data, KDU_SOURCE_CAP_CACHED |
+                                            KDU_SOURCE_CAP_SEEKABLE |
+                                            KDU_SOURCE_CAP_SEQUENTIAL);
+      ScopedCodestream dec;
+      dec.cs.create(&cached_src);
+      kdu_pdescriptor_set pset;
+      bool td = false;
+      EXPECT_THROW(dec.cs.load_sequential(
+                       &pset, td, 0, 0, KDU_LOAD_SEQUENTIAL_WANT_TILE, nullptr),
+                   kdu_exception);
+    }
+  }
+
+  // Packed packet headers via PPT (0xFF61) in tile header and PPM (0xFF60) in
+  // main header on a minimal 8x8 single-packet empty codestream (kd_pph_input).
+  {
+    ImageSpec min_spec;
+    min_spec.width = 8;
+    min_spec.height = 8;
+    min_spec.components = 1;
+    min_spec.dwt_levels = 0;
+    min_spec.reversible = true;
+    siz_params min_siz;
+    ConfigureSiz(min_siz, min_spec);
+    MemoryTarget min_tgt;
+    {
+      ScopedCodestream enc;
+      enc.cs.create(&min_siz, &min_tgt);
+      ConfigureCodestreamParams(enc.cs, min_spec);
+      std::vector<std::vector<kdu_int32>> zeros(1,
+                                                std::vector<kdu_int32>(64, 0));
+      kdu_tile t = enc.cs.open_tile(kdu_coords(0, 0));
+      PushTileData(enc.cs, t, zeros, min_spec);
+      t.close();
+      kdu_long min_bytes = 0;
+      kdu_uint16 max_thresh = 65535;
+      enc.cs.flush(&min_bytes, 1, &max_thresh, true, false, 0.0, nullptr,
+                   KDU_FLUSH_USES_THRESHOLDS_AND_SIZES);
+    }
+    const auto& base = min_tgt.data;
+    size_t sot_pos = std::string::npos;
+    size_t sod_pos = std::string::npos;
+    for (size_t i = 0; i + 1 < base.size(); ++i) {
+      if (base[i] == 0xFF && base[i + 1] == 0x90 &&
+          sot_pos == std::string::npos) {
+        sot_pos = i;
+      }
+      if (sot_pos != std::string::npos && i >= sot_pos + 12 &&
+          base[i] == 0xFF && base[i + 1] == 0x93) {
+        sod_pos = i;
+        break;
+      }
+    }
+    ASSERT_NE(sot_pos, std::string::npos);
+    ASSERT_NE(sod_pos, std::string::npos);
+    ASSERT_EQ(sod_pos + 3 + 2, base.size());  // 1-byte empty pkt + EOC(2)
+
+    // Inject PPT (0xFF61, len=4: Zppt=0, pkt_hdr=base[sod_pos+2]) before SOD.
+    std::vector<kdu_byte> with_ppt;
+    with_ppt.insert(with_ppt.end(), base.begin(), base.begin() + sod_pos);
+    with_ppt.push_back(0xFF);
+    with_ppt.push_back(0x61);
+    with_ppt.push_back(0x00);
+    with_ppt.push_back(0x04);
+    with_ppt.push_back(0x00);
+    with_ppt.push_back(base[sod_pos + 2]);
+    with_ppt.push_back(0xFF);
+    with_ppt.push_back(0x93);
+    with_ppt.push_back(0xFF);
+    with_ppt.push_back(0xD9);
+    // Update Psot (+6 - 1 = +5).
+    const kdu_uint32 old_psot =
+        (static_cast<kdu_uint32>(with_ppt[sot_pos + 6]) << 24) |
+        (static_cast<kdu_uint32>(with_ppt[sot_pos + 7]) << 16) |
+        (static_cast<kdu_uint32>(with_ppt[sot_pos + 8]) << 8) |
+        static_cast<kdu_uint32>(with_ppt[sot_pos + 9]);
+    if (old_psot != 0) {
+      const kdu_uint32 new_psot = old_psot + 5;
+      with_ppt[sot_pos + 6] = static_cast<kdu_byte>((new_psot >> 24) & 0xFF);
+      with_ppt[sot_pos + 7] = static_cast<kdu_byte>((new_psot >> 16) & 0xFF);
+      with_ppt[sot_pos + 8] = static_cast<kdu_byte>((new_psot >> 8) & 0xFF);
+      with_ppt[sot_pos + 9] = static_cast<kdu_byte>(new_psot & 0xFF);
+    }
+
+    {
+      PlainSequentialSource psrc(with_ppt);
+      ScopedCodestream dec;
+      dec.cs.create(&psrc);
+      kdu_tile t = dec.cs.open_tile(kdu_coords(0, 0));
+      kdu_resolution res = t.access_component(0).access_resolution(0);
+      kdu_subband sb = res.access_subband(LL_BAND);
+      kdu_block* blk = sb.open_block(kdu_coords(0, 0));
+      EXPECT_EQ(blk->num_passes, 0);
+      sb.close_block(blk);
+      t.close();
+    }
+
+    // Valid PPM (0xFF60, len=8: Zppm=0, Nppm=1, pkt_hdr) in main header.
+    std::vector<kdu_byte> with_ppm;
+    with_ppm.insert(with_ppm.end(), base.begin(), base.begin() + sot_pos);
+    with_ppm.push_back(0xFF);
+    with_ppm.push_back(0x60);
+    with_ppm.push_back(0x00);
+    with_ppm.push_back(0x08);
+    with_ppm.push_back(0x00);  // Zppm = 0
+    with_ppm.push_back(0x00);
+    with_ppm.push_back(0x00);
+    with_ppm.push_back(0x00);
+    with_ppm.push_back(0x01);  // Nppm = 1 byte
+    with_ppm.push_back(base[sod_pos + 2]);
+    const size_t new_sot_pos = with_ppm.size();
+    with_ppm.insert(with_ppm.end(), base.begin() + sot_pos,
+                    base.begin() + sod_pos + 2);
+    with_ppm.push_back(0xFF);
+    with_ppm.push_back(0xD9);
+    const kdu_uint32 ppm_psot = old_psot - 1;
+    with_ppm[new_sot_pos + 6] = static_cast<kdu_byte>((ppm_psot >> 24) & 0xFF);
+    with_ppm[new_sot_pos + 7] = static_cast<kdu_byte>((ppm_psot >> 16) & 0xFF);
+    with_ppm[new_sot_pos + 8] = static_cast<kdu_byte>((ppm_psot >> 8) & 0xFF);
+    with_ppm[new_sot_pos + 9] = static_cast<kdu_byte>(ppm_psot & 0xFF);
+
+    {
+      PlainSequentialSource psrc(with_ppm);
+      ScopedCodestream dec;
+      dec.cs.create(&psrc);
+      kdu_tile t = dec.cs.open_tile(kdu_coords(0, 0));
+      kdu_resolution res = t.access_component(0).access_resolution(0);
+      kdu_subband sb = res.access_subband(LL_BAND);
+      kdu_block* blk = sb.open_block(kdu_coords(0, 0));
+      EXPECT_EQ(blk->num_passes, 0);
+      sb.close_block(blk);
+      t.close();
+    }
+  }
+
+  // 4. pcrd_opt thresholds+sizes, non-decreasing thresholds, leading unsized
+  // layers, pcrd_trim / trans_out / set_max_bytes, and TLM slot overflow.
+  {
+    ImageSpec spec;
+    spec.width = 128;
+    spec.height = 128;
+    spec.components = 1;
+    spec.dwt_levels = 2;
+    spec.extra_params = {"Cblk={32,32}", "Clayers=3"};
+    auto planes = MakeTestPlanes(spec);
+    for (size_t i = 0; i < planes[0].size(); ++i) {
+      planes[0][i] =
+          static_cast<kdu_int32>((i * 113 + (i >> 4) * 37) & 0xFF) - 128;
+    }
+
+    auto flush_with_thresh = [&](std::initializer_list<kdu_long> sizes,
+                                 std::initializer_list<kdu_uint16> thresh,
+                                 int flags, bool trim) {
+      siz_params siz;
+      ConfigureSiz(siz, spec);
+      MemoryTarget tgt;
+      ScopedCodestream sc;
+      sc.cs.create(&siz, &tgt);
+      ConfigureCodestreamParams(sc.cs, spec);
+      kdu_tile t = sc.cs.open_tile(kdu_coords(0, 0));
+      PushTileData(sc.cs, t, planes, spec);
+      t.close();
+      std::vector<kdu_long> sz(sizes);
+      std::vector<kdu_uint16> th(thresh);
+      sc.cs.flush(sz.data(), static_cast<int>(sz.size()), th.data(), trim, true,
+                  0.0, nullptr, flags);
+      return tgt.data;
+    };
+
+    // High thresholds overridden by larger min_sizes.
+    EXPECT_GT(flush_with_thresh({2000, 4000, 8000}, {60000, 55000, 50000},
+                                KDU_FLUSH_USES_THRESHOLDS_AND_SIZES, true)
+                  .size(),
+              0U);
+    // Non-decreasing thresholds with zero min_sizes and trim=false.
+    EXPECT_GT(flush_with_thresh({0, 0, 0}, {30000, 35000, 40000},
+                                KDU_FLUSH_USES_THRESHOLDS_AND_SIZES, false)
+                  .size(),
+              0U);
+
+    // Leading zero-budget layers with non-zero tolerance and trim_to_rate=true.
+    EXPECT_GT(flush_with_thresh({0, 0, 2400}, {0, 0, 0}, 0, true).size(), 0U);
+
+    // Persistent input codestream: set_max_bytes exercises
+    // trim_compressed_data.
+    spec.extra_params = {"Cblk={32,32}", "Clayers=4"};
+    auto full_bytes = EncodeImage(spec, planes);
+    MemorySource src(full_bytes);
+    ScopedCodestream dec;
+    dec.cs.create(&src);
+    dec.cs.set_persistent();
+    dec.cs.set_max_bytes(4096, /*simulate_parsing=*/false);
+    kdu_tile dt = dec.cs.open_tile(kdu_coords(0, 0));
+    dt.close();
+    EXPECT_GT(full_bytes.size(), 0U);
+  }
+
+  // ORGgen_tlm=1 with ORGtparts=R & multiple levels (tpart count > reserved),
+  // plus byte/short ORGtlm_style.
+  {
+    ImageSpec spec;
+    spec.width = 128;
+    spec.height = 128;
+    spec.components = 1;
+    spec.dwt_levels = 2;
+    spec.tile_size = kdu_coords(64, 64);
+    spec.extra_params = {"ORGgen_tlm=1", "ORGtparts=R",
+                         "ORGtlm_style={byte,short}", "Clayers=2"};
+    auto planes = MakeTestPlanes(spec);
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    ScopedCodestream sc;
+    sc.cs.create(&siz, &tgt);
+    ConfigureCodestreamParams(sc.cs, spec);
+    for (int ty = 0; ty < 2; ++ty) {
+      for (int tx = 0; tx < 2; ++tx) {
+        kdu_tile t = sc.cs.open_tile(kdu_coords(tx, ty));
+        PushTileData(sc.cs, t, planes, spec);
+        t.close();
+      }
+    }
+    kdu_long lb[2] = {1000, 2500};
+    EXPECT_THROW(sc.cs.flush(lb, 2), kdu_exception);
+  }
+  {
+    ImageSpec spec;
+    spec.width = 128;
+    spec.height = 128;
+    spec.components = 1;
+    spec.dwt_levels = 2;
+    spec.tile_size = kdu_coords(64, 64);
+    spec.extra_params = {"ORGgen_tlm=8", "ORGtparts=R",
+                         "ORGtlm_style={byte,short}", "Clayers=2"};
+    auto planes = MakeTestPlanes(spec);
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    ScopedCodestream sc;
+    sc.cs.create(&siz, &tgt);
+    ConfigureCodestreamParams(sc.cs, spec);
+    for (int ty = 0; ty < 2; ++ty) {
+      for (int tx = 0; tx < 2; ++tx) {
+        kdu_tile t = sc.cs.open_tile(kdu_coords(tx, ty));
+        PushTileData(sc.cs, t, planes, spec);
+        t.close();
+      }
+    }
+    kdu_long lb[2] = {1000, 2500};
+    sc.cs.flush(lb, 2);
+    EXPECT_GT(tgt.data.size(), 0U);
+  }
+
+  // 5. 2-stage MCT selective output block pruning + kdu_quality_limiter checks.
+  {
+    ImageSpec spec;
+    spec.width = 32;
+    spec.height = 32;
+    spec.components = 3;
+    spec.reversible = true;
+    spec.dwt_levels = 1;
+    spec.extra_params = {
+        "Sextensions=MCT",
+        "Mcomponents=3",
+        "Msigned=no",
+        "Mprecision=8",
+        "Mnum_stages=2",
+        "Mstages=1,2",
+        "Mstage_inputs:I1={0,2}",
+        "Mstage_outputs:I1={0,2}",
+        "Mstage_collections:I1={1,1},{2,2}",
+        "Mstage_xforms:I1={MATRIX,0,0,0,0},{MATRIX,0,0,0,0}",
+        "Mstage_inputs:I2={0,2}",
+        "Mstage_outputs:I2={0,2}",
+        "Mstage_collections:I2={1,1},{2,2}",
+        "Mstage_xforms:I2={MATRIX,0,0,0,0},{MATRIX,0,0,0,0}",
+    };
+    auto planes = MakeTestPlanes(spec);
+    auto mct_bytes = EncodeImage(spec, planes);
+    MemorySource msrc(mct_bytes);
+    ScopedCodestream dec;
+    dec.cs.create(&msrc);
+    dec.cs.enable_restart();
+    // Request only components {1,2}; stage 2 collection 0 ({0}->{0}) is unused.
+    int out_comps[2] = {1, 2};
+    kdu_quality_limiter ql(0.5F, false);
+    ql.set_display_resolution(150.0F, 150.0F);
+    ql.set_comp_info(0, 1.0F, 0);
+    dec.cs.apply_input_restrictions(2, out_comps, 0, 1, nullptr,
+                                    KDU_WANT_OUTPUT_COMPONENTS, nullptr, &ql);
+    EXPECT_EQ(dec.cs.get_num_components(true), 2);
+    dec.cs.restart(&msrc);
+    int bad_comps[1] = {99};
+    dec.cs.apply_input_restrictions(1, bad_comps, 0, 1, nullptr,
+                                    KDU_WANT_OUTPUT_COMPONENTS);
+    EXPECT_EQ(dec.cs.get_num_components(true), 0);
+  }
+}
+
+TEST_F(CodestreamTest, MoreSingleThreadedUncoveredPaths) {
+  // 1. Fragment codestreams: left/upper and right/lower misalignment errors,
+  // non-initial fragment TLM continuation, and Scbr errors with cached target
+  // and non-initial fragment.
+  {
+    ImageSpec spec;
+    spec.width = 128;
+    spec.height = 64;
+    spec.components = 1;
+    spec.dwt_levels = 2;
+    spec.tile_size = kdu_coords(64, 64);
+    spec.extra_params = {"ORGgen_tlm=1"};
+    auto planes = MakeTestPlanes(spec);
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+
+    // Left/upper not aligned on tile boundary.
+    {
+      MemoryTarget tgt;
+      ScopedCodestream cs;
+      kdu_dims bad_left = MakeDims(16, 0, 48, 64);
+      EXPECT_THROW(cs.cs.create(&siz, &tgt, &bad_left, 0, 0), kdu_exception);
+    }
+    // Right/lower not aligned on tile boundary.
+    {
+      MemoryTarget tgt;
+      ScopedCodestream cs;
+      kdu_dims bad_right = MakeDims(0, 0, 80, 64);
+      EXPECT_THROW(cs.cs.create(&siz, &tgt, &bad_right, 0, 0), kdu_exception);
+    }
+    // Valid non-initial fragment covering tile (1,0) with ORGgen_tlm=1.
+    {
+      class SeekableFragTarget : public kdu_compressed_target {
+       public:
+        bool write(const kdu_byte* buf, int n) override {
+          data.insert(data.end(), buf, buf + n);
+          return true;
+        }
+        bool start_rewrite(kdu_long) override { return true; }
+        bool end_rewrite() override { return true; }
+        std::vector<kdu_byte> data;
+      };
+      SeekableFragTarget ftgt;
+      ScopedCodestream cs;
+      kdu_dims frag = MakeDims(64, 0, 64, 64);
+      cs.cs.create(&siz, &ftgt, &frag, /*fragment_tiles_generated=*/1,
+                   /*fragment_tile_bytes_generated=*/100);
+      ConfigureCodestreamParams(cs.cs, spec);
+      EXPECT_TRUE(cs.cs.is_last_fragment());
+      kdu_tile tile = cs.cs.open_tile(kdu_coords(1, 0));
+      PushTileData(cs.cs, tile, planes, spec);
+      tile.close();
+      kdu_long budget = 4096;
+      cs.cs.flush(&budget, 1);
+      EXPECT_FALSE(ftgt.data.empty());
+    }
+    // Scbr on non-initial fragment -> throws in flush.
+    {
+      ImageSpec cbr_spec = spec;
+      cbr_spec.width = 64;
+      cbr_spec.height = 128;
+      cbr_spec.extra_params = {"Corder=PCRL", "Cprecincts={16,16}",
+                               "Scbr={1,64}"};
+      siz_params cbr_siz;
+      ConfigureSiz(cbr_siz, cbr_spec);
+      MemoryTarget tgt;
+      ScopedCodestream cs;
+      kdu_dims frag = MakeDims(0, 64, 64, 64);
+      cs.cs.create(&cbr_siz, &tgt, &frag, /*fragment_tiles_generated=*/1,
+                   /*fragment_tile_bytes_generated=*/100);
+      ConfigureCodestreamParams(cs.cs, cbr_spec);
+      kdu_tile tile = cs.cs.open_tile(kdu_coords(0, 1));
+      PushTileData(cs.cs, tile, planes, cbr_spec);
+      tile.close();
+      kdu_long budget = 4096;
+      EXPECT_THROW(cs.cs.flush(&budget, 1), kdu_exception);
+    }
+    // Scbr with KDU_TARGET_CAP_CACHED target -> throws in flush.
+    {
+      class CachedTarget : public kdu_compressed_target {
+       public:
+        int get_capabilities() override {
+          return KDU_TARGET_CAP_SEQUENTIAL | KDU_TARGET_CAP_CACHED;
+        }
+        bool write(const kdu_byte* buf, int num_bytes) override {
+          data.insert(data.end(), buf, buf + num_bytes);
+          return true;
+        }
+        std::vector<kdu_byte> data;
+      };
+      ImageSpec cbr_spec = spec;
+      cbr_spec.width = 64;
+      cbr_spec.height = 128;
+      cbr_spec.extra_params = {"Corder=PCRL", "Cprecincts={16,16}",
+                               "Scbr={1,64}"};
+      siz_params cbr_siz;
+      ConfigureSiz(cbr_siz, cbr_spec);
+      CachedTarget ctgt;
+      ScopedCodestream cs;
+      cs.cs.create(&cbr_siz, &ctgt);
+      ConfigureCodestreamParams(cs.cs, cbr_spec);
+      kdu_tile tile = cs.cs.open_tile(kdu_coords(0, 0));
+      PushTileData(cs.cs, tile, planes, cbr_spec);
+      tile.close();
+      kdu_tile tile1 = cs.cs.open_tile(kdu_coords(0, 1));
+      PushTileData(cs.cs, tile1, planes, cbr_spec);
+      tile1.close();
+      kdu_long budget = 4096;
+      EXPECT_THROW(cs.cs.flush(&budget, 1), kdu_exception);
+    }
+  }
+
+  // 2. 260-tile ORGgen_tlm=2 with 2-byte tile indices (tnum_prec==2) and
+  // sequential non-seekable target rejection.
+  {
+    ImageSpec spec;
+    spec.width = 1040;
+    spec.height = 4;
+    spec.components = 1;
+    spec.dwt_levels = 0;
+    spec.tile_size = kdu_coords(4, 4);
+    spec.extra_params = {"ORGgen_tlm=2", "ORGtlm_style={short,short}"};
+    auto planes = MakeTestPlanes(spec);
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    {
+      ScopedCodestream cs;
+      cs.cs.create(&siz, &tgt);
+      ConfigureCodestreamParams(cs.cs, spec);
+      for (int tx = 0; tx < 260; ++tx) {
+        kdu_tile tile = cs.cs.open_tile(kdu_coords(tx, 0));
+        PushTileData(cs.cs, tile, planes, spec);
+        tile.close();
+      }
+      kdu_long budget = 65536;
+      cs.cs.flush(&budget, 1);
+    }
+    EXPECT_FALSE(tgt.data.empty());
+
+    class PlainSequentialTarget : public kdu_compressed_target {
+     public:
+      int get_capabilities() override { return KDU_TARGET_CAP_SEQUENTIAL; }
+      bool write(const kdu_byte* buf, int num_bytes) override {
+        data.insert(data.end(), buf, buf + num_bytes);
+        return true;
+      }
+      bool start_rewrite(kdu_long) override { return false; }
+      std::vector<kdu_byte> data;
+    };
+    ImageSpec small_spec;
+    small_spec.width = 16;
+    small_spec.height = 16;
+    small_spec.components = 1;
+    small_spec.dwt_levels = 1;
+    small_spec.extra_params = {"ORGgen_tlm=1"};
+    auto small_planes = MakeTestPlanes(small_spec);
+    siz_params small_siz;
+    ConfigureSiz(small_siz, small_spec);
+    PlainSequentialTarget stgt;
+    ScopedCodestream cs;
+    cs.cs.create(&small_siz, &stgt);
+    ConfigureCodestreamParams(cs.cs, small_spec);
+    kdu_tile tile = cs.cs.open_tile(kdu_coords(0, 0));
+    PushTileData(cs.cs, tile, small_planes, small_spec);
+    tile.close();
+    warning_handler_.clear();
+    kdu_long budget = 4096;
+    cs.cs.flush(&budget, 1);
+    EXPECT_FALSE(warning_handler_.history().empty());
+  }
+
+  // 3. 3-component multi-precinct CBR (error when Bmax < flush-set lines, then
+  // valid write_packets_cbr non-primary loop).
+  for (const char* scbr_val : {"Scbr={1,16}", "Scbr={1,96}"}) {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 128;
+    spec.components = 3;
+    spec.dwt_levels = 2;
+    spec.extra_params = {"Corder=PCRL", "Cprecincts={16,16}", "Cblk={16,16}",
+                         scbr_val};
+    auto planes = MakeTestPlanes(spec);
+    for (int c = 0; c < spec.components; ++c) {
+      for (size_t i = 0; i < planes[c].size(); ++i) {
+        planes[c][i] = static_cast<kdu_int32>((i * 41 + c * 19) & 0xFF) - 128;
+      }
+    }
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    ScopedCodestream cs;
+    cs.cs.create(&siz, &tgt);
+    ConfigureCodestreamParams(cs.cs, spec);
+    kdu_tile tile = cs.cs.open_tile(kdu_coords(0, 0));
+    PushTileData(cs.cs, tile, planes, spec);
+    tile.close();
+    kdu_long budget = 4096;
+    if (std::string(scbr_val) == "Scbr={1,16}") {
+      EXPECT_THROW(cs.cs.flush(&budget, 1), kdu_exception);
+    } else {
+      cs.cs.flush(&budget, 1);
+      EXPECT_FALSE(tgt.data.empty());
+    }
+  }
+
+  // 4. Cplex=EST with set_max_bytes, duplicate set_max_bytes error,
+  // enable_restart / set_persistent / set_synth_overshoot_limit checks, and
+  // kdu_flush_stats mismatch across restart & attach_flush_stats.
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 64;
+    spec.components = 1;
+    spec.dwt_levels = 2;
+    spec.extra_params = {"Cplex={6,EST,0.25,0}", "Cprecincts={16,16}"};
+    auto planes = MakeTestPlanes(spec);
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    ScopedCodestream cs;
+    cs.cs.create(&siz, &tgt);
+    ConfigureCodestreamParams(cs.cs, spec);
+    cs.cs.set_max_bytes(4096, /*simulate_parsing=*/false);
+    cs.cs.set_max_slope_threshold(50000);
+    kdu_tile tile = cs.cs.open_tile(kdu_coords(0, 0));
+    EXPECT_THROW(cs.cs.enable_restart(), kdu_exception);
+    PushTileData(cs.cs, tile, planes, spec);
+    tile.close();
+    kdu_long budget = 4096;
+    cs.cs.flush(&budget, 1);
+  }
+
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 64;
+    spec.components = 1;
+    spec.dwt_levels = 2;
+    auto planes = MakeTestPlanes(spec);
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    ScopedCodestream cs;
+    cs.cs.create(&siz, &tgt);
+    ConfigureCodestreamParams(cs.cs, spec);
+    cs.cs.enable_restart();
+    cs.cs.enable_restart();  // Already enabled -> early return.
+    cs.cs.set_persistent();  // Output codestream -> early return.
+    cs.cs.configure_simultaneous_processing_fragments(0, 0, 1);
+    cs.cs.configure_simultaneous_processing_fragments(64, 4, 4);
+    cs.cs.set_max_bytes(4096, /*simulate_parsing=*/false);
+    EXPECT_THROW(cs.cs.set_max_bytes(4096, /*simulate_parsing=*/false),
+                 kdu_exception);
+
+    kdu_flush_stats fstats = cs.cs.add_flush_stats(0, 5, 0, 1);
+    fstats.set_max_passes(true, true, -1, 300);
+    fstats.set_max_passes(true, true, 0, -5);
+    EXPECT_THROW(fstats.advance(0), kdu_exception);
+
+    kdu_tile tile = cs.cs.open_tile(kdu_coords(0, 0));
+    EXPECT_THROW(cs.cs.set_synth_overshoot_limit(1.0F, true), kdu_exception);
+    PushTileData(cs.cs, tile, planes, spec);
+    tile.close();
+    kdu_long budget = 4096;
+    cs.cs.flush(&budget, 1);
+
+    // Changing Cprecincts after restart triggers flush_stats structure error.
+    MemoryTarget tgt2;
+    cs.cs.restart(&tgt2);
+    cs.cs.access_siz()->parse_string("Cprecincts={8,8}");
+    cs.cs.access_siz()->finalize_all();
+    EXPECT_THROW((void)cs.cs.open_tile(kdu_coords(0, 0)), kdu_exception);
+
+    // Separate encoder with different Cprecincts + attach_flush_stats ->
+    // open_tile triggers attach_tile_comp mismatch.
+    ImageSpec spec_b = spec;
+    spec_b.extra_params = {"Cprecincts={8,8}"};
+    siz_params siz_b;
+    ConfigureSiz(siz_b, spec_b);
+    MemoryTarget tgt_b;
+    ScopedCodestream cs_b;
+    cs_b.cs.create(&siz_b, &tgt_b);
+    ConfigureCodestreamParams(cs_b.cs, spec_b);
+    // Calling attach_flush_stats with matching frame index throws.
+    kdu_flush_stats fstats_b = cs_b.cs.add_flush_stats(0, 5, 0, 1);
+    fstats_b.auto_advance(1);
+    EXPECT_THROW(fstats_b.advance(1), kdu_exception);
+    EXPECT_THROW(cs_b.cs.attach_flush_stats(fstats), kdu_exception);
+
+    // Distinct frame index with identical dimensions -> attach_flush_stats
+    // succeeds and normal tile push + flush completes.
+    siz_params siz_c;
+    ConfigureSiz(siz_c, spec_b);
+    MemoryTarget tgt_c;
+    ScopedCodestream cs_c;
+    cs_c.cs.create(&siz_c, &tgt_c);
+    ConfigureCodestreamParams(cs_c.cs, spec_b);
+    (void)cs_c.cs.add_flush_stats(1, 5, 0, 1);
+    cs_c.cs.attach_flush_stats(fstats);
+    kdu_tile tile_c = cs_c.cs.open_tile(kdu_coords(0, 0));
+    PushTileData(cs_c.cs, tile_c, planes, spec_b);
+    tile_c.close();
+    kdu_long budget_c = 4096;
+    cs_c.cs.flush(&budget_c, 1);
+    EXPECT_FALSE(tgt_c.data.empty());
+
+    // Incompatible component count triggers check_compatible error in
+    // attach_flush_stats.
+    ImageSpec spec_d = spec;
+    spec_d.components = 3;
+    siz_params siz_d;
+    ConfigureSiz(siz_d, spec_d);
+    MemoryTarget tgt_d;
+    ScopedCodestream cs_d;
+    cs_d.cs.create(&siz_d, &tgt_d);
+    ConfigureCodestreamParams(cs_d.cs, spec_d);
+    (void)cs_d.cs.add_flush_stats(1, 5, 0, 1);
+    EXPECT_THROW(cs_d.cs.attach_flush_stats(fstats), kdu_exception);
+
+    // Input codestream checks: set_fussy / set_fast / allow_parsing_errors /
+    // set_persistent after open_tile.
+    MemorySource msrc(tgt.data);
+    ScopedCodestream dec;
+    dec.cs.create(&msrc);
+    dec.cs.set_fussy();
+    dec.cs.set_fast();
+    dec.cs.set_allow_parsing_errors(true);
+    kdu_tile dtile = dec.cs.open_tile(kdu_coords(0, 0));
+    EXPECT_THROW(dec.cs.set_persistent(), kdu_exception);
+    dtile.close();
+  }
+}
+
+TEST_F(CodestreamTest, SingleThreadedGuardsMctCrgQualityAndErrors) {
+  // 1. Null (uncreated) codestream guards & kdu_quality_limiter branches.
+  {
+    kdu_codestream null_cs;
+    int discard_levels = 0;
+    int max_layers = 0;
+    kdu_component_access_mode mode = KDU_WANT_CODESTREAM_COMPONENTS;
+    EXPECT_EQ(null_cs.get_input_restrictions(discard_levels, max_layers, mode),
+              0);
+    EXPECT_FALSE(null_cs.add_flush_stats(0, 5, 0, 1).exists());
+    null_cs.attach_flush_stats(kdu_flush_stats());
+    EXPECT_EQ(null_cs.get_total_bytes(/*exclude_main_header=*/true), 0);
+    EXPECT_EQ(null_cs.get_packet_bytes(), 0);
+    EXPECT_EQ(null_cs.get_packet_header_bytes(), 0);
+    EXPECT_EQ(null_cs.get_params_memory(/*get_peak_allocation=*/false), 0);
+    EXPECT_FLOAT_EQ(null_cs.set_cbr_start_delay(2.0F), 0.0F);
+    float sd = 0.0F;
+    float mb = 0.0F;
+    kdu_uint32 fs = 0;
+    kdu_uint32 ad = 0;
+    kdu_uint32 sd2 = 0;
+    EXPECT_FALSE(null_cs.get_cbr_model(sd, fs, mb, ad, sd2));
+
+    kdu_quality_limiter ql(0.03F, /*preserve_reversible=*/true);
+    ql.set_display_resolution(300.0F, 300.0F);
+    ql.set_comp_info(5, 2.0F, -1);
+    EXPECT_LT(ql.get_square_visual_weight(LL_BAND, 1, kdu_coords(1, 1), false,
+                                          /*reversible=*/true),
+              0.0F);
+    EXPECT_FLOAT_EQ(ql.get_square_visual_weight(LL_BAND, 1, kdu_coords(1, 1),
+                                                false, /*reversible=*/false),
+                    1.0F);
+    EXPECT_GT(ql.get_square_visual_weight(HH_BAND, 1, kdu_coords(1, 1),
+                                          /*is_chroma=*/true, false),
+              0.0F);
+    EXPECT_GT(ql.get_square_visual_weight(LH_BAND, 5, kdu_coords(4, 4),
+                                          /*is_chroma=*/true, false),
+              0.0F);
+    kdu_quality_limiter ql_hi(0.03F, /*preserve_reversible=*/false);
+    ql_hi.set_display_resolution(1200.0F, 1200.0F);
+    EXPECT_GT(ql_hi.get_square_visual_weight(LH_BAND, 1, kdu_coords(1, 1),
+                                             /*is_chroma=*/false, false),
+              0.0F);
+  }
+
+  // 2. MCT + CRG + change_appearance + out-of-range component & unfinalized
+  // query paths.
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 64;
+    spec.components = 3;
+    spec.reversible = false;
+    spec.dwt_levels = 2;
+    spec.extra_params = {
+        "Mcomponents=3",
+        "Mprecision=8",
+        "Msigned=no",
+        "Mmatrix_size:I1=9",
+        "Mmatrix_coeffs:I1=1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0",
+        "Mstage_inputs:I1={0,2}",
+        "Mstage_outputs:I1={0,2}",
+        "Mstage_collections:I1={3,3}",
+        "Mstage_xforms:I1={MATRIX,1,0,0,0}",
+        "Mnum_stages=1",
+        "Mstages=1",
+    };
+    const auto planes = MakeTestPlanes(spec);
+    const auto bytes = EncodeImage(spec, planes);
+
+    {
+      MemorySource src(bytes);
+      ScopedCodestream dec;
+      dec.cs.create(&src);
+      dec.cs.apply_input_restrictions(0, 0, 0, 0, nullptr,
+                                      KDU_WANT_OUTPUT_COMPONENTS);
+      dec.cs.change_appearance(/*transpose=*/true, /*vflip=*/true,
+                               /*hflip=*/false);
+      kdu_coords tidx;
+      EXPECT_TRUE(dec.cs.find_tile(0, kdu_coords(0, 0), tidx, true));
+      EXPECT_FALSE(dec.cs.find_tile(-1, kdu_coords(0, 0), tidx, true));
+      EXPECT_FALSE(dec.cs.find_tile(99, kdu_coords(0, 0), tidx, true));
+      EXPECT_FALSE(dec.cs.find_tile(99, kdu_coords(0, 0), tidx, false));
+      EXPECT_FALSE(dec.cs.find_tile(0, kdu_coords(-10, -10), tidx, false));
+    }
+
+    {
+      MemorySource src(bytes);
+      ScopedCodestream dec;
+      dec.cs.create(&src);
+      dec.cs.apply_input_restrictions(0, 0, 0, 0, nullptr,
+                                      KDU_WANT_OUTPUT_COMPONENTS);
+      dec.cs.change_appearance(/*transpose=*/true, /*vflip=*/false,
+                               /*hflip=*/false);
+      kdu_coords subs;
+      dec.cs.get_subsampling(0, subs, true);
+      dec.cs.get_subsampling(-1, subs, true);
+      dec.cs.get_subsampling(99, subs, true);
+      dec.cs.get_subsampling(99, subs, false);
+    }
+
+    {
+      MemorySource src(bytes);
+      ScopedCodestream dec;
+      dec.cs.create(&src);
+      dec.cs.apply_input_restrictions(0, 0, 0, 0, nullptr,
+                                      KDU_WANT_OUTPUT_COMPONENTS);
+      dec.cs.change_appearance(/*transpose=*/true, /*vflip=*/false,
+                               /*hflip=*/false);
+      kdu_coords subs;
+      dec.cs.get_min_subsampling(0, subs, true);
+      dec.cs.get_min_subsampling(-1, subs, true);
+      dec.cs.get_min_subsampling(99, subs, true);
+      dec.cs.get_min_subsampling(99, subs, false);
+
+      kdu_coords reg;
+      dec.cs.get_registration(-1, kdu_coords(8, 8), reg, true);
+      dec.cs.get_registration(99, kdu_coords(8, 8), reg, true);
+      dec.cs.get_registration(99, kdu_coords(8, 8), reg, false);
+      dec.cs.get_relative_registration(-1, 0, kdu_coords(8, 8), reg, true);
+      dec.cs.get_relative_registration(99, 0, kdu_coords(8, 8), reg, true);
+      dec.cs.get_relative_registration(99, 0, kdu_coords(8, 8), reg, false);
+    }
+
+    {
+      MemorySource src(bytes);
+      ScopedCodestream dec;
+      dec.cs.create(&src);
+      dec.cs.apply_input_restrictions(0, 0, 0, 0, nullptr,
+                                      KDU_WANT_OUTPUT_COMPONENTS);
+      dec.cs.change_appearance(/*transpose=*/true, /*vflip=*/false,
+                               /*hflip=*/false);
+      kdu_coords all_subs[8];
+      EXPECT_EQ(dec.cs.get_res_subsamplings(-1, all_subs, 8, true), 0);
+      EXPECT_EQ(dec.cs.get_res_subsamplings(99, all_subs, 8, true), 0);
+      EXPECT_EQ(dec.cs.get_res_subsamplings(99, all_subs, 8, false), 0);
+      EXPECT_GT(dec.cs.get_res_subsamplings(0, all_subs, 8, true), 0);
+
+      kdu_dims tpart;
+      dec.cs.get_tile_partition(tpart);
+      EXPECT_FALSE(dec.cs.get_signed(99, false, false));
+
+      kdu_dims creg;
+      EXPECT_THROW(dec.cs.map_region(99, MakeDims(0, 0, 8, 8), creg, true),
+                   kdu_exception);
+
+      kdu_dims empty_crop = MakeDims(0, 0, 0, 0);
+      dec.cs.apply_input_restrictions(0, 0, 0, 0, &empty_crop);
+      kdu_dims valid_tiles;
+      dec.cs.get_valid_tiles(valid_tiles);
+      EXPECT_EQ(valid_tiles.size.x, 0);
+      EXPECT_EQ(valid_tiles.size.y, 0);
+    }
+  }
+
+  // 3. change_appearance errors, auto_flush with Creslengths &
+  // thresholds+sizes, auto_trans_out warnings/defaults, add_flush_stats clamp
+  // bounds, kd_flush_stats::advance before flush error, and timing/params
+  // queries.
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 64;
+    spec.components = 1;
+    spec.dwt_levels = 2;
+    spec.extra_params = {"Creslengths=10,20,30"};
+    const auto planes = MakeTestPlanes(spec);
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    ScopedCodestream cs;
+    cs.cs.create(&siz, &tgt);
+    ConfigureCodestreamParams(cs.cs, spec);
+
+    kdu_flush_stats fstats = cs.cs.add_flush_stats(0, 1, 0, -1);
+    EXPECT_THROW(fstats.advance(1), kdu_exception);
+    EXPECT_THROW((void)cs.cs.add_flush_stats(1, 300, 0, 300), kdu_exception);
+
+    warning_handler_.clear();
+    kdu_long lb[1] = {2048};
+    kdu_uint16 th[1] = {45000};
+    cs.cs.auto_flush(1, 1, -1, -1, lb, 1, th, /*trim_to_rate=*/true,
+                     /*record_in_comseg=*/false, 0.0, nullptr,
+                     KDU_FLUSH_USES_THRESHOLDS_AND_SIZES);
+    th[0] = 44000;
+    cs.cs.auto_flush(1, 1, 1, 1, lb, 1, th, /*trim_to_rate=*/true,
+                     /*record_in_comseg=*/false, 0.0, nullptr,
+                     KDU_FLUSH_USES_THRESHOLDS_AND_SIZES);
+    EXPECT_FALSE(warning_handler_.history().empty());
+    cs.cs.collect_timing_stats(-1);
+    cs.cs.collect_timing_stats(1);
+
+    kdu_tile tile = cs.cs.open_tile(kdu_coords(0, 0));
+    EXPECT_THROW(cs.cs.change_appearance(true, false, false), kdu_exception);
+    PushTileData(cs.cs, tile, planes, spec);
+    tile.close();
+    EXPECT_THROW(cs.cs.change_appearance(true, false, false), kdu_exception);
+    cs.cs.flush(lb, 1, th);
+
+    kdu_long samples = 0;
+    (void)cs.cs.get_timing_stats(&samples, /*coder_only=*/true);
+    EXPECT_GE(samples, 0);
+    EXPECT_GE(cs.cs.get_params_memory(/*get_peak_allocation=*/false), 0);
+    EXPECT_GE(cs.cs.get_num_tparts(), 1);
+    EXPECT_EQ(cs.cs.get_ht_usage(), -1);
+    EXPECT_EQ(cs.cs.get_max_tile_layers(), 1);
+
+    // Second output codestream for add_flush_stats high clamp +
+    // auto_trans_out with Creslengths warning.
+    siz_params siz2;
+    ConfigureSiz(siz2, spec);
+    MemoryTarget tgt2;
+    ScopedCodestream cs2;
+    cs2.cs.create(&siz2, &tgt2);
+    ConfigureCodestreamParams(cs2.cs, spec);
+    kdu_flush_stats fs_hi = cs2.cs.add_flush_stats(0, 300, 0, 300);
+    EXPECT_TRUE(fs_hi.exists());
+    warning_handler_.clear();
+    cs2.cs.auto_trans_out(1, 1, -1, -1, /*max_bytes=*/0, false);
+    EXPECT_FALSE(warning_handler_.history().empty());
+  }
+
+  // 4. Vertical tiling Scbr model query + CBR write failure handling.
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 128;
+    spec.components = 1;
+    spec.dwt_levels = 2;
+    spec.tile_size = kdu_coords(64, 64);
+    spec.extra_params = {"Corder=PCRL", "Cprecincts={16,16}", "Cblk={16,16}",
+                         "Scbr={1,96}"};
+    const auto planes = MakeTestPlanes(spec);
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    ScopedCodestream cs;
+    cs.cs.create(&siz, &tgt);
+    ConfigureCodestreamParams(cs.cs, spec);
+    EXPECT_FLOAT_EQ(cs.cs.set_cbr_start_delay(10.0F), 10.0F);
+    EXPECT_FLOAT_EQ(cs.cs.set_cbr_start_delay(2.0F), 10.0F);
+    for (int ty = 0; ty < 2; ++ty) {
+      kdu_tile tile = cs.cs.open_tile(kdu_coords(0, ty));
+      PushTileData(cs.cs, tile, planes, spec);
+      tile.close();
+    }
+    kdu_long budget_ok = 4096;
+    cs.cs.flush(&budget_ok, 1);
+    float sd = 0.0F;
+    float mb = 0.0F;
+    kdu_uint32 fs = 0;
+    kdu_uint32 ad = 0;
+    kdu_uint32 sd2 = 0;
+    EXPECT_TRUE(cs.cs.get_cbr_model(sd, fs, mb, ad, sd2));
+
+    MemoryTarget ftgt;
+    ftgt.prefer_large = false;
+    ftgt.fail_after_bytes = 20;
+    siz_params siz_f;
+    ConfigureSiz(siz_f, spec);
+    ScopedCodestream csf;
+    csf.cs.create(&siz_f, &ftgt);
+    ConfigureCodestreamParams(csf.cs, spec);
+    csf.cs.set_write_fail_policy(KDU_WRITE_FAIL_POLICY_ERROR);
+    bool threw = false;
+    try {
+      for (int ty = 0; ty < 2; ++ty) {
+        kdu_tile tile = csf.cs.open_tile(kdu_coords(0, ty));
+        PushTileData(csf.cs, tile, planes, spec);
+        tile.close();
+      }
+      kdu_long budget = 4096;
+      csf.cs.flush(&budget, 1);
+    } catch (kdu_exception) {
+      threw = true;
+    }
+    EXPECT_TRUE(threw);
+    csf.cs.set_write_fail_policy(KDU_WRITE_FAIL_POLICY_IGNORE);
+  }
+
+  // 5. PPM empty/truncated marker errors in transfer_tpart and ignore_tpart.
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 64;
+    spec.components = 1;
+    spec.dwt_levels = 1;
+    spec.tile_size = kdu_coords(32, 32);
+    spec.extra_params = {"Cuse_sop=yes", "Cuse_eph=yes"};
+    const auto planes = MakeTestPlanes(spec);
+    const auto raw_bytes = EncodeImage(spec, planes);
+    const auto ppm_bytes =
+        ConvertJ2kSopEphToPackedHeaders(raw_bytes, /*use_ppm=*/true,
+                                        /*split_markers=*/false);
+
+    // Replace PPM marker segment with a 0-payload PPM segment so
+    // transfer_tpart and ignore_tpart immediately hit empty-list errors.
+    size_t ppm_pos = 0;
+    kdu_uint16 ppm_len = 0;
+    for (size_t i = 2; i + 4 < ppm_bytes.size(); ++i) {
+      if (ppm_bytes[i] == 0xFF && ppm_bytes[i + 1] == 0x60) {
+        ppm_pos = i;
+        ppm_len =
+            (static_cast<kdu_uint16>(ppm_bytes[i + 2]) << 8) | ppm_bytes[i + 3];
+        break;
+      }
+    }
+    ASSERT_GT(ppm_pos, 0);
+    auto empty_ppm = ppm_bytes;
+    empty_ppm.erase(empty_ppm.begin() + ppm_pos,
+                    empty_ppm.begin() + ppm_pos + 2 + ppm_len);
+    const std::vector<kdu_byte> zero_ppm_seg = {0xFF, 0x60, 0x00, 0x03, 0x00};
+    empty_ppm.insert(empty_ppm.begin() + ppm_pos, zero_ppm_seg.begin(),
+                     zero_ppm_seg.end());
+
+    {
+      MemorySource src(empty_ppm);
+      ScopedCodestream dec;
+      dec.cs.create(&src);
+      EXPECT_THROW((void)dec.cs.open_tile(kdu_coords(0, 0)), kdu_exception);
+    }
+    {
+      MemorySource src(empty_ppm, KDU_SOURCE_CAP_SEQUENTIAL);
+      ScopedCodestream dec;
+      dec.cs.create(&src);
+      kdu_dims crop = MakeDims(32, 32, 16, 16);
+      dec.cs.apply_input_restrictions(0, 0, 0, 0, &crop);
+      EXPECT_THROW((void)dec.cs.open_tile(kdu_coords(1, 1)), kdu_exception);
+    }
+
+    // Overlarge Nppm + crop on sequential source triggers ignore_tpart error 9.
+    auto bad_nppm = ppm_bytes;
+    bad_nppm[ppm_pos + 5] = 0x7F;
+    bad_nppm[ppm_pos + 6] = 0xFF;
+    {
+      MemorySource src(bad_nppm, KDU_SOURCE_CAP_SEQUENTIAL);
+      ScopedCodestream dec;
+      dec.cs.create(&src);
+      kdu_dims crop = MakeDims(32, 32, 16, 16);
+      dec.cs.apply_input_restrictions(0, 0, 0, 0, &crop);
+      EXPECT_THROW((void)dec.cs.open_tile(kdu_coords(1, 1)), kdu_exception);
+    }
+  }
+
+  // 6. kdu_pdescriptor_set with membroker, extract_tail leading_last_tile_part
+  // recomputation, and reset(release_memory=true).
+  {
+    kdu_membroker broker;
+    kdu_pdescriptor_set pset(&broker);
+    EXPECT_TRUE(pset.init(kdu_coords(0, 0), 2));
+    const int idx0 = pset.add_pdescriptor(0, 0, kdu_coords(0, 0));
+    const int idx1 = pset.add_pdescriptor(0, 0, kdu_coords(1, 0));
+    ASSERT_GE(idx0, 0);
+    ASSERT_GE(idx1, 0);
+    pset.access_pdescriptor(idx0)->last_tile_part = 2;
+    pset.access_pdescriptor(idx1)->last_tile_part = 1;
+    pset.note_pdescriptor_complete(idx0);
+    pset.note_pdescriptor_complete(idx1);
+    kdu_pdescriptor_set tail;
+    EXPECT_TRUE(pset.extract_tail(&tail, 1));
+    pset.reset(/*release_memory=*/true);
+  }
+}
+
+TEST_F(CodestreamTest, AdditionalSingleThreadedUncoveredPaths) {
+  // 1. kdu_codestream_comment null/binary/truncation/readonly/empty COM paths.
+  {
+    kdu_codestream_comment null_com;
+    EXPECT_EQ(null_com.get_text(), nullptr);
+    EXPECT_TRUE(null_com.check_readonly());
+    const kdu_byte dummy[4] = {1, 2, 3, 4};
+    EXPECT_FALSE(null_com.put_data(dummy, 4));
+    EXPECT_FALSE(null_com.put_text("ignored"));
+
+    ImageSpec spec;
+    spec.width = 32;
+    spec.height = 32;
+    spec.components = 1;
+    const auto planes = MakeTestPlanes(spec);
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt;
+    ScopedCodestream cs;
+    cs.cs.create(&siz, &tgt);
+    ConfigureCodestreamParams(cs.cs, spec);
+
+    kdu_codestream_comment bin_com = cs.cs.add_comment();
+    EXPECT_FALSE(bin_com.check_readonly());
+    EXPECT_TRUE(bin_com.put_data(dummy, 4));
+    EXPECT_STREQ(bin_com.get_text(), "");
+    EXPECT_FALSE(bin_com.put_text("cannot_mix_binary_and_text"));
+    std::vector<kdu_byte> oversized(65600, 0x41);
+    warning_handler_.clear();
+    EXPECT_TRUE(
+        bin_com.put_data(oversized.data(), static_cast<int>(oversized.size())));
+    EXPECT_FALSE(warning_handler_.history().empty());
+    kdu_byte out_buf[8] = {};
+    EXPECT_EQ(bin_com.get_data(nullptr, 0, 4), 4);
+    EXPECT_EQ(bin_com.get_data(out_buf, 100000, 4), 0);
+    EXPECT_EQ(bin_com.get_data(out_buf, 0, 0), 0);
+    EXPECT_EQ(bin_com.get_data(out_buf, 0, 4), 4);
+
+    kdu_tile tile = cs.cs.open_tile(kdu_coords(0, 0));
+    PushTileData(cs.cs, tile, planes, spec);
+    tile.close();
+    cs.cs.flush(nullptr, 1);
+    EXPECT_TRUE(bin_com.check_readonly());
+    EXPECT_FALSE(bin_com.put_data(dummy, 4));
+
+    // Splice an empty binary COM marker (0xFFFE, Lcom=4, Rcom=0) before SOT.
+    std::vector<kdu_byte> empty_com = {0xFF, 0xFE, 0x00, 0x04, 0x00, 0x00};
+    auto with_empty_com = tgt.data;
+    for (size_t i = 2; i + 1 < with_empty_com.size(); ++i) {
+      if (with_empty_com[i] == 0xFF && with_empty_com[i + 1] == 0x90) {
+        with_empty_com.insert(
+            with_empty_com.begin() + static_cast<ptrdiff_t>(i),
+            empty_com.begin(), empty_com.end());
+        break;
+      }
+    }
+    MemorySource src(with_empty_com);
+    ScopedCodestream dec;
+    dec.cs.create(&src);
+    kdu_codestream_comment read_com;
+    read_com = dec.cs.get_comment(read_com);
+    EXPECT_TRUE(read_com.exists());
+    EXPECT_STREQ(read_com.get_text(), "");
+  }
+
+  // 2. 2-stage MCT output->input augmentation, differing CRG incompatibility,
+  // pre-finalization geometry queries, and component restriction edge cases.
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 64;
+    spec.components = 3;
+    spec.dwt_levels = 1;
+    spec.reversible = false;
+    // Verify augmented-output gap without fallback throws cleanly instead of
+    // dereferencing a null subsampling_ref.
+    ImageSpec bad_spec = spec;
+    bad_spec.extra_params = {
+        "CRGoffset={0.0,0.0},{0.5,0.5},{0.25,0.25}",
+        "Mcomponents=3",
+        "Mprecision=8",
+        "Msigned=no",
+        "Mmatrix_size:I1=6",
+        "Mmatrix_coeffs:I1=0.5,0.5,0.0,0.5,-0.5,0.0",
+        "Mvector_size:I1=2",
+        "Mvector_coeffs:I1=0,0",
+        "Mstage_inputs:I1={0,2}",
+        "Mstage_outputs:I1={0,1}",
+        "Mstage_collections:I1={3,2}",
+        "Mstage_xforms:I1={MATRIX,1,1,0,0}",
+        "Mmatrix_size:I2=4",
+        "Mmatrix_coeffs:I2=1.0,0.25,0.0,1.0",
+        "Mvector_size:I2=2",
+        "Mvector_coeffs:I2=0,0",
+        "Mstage_inputs:I2={0,1},{2,2}",
+        "Mstage_outputs:I2={0,1},{2,2}",
+        "Mstage_collections:I2={2,2},{1,1}",
+        "Mstage_xforms:I2={MATRIX,2,2,0,0},{MATRIX,0,0,0,0}",
+        "Mnum_stages=2",
+        "Mstages=1,2",
+    };
+    const auto planes = MakeTestPlanes(spec);
+    EXPECT_THROW((void)EncodeImage(bad_spec, planes), kdu_exception);
+
+    // Now use invertible 3x3 blocks in Stage 0 and Stage 1 so encoding and
+    // decoding succeed and exercise CRG incompatibility and CBD markers.
+    spec.extra_params = {
+        "CRGoffset={0.0,0.0},{0.5,0.5},{0.25,0.25}",
+        "Mcomponents=3",
+        "Mprecision=8",
+        "Msigned=no",
+        "Mmatrix_size:I1=9",
+        "Mmatrix_coeffs:I1=0.5,0.5,0.0,0.5,-0.5,0.0,0.0,0.0,1.0",
+        "Mvector_size:I1=3",
+        "Mvector_coeffs:I1=0,0,0",
+        "Mstage_inputs:I1={0,2}",
+        "Mstage_outputs:I1={0,2}",
+        "Mstage_collections:I1={3,3}",
+        "Mstage_xforms:I1={MATRIX,1,1,0,0}",
+        "Mmatrix_size:I2=9",
+        "Mmatrix_coeffs:I2=1.0,0.25,0.0,0.0,1.0,0.0,0.0,0.0,1.0",
+        "Mvector_size:I2=3",
+        "Mvector_coeffs:I2=0,0,0",
+        "Mstage_inputs:I2={0,2}",
+        "Mstage_outputs:I2={0,2}",
+        "Mstage_collections:I2={3,3}",
+        "Mstage_xforms:I2={MATRIX,2,2,0,0}",
+        "Mnum_stages=2",
+        "Mstages=1,2",
+    };
+    const auto bytes = EncodeImage(spec, planes);
+
+    {
+      MemorySource src(bytes);
+      ScopedCodestream dec;
+      dec.cs.create(&src);
+      dec.cs.set_persistent();
+      EXPECT_GE(dec.cs.set_tile_unloading_threshold(-1), 0);
+
+      // Call geometry & registration queries prior to finalize_construction().
+      EXPECT_GE(dec.cs.get_min_dwt_levels(), 1);
+      kdu_coords subs;
+      dec.cs.get_subsampling(0, subs, true);
+      dec.cs.get_min_subsampling(0, subs, true);
+      kdu_coords reg;
+      dec.cs.get_registration(0, kdu_coords(16, 16), reg, true);
+      EXPECT_EQ(reg, kdu_coords(0, 0));
+      dec.cs.get_relative_registration(0, 2, kdu_coords(16, 16), reg, true);
+      EXPECT_EQ(reg, kdu_coords(0, 0));
+
+      float overshoot = 0.0F;
+      EXPECT_FALSE(dec.cs.report_synth_overshoot(99, overshoot));
+      EXPECT_FALSE(dec.cs.report_synth_overshoot(0, overshoot));
+
+      // Exercise both comps_of_interest==NULL and non-NULL MCT restrictions.
+      dec.cs.apply_input_restrictions(0, 2, 0, 0, nullptr,
+                                      KDU_WANT_OUTPUT_COMPONENTS);
+      int indices[] = {-1, 0, 0, 99, 2};
+      dec.cs.apply_input_restrictions(5, indices, 0, 0, nullptr,
+                                      KDU_WANT_OUTPUT_COMPONENTS);
+      {
+        int coi[] = {-1, 0, 99};
+        kdu_tile tile = dec.cs.open_tile(kdu_coords(0, 0));
+        tile.set_components_of_interest(3, coi);
+        DecodeTileAllComponents(dec.cs, tile);
+        tile.close();
+      }
+      dec.cs.apply_input_restrictions(5, indices, 0, 0, nullptr,
+                                      KDU_WANT_CODESTREAM_COMPONENTS);
+    }
+
+    // Splice a COM marker before CBD on a sequential (non-seekable) source
+    // to exercise read_siz_auxiliary_marker_segs non-seekable warning.
+    const std::vector<kdu_byte> com_seg = {0xFF, 0xFE, 0x00, 0x05,
+                                           0x00, 0x00, 0x41};
+    // Find CBD (0xFF 0x78) in the main header before first SOT.
+    std::vector<kdu_byte> modified = bytes;
+    for (size_t i = 2; i + 1 < modified.size(); ++i) {
+      if (modified[i] == 0xFF && modified[i + 1] == 0x78) {
+        modified.insert(modified.begin() + static_cast<ptrdiff_t>(i),
+                        com_seg.begin(), com_seg.end());
+        break;
+      }
+      if (modified[i] == 0xFF && modified[i + 1] == 0x90) {
+        break;
+      }
+    }
+    warning_handler_.clear();
+    MemorySource seq_src(modified, KDU_SOURCE_CAP_SEQUENTIAL);
+    ScopedCodestream seq_dec;
+    seq_dec.cs.create(&seq_src);
+    EXPECT_FALSE(warning_handler_.history().empty());
+  }
+
+  // 3. Multi-frame CBR flush_stats + aux_flush_stats + link_tile_comp +
+  // write_packets_cbr trailing precincts + tiny Scbr error.
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 128;
+    spec.components = 1;
+    spec.dwt_levels = 2;
+    spec.tile_size = kdu_coords(64, 64);
+    spec.extra_params = {"Corder=PCRL", "Cprecincts={16,16}", "Cblk={16,16}",
+                         "Scbr={1,96}"};
+    const auto planes = MakeTestPlanes(spec);
+
+    // Companion codestream providing valid aux_flush_stats.
+    siz_params siz_aux;
+    ConfigureSiz(siz_aux, spec);
+    MemoryTarget tgt_aux;
+    ScopedCodestream cs_aux;
+    cs_aux.cs.create(&siz_aux, &tgt_aux);
+    ConfigureCodestreamParams(cs_aux.cs, spec);
+    kdu_flush_stats fs_aux = cs_aux.cs.add_flush_stats(0, 1, 0, 1);
+    for (int ty = 0; ty < 2; ++ty) {
+      kdu_tile tile = cs_aux.cs.open_tile(kdu_coords(0, ty));
+      PushTileData(cs_aux.cs, tile, planes, spec);
+      tile.close();
+    }
+    kdu_long aux_budget = 4096;
+    cs_aux.cs.flush(&aux_budget, 1);
+    fs_aux.auto_advance(2);
+
+    // Primary CBR codestream across frame 1 -> restart -> frame 3 -> mismatch.
+    siz_params siz;
+    ConfigureSiz(siz, spec);
+    MemoryTarget tgt0;
+    ScopedCodestream cs;
+    cs.cs.create(&siz, &tgt0);
+    ConfigureCodestreamParams(cs.cs, spec);
+    cs.cs.enable_restart();
+    kdu_flush_stats fs = cs.cs.add_flush_stats(1, 1, 0, 1);
+    cs.cs.attach_flush_stats(fs_aux);
+    for (int ty = 0; ty < 2; ++ty) {
+      kdu_tile tile = cs.cs.open_tile(kdu_coords(0, ty));
+      PushTileData(cs.cs, tile, planes, spec);
+      tile.close();
+    }
+    kdu_long budget = 8192;
+    cs.cs.flush(&budget, 1);
+
+    MemoryTarget tgt1;
+    cs.cs.restart(&tgt1);
+    EXPECT_TRUE(fs.advance(2));
+    for (int ty = 0; ty < 2; ++ty) {
+      kdu_tile tile = cs.cs.open_tile(kdu_coords(0, ty));
+      PushTileData(cs.cs, tile, planes, spec);
+      tile.close();
+    }
+    budget = 16384;
+    cs.cs.flush(&budget, 1);
+
+    // Mismatched precinct structure across restart triggers link_tile_comp
+    // check.
+    MemoryTarget tgt2;
+    cs.cs.restart(&tgt2);
+    EXPECT_TRUE(fs.advance(2));
+    EXPECT_THROW(
+        {
+          if (cs.cs.access_siz()->parse_string("Cprecincts:T0={32,32}")) {
+            cs.cs.access_siz()->finalize_all();
+          }
+          kdu_tile bad_tile = cs.cs.open_tile(kdu_coords(0, 0));
+          bad_tile.close();
+        },
+        kdu_exception);
+
+    // Flat zero image with large CBR budget hits
+    // global_slope_included_everything and secondary bulk/fine fill +
+    // min_slope_threshold.
+    ImageSpec zspec;
+    zspec.width = 64;
+    zspec.height = 128;
+    zspec.components = 1;
+    zspec.dwt_levels = 1;
+    zspec.tile_size = kdu_coords(64, 128);
+    zspec.extra_params = {"Corder=PCRL", "Cprecincts={16,16}", "Cblk={16,16}",
+                          "Scbr={1,96}"};
+    std::vector<std::vector<kdu_int32>> zero_planes(
+        1, std::vector<kdu_int32>(64 * 128, 0));
+    siz_params zsiz;
+    ConfigureSiz(zsiz, zspec);
+    MemoryTarget ztgt;
+    ScopedCodestream zcs;
+    zcs.cs.create(&zsiz, &ztgt);
+    ConfigureCodestreamParams(zcs.cs, zspec);
+    zcs.cs.set_min_slope_threshold(40000);
+    {
+      kdu_tile tile = zcs.cs.open_tile(kdu_coords(0, 0));
+      PushTileData(zcs.cs, tile, zero_planes, zspec);
+      tile.close();
+    }
+    kdu_long big_budget = 24000;
+    zcs.cs.flush(&big_budget, 1);
+
+    // Tiny CBR leaky bucket throws error 0x29081603.
+    ImageSpec bspec = zspec;
+    bspec.extra_params = {"Corder=PCRL", "Cprecincts={16,16}", "Cblk={16,16}",
+                          "Scbr={1,16}"};
+    siz_params bsiz;
+    ConfigureSiz(bsiz, bspec);
+    MemoryTarget btgt;
+    ScopedCodestream bcs;
+    bcs.cs.create(&bsiz, &btgt);
+    ConfigureCodestreamParams(bcs.cs, bspec);
+    {
+      kdu_tile tile = bcs.cs.open_tile(kdu_coords(0, 0));
+      PushTileData(bcs.cs, tile, planes, bspec);
+      tile.close();
+    }
+    kdu_long tiny_budget = 256;
+    EXPECT_THROW(bcs.cs.flush(&tiny_budget, 1), kdu_exception);
+  }
+
+  // 4. load_sequential exhaustion transitions, PRCL mismatched DWT levels,
+  // and PPT (>512 bytes) + resilient layer skip / marker injection.
+  {
+    ImageSpec spec;
+    spec.width = 64;
+    spec.height = 32;
+    spec.components = 1;
+    spec.dwt_levels = 0;
+    spec.tile_size = kdu_coords(32, 32);
+    spec.extra_params = {"Corder=LRCP", "Clayers=2", "Cprecincts={32,32}"};
+    const auto planes = MakeTestPlanes(spec);
+    auto encode_layers = [](const ImageSpec& s,
+                            const std::vector<std::vector<kdu_int32>>& p,
+                            const std::vector<kdu_long>& budgets) {
+      siz_params lsiz;
+      ConfigureSiz(lsiz, s);
+      MemoryTarget ltgt;
+      ScopedCodestream lcs;
+      lcs.cs.create(&lsiz, &ltgt);
+      ConfigureCodestreamParams(lcs.cs, s);
+      kdu_dims tr;
+      lcs.cs.get_valid_tiles(tr);
+      for (int ty = 0; ty < tr.size.y; ++ty) {
+        for (int tx = 0; tx < tr.size.x; ++tx) {
+          kdu_tile tile =
+              lcs.cs.open_tile(kdu_coords(tr.pos.x + tx, tr.pos.y + ty));
+          PushTileData(lcs.cs, tile, p, s);
+          tile.close();
+        }
+      }
+      std::vector<kdu_long> b = budgets;
+      lcs.cs.flush(b.data(), static_cast<int>(b.size()));
+      return ltgt.data;
+    };
+    const auto bytes = encode_layers(spec, planes, {200, 600});
+
+    // Truncated stream in load_sequential so tile 0 finishes as incomplete.
+    {
+      std::vector<kdu_byte> trunc(bytes.begin(),
+                                  bytes.begin() + bytes.size() / 2);
+      MemorySource src(trunc);
+      ScopedCodestream dec;
+      dec.cs.create(&src);
+      dec.cs.set_resilient();
+      bool tile_done = false;
+      kdu_pdescriptor_set pset1;
+      kdu_tile t1 = dec.cs.load_sequential(
+          &pset1, tile_done, 10, 100, KDU_LOAD_SEQUENTIAL_WANT_TILE, nullptr);
+      if (t1.exists()) t1.close();
+      kdu_pdescriptor_set pset2;
+      kdu_tile t2 =
+          dec.cs.load_sequential(&pset2, tile_done, 10, 100, 0, nullptr);
+      if (t2.exists()) t2.close();
+    }
+
+    // Resume non-empty pset from tile 0 across boundary into tile 1.
+    {
+      MemorySource src(bytes);
+      ScopedCodestream dec;
+      dec.cs.create(&src);
+      bool tile_done = false;
+      kdu_pdescriptor_set pset_t0;
+      kdu_tile t0 =
+          dec.cs.load_sequential(&pset_t0, tile_done, 1, 1, 0, nullptr);
+      ASSERT_TRUE(t0.exists());
+      t0.close();
+      EXPECT_FALSE(pset_t0.is_empty());
+      // Continue loading with pset_t0 still bound to tile 0 into tile 1.
+      kdu_tile t1 =
+          dec.cs.load_sequential(&pset_t0, tile_done, 10, 100, 0, nullptr);
+      if (t1.exists()) t1.close();
+      EXPECT_EQ(pset_t0.get_tile_idx(), kdu_coords(0, 0));
+    }
+
+    // Non-contributing precinct inside load_sequential via component
+    // restriction.
+    {
+      ImageSpec cspec = spec;
+      cspec.components = 2;
+      const auto cplanes = MakeTestPlanes(cspec);
+      const auto cbytes = EncodeImage(cspec, cplanes);
+      MemorySource src(cbytes);
+      ScopedCodestream dec;
+      dec.cs.create(&src);
+      dec.cs.apply_input_restrictions(0, 1, 0, 0, nullptr,
+                                      KDU_WANT_OUTPUT_COMPONENTS);
+      bool tile_done = false;
+      kdu_pdescriptor_set pset;
+      kdu_tile t = dec.cs.load_sequential(&pset, tile_done, 1, 1, 0, nullptr);
+      EXPECT_TRUE(t.exists());
+      if (t.exists()) t.close();
+    }
+
+    // Corder=PRCL with per-component Clevels mismatch.
+    {
+      ImageSpec pspec;
+      pspec.width = 64;
+      pspec.height = 64;
+      pspec.components = 2;
+      pspec.dwt_levels = 2;
+      pspec.extra_params = {"Corder=PRCL", "Clevels:C1=0", "Cprecincts={16,16}",
+                            "Cblk={16,16}"};
+      const auto pplanes = MakeTestPlanes(pspec);
+      const auto pbytes = EncodeImage(pspec, pplanes);
+      MemorySource src(pbytes);
+      ScopedCodestream dec;
+      dec.cs.create(&src);
+      kdu_tile tile = dec.cs.open_tile(kdu_coords(0, 0));
+      DecodeTileAllComponents(dec.cs, tile);
+      tile.close();
+    }
+
+    // Large PPT (>512 bytes) + set_resilient() + max_layers=1 + unexpected
+    // marker to cover kd_pph_input::load_buf, kd_input::ignore(throw_markers),
+    // and process_unexpected_marker.
+    {
+      ImageSpec lspec;
+      lspec.width = 128;
+      lspec.height = 128;
+      lspec.components = 1;
+      lspec.dwt_levels = 2;
+      lspec.extra_params = {"Clayers=3", "Cprecincts={16,16}", "Cblk={16,16}",
+                            "Cuse_sop=yes", "Cuse_eph=yes"};
+      const auto lplanes = MakeTestPlanes(lspec);
+      const auto raw = encode_layers(lspec, lplanes, {400, 900, 1800});
+      const auto ppt_bytes =
+          ConvertJ2kSopEphToPackedHeaders(raw, /*use_ppm=*/false,
+                                          /*split_markers=*/false);
+      MemorySource src(ppt_bytes, KDU_SOURCE_CAP_SEQUENTIAL);
+      ScopedCodestream dec;
+      dec.cs.create(&src);
+      dec.cs.set_resilient();
+      dec.cs.apply_input_restrictions(0, 0, 0, 1, nullptr,
+                                      KDU_WANT_OUTPUT_COMPONENTS);
+      kdu_tile tile = dec.cs.open_tile(kdu_coords(0, 0));
+      DecodeTileAllComponents(dec.cs, tile);
+      tile.close();
+
+      // Inject an unexpected 0xFF 0x90 marker near the end of the packet body
+      // in resilient sequential decode mode.
+      if (ppt_bytes.size() > 64) {
+        auto corrupt = ppt_bytes;
+        const size_t pos = corrupt.size() - 32;
+        corrupt[pos] = 0xFF;
+        corrupt[pos + 1] = 0x90;
+        MemorySource csrc(corrupt, KDU_SOURCE_CAP_SEQUENTIAL);
+        ScopedCodestream cdec;
+        cdec.cs.create(&csrc);
+        cdec.cs.set_resilient();
+        try {
+          kdu_tile ctile = cdec.cs.open_tile(kdu_coords(0, 0));
+          DecodeTileAllComponents(cdec.cs, ctile);
+          ctile.close();
+        } catch (kdu_exception) {
+        }
+      }
+
+      // Non-PPT sequential decode with max_layers=1 + SOP/EPH and spliced
+      // 0xFF 0x90 in packet body exercises kd_input::read/ignore throw_markers.
+      {
+        MemorySource rsrc(raw, KDU_SOURCE_CAP_SEQUENTIAL);
+        ScopedCodestream rdec;
+        rdec.cs.create(&rsrc);
+        rdec.cs.set_resilient();
+        rdec.cs.apply_input_restrictions(0, 0, 0, 1, nullptr,
+                                         KDU_WANT_OUTPUT_COMPONENTS);
+        kdu_tile rtile = rdec.cs.open_tile(kdu_coords(0, 0));
+        DecodeTileAllComponents(rdec.cs, rtile);
+        rtile.close();
+      }
+      if (raw.size() > 64) {
+        auto rcorrupt = raw;
+        const size_t pos = rcorrupt.size() - 32;
+        rcorrupt[pos] = 0xFF;
+        rcorrupt[pos + 1] = 0x90;
+        MemorySource rcsrc(rcorrupt, KDU_SOURCE_CAP_SEQUENTIAL);
+        ScopedCodestream rcdec;
+        rcdec.cs.create(&rcsrc);
+        rcdec.cs.set_resilient();
+        try {
+          kdu_tile rctile = rcdec.cs.open_tile(kdu_coords(0, 0));
+          DecodeTileAllComponents(rcdec.cs, rctile);
+          rctile.close();
+        } catch (kdu_exception) {
+        }
+      }
+    }
+
+    // 5. Additional single-threaded CBR, Porder, and load_sequential paths.
+    {
+      // Huge CBR fill bytes over 1 codeblock triggers KDU_ERROR 0x29081604.
+      ImageSpec hspec;
+      hspec.width = 64;
+      hspec.height = 64;
+      hspec.components = 1;
+      hspec.dwt_levels = 0;
+      hspec.extra_params = {"Corder=PCRL", "Cprecincts={64,64}", "Cblk={64,64}",
+                            "Scbr={1,96}"};
+      std::vector<std::vector<kdu_int32>> hzeros(
+          1, std::vector<kdu_int32>(64 * 64, 0));
+      siz_params hsiz;
+      ConfigureSiz(hsiz, hspec);
+      MemoryTarget htgt;
+      ScopedCodestream hcs;
+      hcs.cs.create(&hsiz, &htgt);
+      ConfigureCodestreamParams(hcs.cs, hspec);
+      {
+        kdu_tile tile = hcs.cs.open_tile(kdu_coords(0, 0));
+        PushTileData(hcs.cs, tile, hzeros, hspec);
+        tile.close();
+      }
+      kdu_long huge_budget = 100000;
+      try {
+        hcs.cs.flush(&huge_budget, 1);
+      } catch (kdu_exception) {
+      }
+
+      // Tight CBR budget across multi-precinct zero image to leave trailing
+      // empty precincts after fill bytes are exhausted.
+      ImageSpec tspec;
+      tspec.width = 64;
+      tspec.height = 128;
+      tspec.components = 1;
+      tspec.dwt_levels = 1;
+      tspec.extra_params = {"Corder=PCRL", "Cprecincts={16,16}", "Cblk={16,16}",
+                            "Scbr={1,96}"};
+      std::vector<std::vector<kdu_int32>> tzeros(
+          1, std::vector<kdu_int32>(64 * 128, 0));
+      siz_params tsiz;
+      ConfigureSiz(tsiz, tspec);
+      MemoryTarget ttgt;
+      ScopedCodestream tcs;
+      tcs.cs.create(&tsiz, &ttgt);
+      ConfigureCodestreamParams(tcs.cs, tspec);
+      {
+        kdu_tile tile = tcs.cs.open_tile(kdu_coords(0, 0));
+        PushTileData(tcs.cs, tile, tzeros, tspec);
+        tile.close();
+      }
+      kdu_long tight_budget = 600;
+      tcs.cs.flush(&tight_budget, 1);
+
+      // Incremental CBR flush across two full-tile flush sets hits
+      // cbr_fset.num_flush_sets > 0 slope estimation on second flush.
+      ImageSpec ispec;
+      ispec.width = 64;
+      ispec.height = 128;
+      ispec.components = 1;
+      ispec.dwt_levels = 2;
+      ispec.tile_size = kdu_coords(64, 64);
+      ispec.extra_params = {"Corder=PCRL", "Cprecincts={16,16}", "Cblk={16,16}",
+                            "Scbr={1,96}"};
+      const auto iplanes = MakeTestPlanes(ispec);
+      siz_params isiz;
+      ConfigureSiz(isiz, ispec);
+      MemoryTarget itgt;
+      ScopedCodestream ics;
+      ics.cs.create(&isiz, &itgt);
+      ConfigureCodestreamParams(ics.cs, ispec);
+      for (int ty = 0; ty < 2; ++ty) {
+        kdu_tile tile = ics.cs.open_tile(kdu_coords(0, ty));
+        PushTileData(ics.cs, tile, iplanes, ispec);
+        tile.close();
+        kdu_long step_budget = 2048;
+        ics.cs.flush(&step_budget, 1);
+      }
+
+      // Incomplete Porder triggers KDU_ERROR 24 on encode.
+      ImageSpec pspec;
+      pspec.width = 32;
+      pspec.height = 32;
+      pspec.components = 1;
+      pspec.dwt_levels = 2;
+      pspec.extra_params = {"Porder={0,0,1,1,1,LRCP}"};
+      const auto pplanes = MakeTestPlanes(pspec);
+      EXPECT_THROW((void)EncodeImage(pspec, pplanes), kdu_exception);
+
+      // Two-tile stream truncated right inside Tile 1 SOD exercises
+      // load_sequential exhausted-tile transitions for empty and mismatched
+      // pset.
+      size_t second_sot = 0;
+      for (size_t i = 2; i + 1 < bytes.size(); ++i) {
+        if (bytes[i] == 0xFF && bytes[i + 1] == 0x90) {
+          if (second_sot == 0) {
+            second_sot = 1;
+          } else {
+            second_sot = i;
+            break;
+          }
+        }
+      }
+      if (second_sot > 1 && second_sot + 16 < bytes.size()) {
+        std::vector<kdu_byte> trunc2(bytes.begin(),
+                                     bytes.begin() + second_sot + 16);
+        MemorySource s1(trunc2);
+        ScopedCodestream d1;
+        d1.cs.create(&s1);
+        d1.cs.set_resilient();
+        bool done = false;
+        kdu_pdescriptor_set pset_t0;
+        kdu_tile a = d1.cs.load_sequential(&pset_t0, done, 1, 20, 0, nullptr);
+        if (a.exists()) a.close();
+        kdu_pdescriptor_set pset_mid;
+        kdu_tile b =
+            d1.cs.load_sequential(&pset_mid, done, 1, 10000, 0, nullptr);
+        if (b.exists()) b.close();
+        kdu_tile c = d1.cs.load_sequential(&pset_t0, done, 1, 1000, 0, nullptr);
+        if (c.exists()) c.close();
+        kdu_pdescriptor_set pset_empty;
+        kdu_tile d =
+            d1.cs.load_sequential(&pset_empty, done, 1, 1000, 0, nullptr);
+        if (d.exists()) d.close();
+      }
+      // Also test WANT_TILE stopping cleanly at Tile 0 boundary so Tile 1
+      // enters load_sequential with tile == NULL -> exhausted.
+      if (second_sot > 1 && second_sot + 16 < bytes.size()) {
+        std::vector<kdu_byte> trunc2(bytes.begin(),
+                                     bytes.begin() + second_sot + 16);
+        for (int pass = 0; pass < 2; ++pass) {
+          MemorySource s(trunc2);
+          ScopedCodestream d;
+          d.cs.create(&s);
+          d.cs.set_resilient();
+          bool done = false;
+          kdu_pdescriptor_set pset_t0;
+          kdu_tile t0 = d.cs.load_sequential(
+              &pset_t0, done, 1, 10000, KDU_LOAD_SEQUENTIAL_WANT_TILE, nullptr);
+          if (t0.exists()) t0.close();
+          kdu_pdescriptor_set pset_fresh;
+          kdu_tile t1 = d.cs.load_sequential(pass == 0 ? &pset_t0 : &pset_fresh,
+                                             done, 1, 1000, 0, nullptr);
+          if (t1.exists()) t1.close();
+        }
+        // Single-tile truncated after packet 0 so Call 2 resumes same tile
+        // at EOF with !pset->is_empty() and pset->get_tile_idx() == t_idx.
+        std::vector<kdu_byte> trunc0(bytes.begin(),
+                                     bytes.begin() + second_sot - 2);
+        MemorySource s0(trunc0);
+        ScopedCodestream d0;
+        d0.cs.create(&s0);
+        d0.cs.set_resilient();
+        bool done0 = false;
+        kdu_pdescriptor_set pset0;
+        kdu_tile ta = d0.cs.load_sequential(&pset0, done0, 1, 15, 0, nullptr);
+        if (ta.exists()) ta.close();
+        kdu_tile tb = d0.cs.load_sequential(&pset0, done0, 1, 1000, 0, nullptr);
+        if (tb.exists()) tb.close();
+      }
+    }
+
+    // 6. Targeted small single-threaded blocks: sample allocator limits,
+    // IN_MEMORY max_bytes seek clamping, COM length edge cases, malformed QCD
+    // cleanup, PLT final-tpart Psot=0, TLM write failures, extract_tail,
+    // truncated SOP at EOF, and asymmetric CBR precincts.
+    {
+      // kd_sample_allocator::configure outstanding permit rejection & finalize
+      // size_t overflow paths.
+      kdu_membroker tiny_broker(512);
+      kdu_sample_allocator palloc;
+      palloc.seek_permit(2048);
+      error_handler_.clear();
+      EXPECT_THROW(palloc.configure(&tiny_broker, 18), kdu_exception);
+      palloc.release_permit(2048);
+
+      MemorySource dummy_src(bytes);
+      ScopedCodestream dummy_cs;
+      dummy_cs.cs.create(&dummy_src);
+
+      kdu_sample_allocator pre_over_alloc;
+      ASSERT_TRUE(pre_over_alloc.configure(&tiny_broker, 18));
+      pre_over_alloc.pre_alloc_block(1);
+      pre_over_alloc.pre_alloc_block(std::numeric_limits<size_t>::max());
+      error_handler_.clear();
+      EXPECT_THROW(pre_over_alloc.finalize(dummy_cs.cs), kdu_exception);
+
+      kdu_sample_allocator over_alloc;
+      ASSERT_TRUE(over_alloc.configure(&tiny_broker, 18));
+      const size_t half_plus =
+          (std::numeric_limits<size_t>::max() / 2) + (size_t{1} << 20);
+      over_alloc.pre_alloc_block(half_plus);
+      over_alloc.pre_alloc_block(half_plus);
+      error_handler_.clear();
+      EXPECT_THROW(over_alloc.finalize(dummy_cs.cs), kdu_exception);
+
+      // KDU_SOURCE_CAP_IN_MEMORY + set_max_bytes + seek beyond limit.
+      {
+        MemorySource msrc(bytes);
+        ScopedCodestream mdec;
+        mdec.cs.create(&msrc);
+        mdec.cs.set_max_bytes(static_cast<kdu_long>(bytes.size() / 2));
+        try {
+          kdu_dims tr;
+          mdec.cs.get_valid_tiles(tr);
+          for (int tx = 0; tx < tr.size.x; ++tx) {
+            kdu_tile mt = mdec.cs.open_tile(kdu_coords(tx, 0));
+            mt.close();
+          }
+        } catch (kdu_exception) {
+        }
+      }
+
+      // Empty binary COM (len=0, is_text=false) and 65531-byte COM (>65530).
+      {
+        size_t first_sot = 0;
+        for (size_t i = 2; i + 1 < bytes.size(); ++i) {
+          if (bytes[i] == 0xFF && bytes[i + 1] == 0x90) {
+            first_sot = i;
+            break;
+          }
+        }
+        if (first_sot > 2) {
+          std::vector<kdu_byte> big_com = bytes;
+          std::vector<kdu_byte> markers = {0xFF, 0xFE, 0x00, 0x04, 0x00, 0x00,
+                                           0xFF, 0xFE, 0xFF, 0xFF, 0x00, 0x00};
+          markers.insert(markers.end(), 65531, 0x42);
+          big_com.insert(big_com.begin() + static_cast<ptrdiff_t>(first_sot),
+                         markers.begin(), markers.end());
+          MemorySource bsrc(big_com);
+          ScopedCodestream bdec;
+          bdec.cs.create(&bsrc);
+          kdu_codestream_comment c =
+              bdec.cs.get_comment(kdu_codestream_comment());
+          EXPECT_TRUE(c.exists());
+          c = bdec.cs.get_comment(c);
+          EXPECT_TRUE(c.exists());
+
+          // Malformed short QCD spliced before first SOT triggers
+          // construct_common catch cleanup.
+          std::vector<kdu_byte> bad_qcd = bytes;
+          const kdu_byte qcd[] = {0xFF, 0x5C, 0x00, 0x03, 0x00};
+          bad_qcd.insert(bad_qcd.begin() + static_cast<ptrdiff_t>(first_sot),
+                         qcd, qcd + sizeof(qcd));
+          MemorySource qsrc(bad_qcd);
+          ScopedCodestream qdec;
+          error_handler_.clear();
+          EXPECT_THROW(qdec.cs.create(&qsrc), kdu_exception);
+        }
+      }
+
+      // ORGgen_plt=yes with final SOT Psot zeroed
+      // (final_tpart_with_unknown_length).
+      {
+        ImageSpec plt_spec;
+        plt_spec.width = 64;
+        plt_spec.height = 32;
+        plt_spec.components = 1;
+        plt_spec.dwt_levels = 1;
+        plt_spec.tile_size = kdu_coords(32, 32);
+        plt_spec.extra_params = {"ORGgen_plt=yes"};
+        const auto plt_planes = MakeTestPlanes(plt_spec);
+        auto plt_bytes = EncodeImage(plt_spec, plt_planes);
+        size_t last_sot = 0;
+        for (size_t i = 2; i + 10 < plt_bytes.size(); ++i) {
+          if (plt_bytes[i] == 0xFF && plt_bytes[i + 1] == 0x90) {
+            last_sot = i;
+          }
+        }
+        if (last_sot > 0) {
+          plt_bytes[last_sot + 6] = 0;
+          plt_bytes[last_sot + 7] = 0;
+          plt_bytes[last_sot + 8] = 0;
+          plt_bytes[last_sot + 9] = 0;
+          MemorySource psrc(plt_bytes);
+          ScopedCodestream pdec;
+          pdec.cs.create(&psrc);
+          for (int tx = 0; tx < 2; ++tx) {
+            kdu_tile tile = pdec.cs.open_tile(kdu_coords(tx, 0));
+            DecodeTileAllComponents(pdec.cs, tile);
+            tile.close();
+          }
+        }
+      }
+
+      // ORGgen_tlm=2 write failures (sequential & rewrite paths in
+      // kd_tlm_generator).
+      {
+        ImageSpec tlm_spec;
+        tlm_spec.width = 64;
+        tlm_spec.height = 32;
+        tlm_spec.components = 1;
+        tlm_spec.dwt_levels = 1;
+        tlm_spec.tile_size = kdu_coords(32, 32);
+        tlm_spec.extra_params = {"ORGgen_tlm=2"};
+        const auto tlm_planes = MakeTestPlanes(tlm_spec);
+
+        class ThrowingTlmTarget : public MemoryTarget {
+         public:
+          bool throw_after_fail = false;
+          bool throw_on_rewrite = false;
+          bool in_rewrite = false;
+          bool start_rewrite(kdu_long backtrack) override {
+            in_rewrite = true;
+            return MemoryTarget::start_rewrite(backtrack);
+          }
+          bool end_rewrite() override {
+            in_rewrite = false;
+            return MemoryTarget::end_rewrite();
+          }
+          bool write(const kdu_byte* buf, int num_bytes) override {
+            if (throw_on_rewrite && in_rewrite) {
+              throw_on_rewrite = false;
+              throw static_cast<kdu_exception>(KDU_ERROR_EXCEPTION);
+            }
+            if (!MemoryTarget::write(buf, num_bytes)) {
+              if (throw_after_fail) {
+                throw_after_fail = false;
+                throw static_cast<kdu_exception>(KDU_ERROR_EXCEPTION);
+              }
+              return false;
+            }
+            return true;
+          }
+        };
+
+        auto flush_expect_write_fail = [&](ThrowingTlmTarget& tgt) {
+          siz_params tsiz;
+          ConfigureSiz(tsiz, tlm_spec);
+          ScopedCodestream tcs;
+          tcs.cs.create(&tsiz, &tgt);
+          tcs.cs.set_write_fail_policy(KDU_WRITE_FAIL_POLICY_ERROR);
+          ConfigureCodestreamParams(tcs.cs, tlm_spec);
+          kdu_dims tvalid;
+          tcs.cs.get_valid_tiles(tvalid);
+          for (int ty = 0; ty < tvalid.size.y; ++ty) {
+            for (int tx = 0; tx < tvalid.size.x; ++tx) {
+              kdu_tile tile = tcs.cs.open_tile(kdu_coords(tx, ty));
+              PushTileData(tcs.cs, tile, tlm_planes, tlm_spec);
+              tile.close();
+            }
+          }
+          error_handler_.clear();
+          EXPECT_THROW(tcs.cs.flush(nullptr, 1), kdu_exception);
+          tgt.throw_after_fail = false;
+          tgt.throw_on_rewrite = false;
+          tcs.cs.set_write_fail_policy(KDU_WRITE_FAIL_POLICY_IGNORE);
+        };
+
+        ThrowingTlmTarget seq_fail;
+        seq_fail.prefer_large = false;
+        seq_fail.allow_rewrite = false;
+        seq_fail.throw_after_fail = true;
+        seq_fail.fail_after_bytes = 45;
+        flush_expect_write_fail(seq_fail);
+
+        ThrowingTlmTarget rew_fail;
+        rew_fail.prefer_large = false;
+        rew_fail.allow_rewrite = true;
+        rew_fail.throw_on_rewrite = true;
+        flush_expect_write_fail(rew_fail);
+      }
+
+      // ORGtparts=R + load_sequential + extract_tail with
+      // leading_last_tile_part > 0.
+      {
+        ImageSpec tp_spec;
+        tp_spec.width = 64;
+        tp_spec.height = 64;
+        tp_spec.components = 1;
+        tp_spec.dwt_levels = 2;
+        tp_spec.extra_params = {"Cprecincts={16,16}", "ORGtparts=R"};
+        const auto tp_planes = MakeTestPlanes(tp_spec);
+        const auto tp_bytes = EncodeImage(tp_spec, tp_planes);
+        MemorySource tpsrc(tp_bytes);
+        ScopedCodestream tpdec;
+        tpdec.cs.create(&tpsrc);
+        bool done = false;
+        kdu_pdescriptor_set pset;
+        kdu_tile tile = tpdec.cs.load_sequential(
+            &pset, done, 1, static_cast<int>(tp_bytes.size()),
+            KDU_LOAD_SEQUENTIAL_WANT_TILE, nullptr);
+        if (tile.exists()) tile.close();
+        kdu_pdescriptor_set tail;
+        EXPECT_TRUE(pset.extract_tail(&tail, 1));
+      }
+
+      // Truncated SOP marker {0xFF, 0x91, 0x00} at EOF on Cuse_sop=yes
+      // sequential resilient stream exercises process_unexpected_marker
+      // partial-length putback.
+      {
+        ImageSpec sop_spec;
+        sop_spec.width = 64;
+        sop_spec.height = 64;
+        sop_spec.components = 1;
+        sop_spec.dwt_levels = 2;
+        sop_spec.extra_params = {"Cprecincts={16,16}", "Cuse_sop=yes",
+                                 "Cuse_eph=yes"};
+        auto sop_eof = EncodeImage(sop_spec, MakeTestPlanes(sop_spec));
+        if (sop_eof.size() > 8) {
+          sop_eof[sop_eof.size() - 2] = 0xFF;
+          sop_eof[sop_eof.size() - 1] = 0x91;
+          sop_eof.push_back(0x00);
+          MemorySource ssrc(sop_eof, KDU_SOURCE_CAP_SEQUENTIAL);
+          ScopedCodestream sdec;
+          sdec.cs.create(&ssrc);
+          sdec.cs.set_resilient();
+          try {
+            kdu_tile tile = sdec.cs.open_tile(kdu_coords(0, 0));
+            DecodeTileAllComponents(sdec.cs, tile);
+            tile.close();
+          } catch (kdu_exception) {
+          }
+        }
+      }
+
+      // 2-component CBR with subsampled second component and Clevels:C1=0 so
+      // trailing precincts remain after secondary_bulk_fill_bytes hits zero.
+      {
+        ImageSpec cspec;
+        cspec.width = 64;
+        cspec.height = 64;
+        cspec.components = 2;
+        cspec.dwt_levels = 2;
+        cspec.subsampling = {kdu_coords(1, 1), kdu_coords(2, 2)};
+        cspec.extra_params = {"Cycc=no",      "Clevels:C1=0",
+                              "Corder=PCRL",  "Cprecincts={16,16}",
+                              "Cblk={16,16}", "Scbr={1,96}"};
+        std::vector<std::vector<kdu_int32>> cplanes(2);
+        cplanes[0].assign(64 * 64, 10);
+        cplanes[1].assign(32 * 32, 0);
+        (void)EncodeImage(cspec, cplanes, nullptr, 800);
+      }
+    }
+
+    // 7. Additional single-threaded uncovered targets: exact-SOD trunc2
+    // WANT_TILE transitions, PLT coding parameter change across tiles,
+    // progressive KDU_SOURCE_CAP_MEMORY_BACKED with set_max_bytes, and
+    // throw_markers 0xFF 0x90 inside packet read/ignore.
+    {
+      // Truncate right after Tile 1 SOD so desequence_packet returns 0 on
+      // Tile 1 while tile == Tile 0 or tile == NULL.
+      size_t second_sot = 0;
+      for (size_t i = 2; i + 1 < bytes.size(); ++i) {
+        if (bytes[i] == 0xFF && bytes[i + 1] == 0x90) {
+          if (second_sot == 0) {
+            second_sot = 1;
+          } else {
+            second_sot = i;
+            break;
+          }
+        }
+      }
+      if (second_sot > 1 && second_sot + 14 < bytes.size()) {
+        std::vector<kdu_byte> trunc_sod(bytes.begin(),
+                                        bytes.begin() + second_sot + 14);
+        for (int pass = 0; pass < 2; ++pass) {
+          MemorySource s(trunc_sod);
+          ScopedCodestream d;
+          d.cs.create(&s);
+          d.cs.set_resilient();
+          bool done = false;
+          kdu_pdescriptor_set pset_t0;
+          kdu_tile t0 = d.cs.load_sequential(
+              &pset_t0, done, 1, 10000, KDU_LOAD_SEQUENTIAL_WANT_TILE, nullptr);
+          if (t0.exists()) t0.close();
+          kdu_pdescriptor_set pset_fresh;
+          kdu_tile t1 = d.cs.load_sequential(pass == 0 ? &pset_t0 : &pset_fresh,
+                                             done, 1, 1000, 0, nullptr);
+          if (t1.exists()) t1.close();
+        }
+      }
+
+      // Tile 1 overriding Corder=LRCP after Tile 0 served PLT data triggers
+      // kd_plt_server::notify_new_tile_part error 21.
+      {
+        ImageSpec plt_spec;
+        plt_spec.width = 64;
+        plt_spec.height = 32;
+        plt_spec.components = 1;
+        plt_spec.dwt_levels = 1;
+        plt_spec.tile_size = kdu_coords(32, 32);
+        plt_spec.extra_params = {"ORGgen_plt=yes", "Corder=RPCL", "Clayers=2",
+                                 "Corder:T1=LRCP"};
+        const auto plt_planes = MakeTestPlanes(plt_spec);
+        const auto plt_bytes = EncodeImage(plt_spec, plt_planes);
+        MemorySource psrc(plt_bytes);
+        ScopedCodestream pdec;
+        pdec.cs.create(&psrc);
+        kdu_tile t0 = pdec.cs.open_tile(kdu_coords(0, 0));
+        DecodeTileAllComponents(pdec.cs, t0);
+        t0.close();
+        error_handler_.clear();
+        try {
+          kdu_tile t1 = pdec.cs.open_tile(kdu_coords(1, 0));
+          DecodeTileAllComponents(pdec.cs, t1);
+          t1.close();
+        } catch (kdu_exception) {
+        }
+      }
+
+      // Progressive KDU_SOURCE_CAP_MEMORY_BACKED source + set_max_bytes.
+      {
+        class ProgressiveBackedSource : public kdu_compressed_source {
+         public:
+          explicit ProgressiveBackedSource(std::vector<kdu_byte> data)
+              : data_(std::move(data)),
+                avail_(std::min<size_t>(data_.size(), 40)) {}
+          int get_capabilities() override {
+            return KDU_SOURCE_CAP_MEMORY_BACKED | KDU_SOURCE_CAP_SEEKABLE;
+          }
+          bool seek(kdu_long offset) override {
+            if (offset < 0) return false;
+            pos_ = std::min<size_t>(static_cast<size_t>(offset), data_.size());
+            avail_ = std::max(avail_, pos_);
+            return true;
+          }
+          kdu_long get_pos() override { return static_cast<kdu_long>(pos_); }
+          int read(kdu_byte* buf, int num_bytes) override {
+            if (num_bytes <= 0 || pos_ >= avail_) return 0;
+            const size_t n =
+                std::min(static_cast<size_t>(num_bytes), avail_ - pos_);
+            std::memcpy(buf, data_.data() + pos_, n);
+            pos_ += n;
+            return static_cast<int>(n);
+          }
+          kdu_byte* access_memory(kdu_long& pos, kdu_byte*& lim) override {
+            pos = 0;
+            lim = data_.data() + avail_;
+            return data_.data();
+          }
+          int load_memory(kdu_long desired_span, bool /*blocking*/,
+                          kdu_compressed_source_notifier* /*n*/) override {
+            if (static_cast<size_t>(desired_span) > avail_) {
+              avail_ =
+                  std::min(data_.size(), static_cast<size_t>(desired_span));
+            }
+            int flags = KDU_SOURCE_CAP_MEMORY_BACKED;
+            if (avail_ >= data_.size()) {
+              flags |= KDU_SOURCE_IS_COMPLETE;
+            } else {
+              flags |= KDU_SOURCE_SPAN_EXISTS;
+            }
+            return flags;
+          }
+
+         private:
+          std::vector<kdu_byte> data_;
+          size_t avail_ = 0;
+          size_t pos_ = 0;
+        };
+
+        ProgressiveBackedSource pbs(bytes);
+        ScopedCodestream pbdec;
+        pbdec.cs.create(&pbs);
+        pbdec.cs.set_resilient();
+        pbdec.cs.set_max_bytes(static_cast<kdu_long>(bytes.size() / 2));
+        kdu_dims tr;
+        pbdec.cs.get_valid_tiles(tr);
+        for (int ty = 0; ty < tr.size.y; ++ty) {
+          for (int tx = 0; tx < tr.size.x; ++tx) {
+            try {
+              kdu_tile t =
+                  pbdec.cs.open_tile(kdu_coords(tr.pos.x + tx, tr.pos.y + ty));
+              DecodeTileAllComponents(pbdec.cs, t);
+              t.close();
+            } catch (kdu_exception) {
+            }
+          }
+        }
+        try {
+          kdu_tile t0 = pbdec.cs.open_tile(kdu_coords(0, 0));
+          DecodeTileAllComponents(pbdec.cs, t0);
+          t0.close();
+        } catch (kdu_exception) {
+        }
+      }
+
+      // Same-tile load_sequential resume into EOF with non-empty pset
+      // exercises load_sequential line 15345 (tile == tp on compatible pset).
+      {
+        ImageSpec stspec;
+        stspec.width = 128;
+        stspec.height = 128;
+        stspec.components = 1;
+        stspec.dwt_levels = 2;
+        stspec.extra_params = {"Cprecincts={16,16}", "Cblk={16,16}"};
+        auto st_bytes = EncodeImage(stspec, MakeTestPlanes(stspec));
+        if (st_bytes.size() > 200) {
+          st_bytes.resize(st_bytes.size() * 3 / 4);
+          MemorySource st_src(st_bytes);
+          ScopedCodestream st_dec;
+          st_dec.cs.create(&st_src);
+          st_dec.cs.set_persistent();
+          st_dec.cs.set_resilient();
+          bool done = false;
+          kdu_pdescriptor_set pset;
+          kdu_tile t0 =
+              st_dec.cs.load_sequential(&pset, done, 1, 1, 0, nullptr);
+          if (t0.exists()) t0.close();
+          if (!done) {
+            kdu_tile t1 =
+                st_dec.cs.load_sequential(&pset, done, 100, 1000, 0, nullptr);
+            if (t1.exists()) t1.close();
+          }
+        }
+      }
+
+      // Inject 0xFF 0x90 inside active and ignored packet regions on a
+      // 2-tile Cuse_sop=yes multi-layer sequential resilient stream.
+      {
+        ImageSpec lspec;
+        lspec.width = 128;
+        lspec.height = 64;
+        lspec.components = 1;
+        lspec.dwt_levels = 2;
+        lspec.tile_size = kdu_coords(64, 64);
+        lspec.extra_params = {"Corder=LRCP",        "Clayers=3",
+                              "Cprecincts={16,16}", "Cblk={16,16}",
+                              "Cuse_sop=yes",       "Cuse_eph=yes"};
+        const auto lplanes = MakeTestPlanes(lspec);
+        const auto raw = encode_layers(lspec, lplanes, {400, 900, 1800});
+        size_t first_sod = 0;
+        size_t second_sot_raw = 0;
+        for (size_t i = 2; i + 1 < raw.size(); ++i) {
+          if (raw[i] == 0xFF && raw[i + 1] == 0x93 && first_sod == 0) {
+            first_sod = i;
+          } else if (raw[i] == 0xFF && raw[i + 1] == 0x90) {
+            if (second_sot_raw == 0) {
+              second_sot_raw = 1;
+            } else {
+              second_sot_raw = i;
+              break;
+            }
+          }
+        }
+        if (first_sod > 0 && second_sot_raw > first_sod + 80) {
+          // Case A: marker inside skipped trailing layer body of Tile 0 before
+          // opening Tile 1 under max_layers=1.
+          {
+            auto skip_corrupt = raw;
+            const size_t pos = second_sot_raw - 20;
+            skip_corrupt[pos] = 0xFF;
+            skip_corrupt[pos + 1] = 0x90;
+            MemorySource src(skip_corrupt, KDU_SOURCE_CAP_SEQUENTIAL);
+            ScopedCodestream dec;
+            dec.cs.create(&src);
+            dec.cs.set_resilient();
+            dec.cs.apply_input_restrictions(0, 0, 0, 1, nullptr,
+                                            KDU_WANT_OUTPUT_COMPONENTS);
+            for (int tx = 0; tx < 2; ++tx) {
+              try {
+                kdu_tile t = dec.cs.open_tile(kdu_coords(tx, 0));
+                DecodeTileAllComponents(dec.cs, t);
+                t.close();
+              } catch (kdu_exception) {
+              }
+            }
+          }
+          // Case B: marker inside read packet body at several offsets.
+          for (size_t off : {size_t{40}, size_t{80}, size_t{120}}) {
+            if (first_sod + off + 2 < raw.size()) {
+              auto read_corrupt = raw;
+              const size_t pos = first_sod + off;
+              read_corrupt[pos] = 0xFF;
+              read_corrupt[pos + 1] = 0x90;
+              MemorySource src(read_corrupt, KDU_SOURCE_CAP_SEQUENTIAL);
+              ScopedCodestream dec;
+              dec.cs.create(&src);
+              dec.cs.set_resilient();
+              try {
+                kdu_tile t = dec.cs.open_tile(kdu_coords(0, 0));
+                DecodeTileAllComponents(dec.cs, t);
+                t.close();
+              } catch (kdu_exception) {
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 8. Final small single-threaded hits: ~kd_codestream input_monitor
+    // cleanup, short/out-of-order TLM markers, 2-tile Qweights warning
+    // suppression, and load_sequential interference after manual tile decode.
+    {
+      // Unremoved kdu_input_codestream_monitor triggers uninstalling_monitor
+      // in ~kd_codestream.
+      {
+        kdu_input_codestream_monitor mon;
+        MemorySource msrc(bytes);
+        ScopedCodestream mcs;
+        mcs.cs.create(&msrc);
+        EXPECT_TRUE(mcs.cs.install_input_monitor(&mon, nullptr));
+      }
+
+      // Short (< 6 bytes) and out-of-order Ztlm markers before first SOT.
+      size_t first_sot = 0;
+      for (size_t i = 2; i + 1 < bytes.size(); ++i) {
+        if (bytes[i] == 0xFF && bytes[i + 1] == 0x90) {
+          first_sot = i;
+          break;
+        }
+      }
+      if (first_sot > 2) {
+        {
+          auto short_tlm = bytes;
+          const kdu_byte seg[] = {0xFF, 0x55, 0x00, 0x03, 0x00};
+          short_tlm.insert(
+              short_tlm.begin() + static_cast<ptrdiff_t>(first_sot),
+              std::begin(seg), std::end(seg));
+          MemorySource tsrc(short_tlm);
+          ScopedCodestream tdec;
+          error_handler_.clear();
+          EXPECT_THROW(tdec.cs.create(&tsrc), kdu_exception);
+        }
+        {
+          auto oo_tlm = bytes;
+          const kdu_byte segs[] = {
+              0xFF, 0x55, 0x00, 0x06, 0x01, 0x00, 0x00, 0x10,
+              0xFF, 0x55, 0x00, 0x06, 0x00, 0x00, 0x00, 0x10,
+          };
+          oo_tlm.insert(oo_tlm.begin() + static_cast<ptrdiff_t>(first_sot),
+                        std::begin(segs), std::end(segs));
+          MemorySource osrc(oo_tlm);
+          ScopedCodestream odec;
+          try {
+            odec.cs.create(&osrc);
+          } catch (kdu_exception) {
+          }
+        }
+      }
+
+      // Two-tile mismatched Qweights hits qweights_warning_issued early return.
+      {
+        ImageSpec qspec;
+        qspec.width = 64;
+        qspec.height = 32;
+        qspec.components = 3;
+        qspec.reversible = false;
+        qspec.dwt_levels = 1;
+        qspec.tile_size = kdu_coords(32, 32);
+        qspec.extra_params = {"Creversible=no", "Qweights=10.0,0.1,1.0"};
+        const auto qplanes = MakeTestPlanes(qspec);
+        (void)EncodeImage(qspec, qplanes);
+      }
+
+      // Manually decoding a tile before calling load_sequential on a
+      // sequential stream triggers gen_load_seq_interference_error.
+      {
+        MemorySource isrc(bytes);
+        ScopedCodestream idec;
+        idec.cs.create(&isrc);
+        idec.cs.set_persistent();
+        kdu_tile mt = idec.cs.open_tile(kdu_coords(0, 0));
+        DecodeTileAllComponents(idec.cs, mt);
+        mt.close();
+        bool done = false;
+        kdu_pdescriptor_set pset;
+        error_handler_.clear();
+        try {
+          kdu_tile st = idec.cs.load_sequential(&pset, done, 1, 1, 0, nullptr);
+          if (st.exists()) st.close();
+        } catch (kdu_exception) {
+        }
+      }
+    }
   }
 }
 
