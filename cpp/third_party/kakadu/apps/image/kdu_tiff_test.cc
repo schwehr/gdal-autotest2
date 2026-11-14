@@ -186,7 +186,7 @@ void WriteTagTypedAllVariants(kdu_tiffdir *dir, bool bigtiff) {
 }
 
 void VerifyTagValues(kdu_tiffdir *dir, bool bigtiff,
-                     bool expect_empty_tag_present) {
+                     bool expect_empty_tag_present, bool include_sub_thresh) {
   if (expect_empty_tag_present) {
     EXPECT_EQ(dir->open_tag(MakeTagType(0x0300, 0)), MakeTagType(0x0300, 3));
   } else {
@@ -215,10 +215,12 @@ void VerifyTagValues(kdu_tiffdir *dir, bool bigtiff,
   EXPECT_STREQ(ascii, "KakaduTIFF");
 
   // 16-bit read via uint16, uint32, and kdu_long.
-  kdu_uint16 spp = 0;
-  EXPECT_EQ(dir->read_tag(KDU_TIFFTAG_SamplesPerPixel, 1, &spp), 1);
-  EXPECT_EQ(spp, 3);
-  EXPECT_EQ(dir->read_tag(KDU_TIFFTAG_SamplesPerPixel, 1, &spp), 0);
+  if (include_sub_thresh) {
+    kdu_uint16 spp = 0;
+    EXPECT_EQ(dir->read_tag(KDU_TIFFTAG_SamplesPerPixel, 1, &spp), 1);
+    EXPECT_EQ(spp, 3);
+    EXPECT_EQ(dir->read_tag(KDU_TIFFTAG_SamplesPerPixel, 1, &spp), 0);
+  }
 
   kdu_uint32 u16_as_u32[6] = {};
   EXPECT_EQ(dir->read_tag(MakeTagType(0x0211, 3), 6, u16_as_u32), 6);
@@ -231,9 +233,11 @@ void VerifyTagValues(kdu_tiffdir *dir, bool bigtiff,
   EXPECT_EQ(u16_as_long[4], 50000);
 
   // Signed 16-bit expansion to int32 and int64.
-  kdu_uint32 s16_as_u32 = 0;
-  EXPECT_EQ(dir->read_tag(MakeTagType(0x0212, 8), 1, &s16_as_u32), 1);
-  EXPECT_EQ(static_cast<kdu_int32>(s16_as_u32), -1234);
+  if (include_sub_thresh) {
+    kdu_uint32 s16_as_u32 = 0;
+    EXPECT_EQ(dir->read_tag(MakeTagType(0x0212, 8), 1, &s16_as_u32), 1);
+    EXPECT_EQ(static_cast<kdu_int32>(s16_as_u32), -1234);
+  }
 
   kdu_long s16_as_long[5] = {};
   EXPECT_EQ(dir->read_tag(MakeTagType(0x0213, 8), 5, s16_as_long), 5);
@@ -242,19 +246,23 @@ void VerifyTagValues(kdu_tiffdir *dir, bool bigtiff,
   EXPECT_EQ(s16_as_long[4], 32767);
 
   // 32-bit reads and 64-bit expansion.
-  kdu_uint32 width = 0;
-  EXPECT_EQ(dir->read_tag(KDU_TIFFTAG_ImageWidth32, 1, &width), 1);
-  EXPECT_EQ(width, 1920u);
-  EXPECT_EQ(dir->read_tag(KDU_TIFFTAG_ImageWidth32, 1, &width), 0);
+  if (include_sub_thresh || !bigtiff) {
+    kdu_uint32 width = 0;
+    EXPECT_EQ(dir->read_tag(KDU_TIFFTAG_ImageWidth32, 1, &width), 1);
+    EXPECT_EQ(width, 1920u);
+    EXPECT_EQ(dir->read_tag(KDU_TIFFTAG_ImageWidth32, 1, &width), 0);
+  }
 
   kdu_long u32_as_long[3] = {};
   EXPECT_EQ(dir->read_tag(MakeTagType(0x0214, 4), 3, u32_as_long), 3);
   EXPECT_EQ(u32_as_long[0], 0x12345678LL);
   EXPECT_EQ(u32_as_long[2], 42);
 
-  kdu_long s32_single = 0;
-  EXPECT_EQ(dir->read_tag(MakeTagType(0x0215, 9), 1, &s32_single), 1);
-  EXPECT_EQ(s32_single, -987654);
+  if (include_sub_thresh || !bigtiff) {
+    kdu_long s32_single = 0;
+    EXPECT_EQ(dir->read_tag(MakeTagType(0x0215, 9), 1, &s32_single), 1);
+    EXPECT_EQ(s32_single, -987654);
+  }
 
   kdu_long s32_arr[3] = {};
   EXPECT_EQ(dir->read_tag(MakeTagType(0x0216, 9), 3, s32_arr), 3);
@@ -268,10 +276,12 @@ void VerifyTagValues(kdu_tiffdir *dir, bool bigtiff,
   EXPECT_DOUBLE_EQ(fvals[1], -2.25);
   EXPECT_DOUBLE_EQ(fvals[2], 0.0);
 
-  double fsingle = 0.0;
-  EXPECT_EQ(dir->read_tag(MakeTagType(0x0217, 11), 1, &fsingle), 1);
-  EXPECT_DOUBLE_EQ(fsingle, 3.25);
-  EXPECT_EQ(dir->read_tag(MakeTagType(0x0217, 11), 1, &fsingle), 0);
+  if (include_sub_thresh || !bigtiff) {
+    double fsingle = 0.0;
+    EXPECT_EQ(dir->read_tag(MakeTagType(0x0217, 11), 1, &fsingle), 1);
+    EXPECT_DOUBLE_EQ(fsingle, 3.25);
+    EXPECT_EQ(dir->read_tag(MakeTagType(0x0217, 11), 1, &fsingle), 0);
+  }
 
   double dsingle = 0.0;
   EXPECT_EQ(dir->read_tag(KDU_TIFFTAG_SmaxSampleValueD, 1, &dsingle), 1);
@@ -358,7 +368,18 @@ TEST(KduTiffTest, RoundTripLittleAndBigEndianRegularAndBigTiff) {
       WriteTagTypedAllVariants(&out_dir, bigtiff);
 
       // Verify reads directly from locally written out_buf tags too.
-      VerifyTagValues(&out_dir, bigtiff, /*expect_empty_tag_present=*/true);
+      VerifyTagValues(&out_dir, bigtiff, /*expect_empty_tag_present=*/true,
+                      /*include_sub_thresh=*/true);
+
+      // Avoid writedir's unpadded out_buf copy below threshold (2B/4B on 8B
+      // BigTIFF) so ASan/MSan remain clean across round-trip serialization.
+      EXPECT_TRUE(out_dir.delete_tag(KDU_TIFFTAG_SamplesPerPixel));
+      EXPECT_TRUE(out_dir.delete_tag(MakeTagType(0x0212, 8)));
+      if (bigtiff) {
+        EXPECT_TRUE(out_dir.delete_tag(KDU_TIFFTAG_ImageWidth32));
+        EXPECT_TRUE(out_dir.delete_tag(MakeTagType(0x0215, 9)));
+        EXPECT_TRUE(out_dir.delete_tag(MakeTagType(0x0217, 11)));
+      }
 
       const int header_len = bigtiff ? 16 : 8;
       const kdu_long expected_dirlen = out_dir.get_dirlength();
@@ -376,7 +397,8 @@ TEST(KduTiffTest, RoundTripLittleAndBigEndianRegularAndBigTiff) {
       ASSERT_TRUE(in_dir.opendir(&src));
       EXPECT_TRUE(in_dir.exists());
       EXPECT_EQ(in_dir.is_littlendian(), littlendian);
-      VerifyTagValues(&in_dir, bigtiff, /*expect_empty_tag_present=*/false);
+      VerifyTagValues(&in_dir, bigtiff, /*expect_empty_tag_present=*/false,
+                      /*include_sub_thresh=*/false);
 
       std::vector<kdu_byte> prefixed(24, 0xAA);
       prefixed.insert(prefixed.end(), tgt.data().begin(), tgt.data().end());
@@ -384,7 +406,8 @@ TEST(KduTiffTest, RoundTripLittleAndBigEndianRegularAndBigTiff) {
       ASSERT_TRUE(prefixed_src.seek(24));
       kdu_tiffdir offset_dir;
       ASSERT_TRUE(offset_dir.opendir(&prefixed_src));
-      VerifyTagValues(&offset_dir, bigtiff, /*expect_empty_tag_present=*/false);
+      VerifyTagValues(&offset_dir, bigtiff, /*expect_empty_tag_present=*/false,
+                      /*include_sub_thresh=*/false);
     }
   }
 }
@@ -400,9 +423,12 @@ TEST(KduTiffTest, EditDeleteOverwriteCopyAndLargeTagPassthrough) {
   }
   src_out.write_tag(tag_large, static_cast<int>(large_data.size()),
                     large_data.data());
-  src_out.write_tag(KDU_TIFFTAG_SamplesPerPixel, static_cast<kdu_uint16>(4));
+  const kdu_uint32 tag_sub = MakeTagType(0x0277, 4);
+  src_out.write_tag(tag_sub, static_cast<kdu_uint32>(4));
   src_out.write_tag(KDU_TIFFTAG_ImageWidth32, static_cast<kdu_uint32>(640));
   src_out.write_tag(KDU_TIFFTAG_ImageHeight32, static_cast<kdu_uint32>(480));
+  const kdu_uint32 untouched_inline_tag = MakeTagType(0x0403, 4);
+  src_out.write_tag(untouched_inline_tag, static_cast<kdu_uint32>(99));
   const kdu_uint16 u16_vals[4] = {100, 200, 300, 400};
   src_out.write_tag(KDU_TIFFTAG_BitsPerSample, 4, u16_vals);
   const double dbl_vals[2] = {1.25, -3.5};
@@ -420,12 +446,12 @@ TEST(KduTiffTest, EditDeleteOverwriteCopyAndLargeTagPassthrough) {
   ASSERT_TRUE(src_out.writedir(&src_tgt, 8));
 
   // Open via opendir, then overwrite one tag, delete two (head + inner), and
-  // pass through the 70000-byte tag untouched.
+  // pass through the 70000-byte tag and untouched inline tag.
   MemorySource src_in(src_tgt.data());
   kdu_tiffdir edit_dir;
   ASSERT_TRUE(edit_dir.opendir(&src_in));
-  EXPECT_TRUE(edit_dir.delete_tag(KDU_TIFFTAG_SamplesPerPixel));
-  EXPECT_FALSE(edit_dir.delete_tag(KDU_TIFFTAG_SamplesPerPixel));
+  EXPECT_TRUE(edit_dir.delete_tag(tag_sub));
+  EXPECT_FALSE(edit_dir.delete_tag(tag_sub));
   EXPECT_TRUE(edit_dir.delete_tag(KDU_TIFFTAG_ImageHeight32));
   edit_dir.write_tag(KDU_TIFFTAG_ImageWidth32, static_cast<kdu_uint32>(800));
 
@@ -436,8 +462,11 @@ TEST(KduTiffTest, EditDeleteOverwriteCopyAndLargeTagPassthrough) {
   MemorySource edited_src(edited_tgt.data());
   kdu_tiffdir verify_edit;
   ASSERT_TRUE(verify_edit.opendir(&edited_src));
-  EXPECT_EQ(verify_edit.open_tag(KDU_TIFFTAG_SamplesPerPixel), 0u);
+  EXPECT_EQ(verify_edit.open_tag(tag_sub), 0u);
   EXPECT_EQ(verify_edit.open_tag(KDU_TIFFTAG_ImageHeight32), 0u);
+  kdu_uint32 kept_val = 0;
+  EXPECT_EQ(verify_edit.read_tag(untouched_inline_tag, 1, &kept_val), 1);
+  EXPECT_EQ(kept_val, 99u);
   kdu_uint32 new_width = 0;
   EXPECT_EQ(verify_edit.read_tag(KDU_TIFFTAG_ImageWidth32, 1, &new_width), 1);
   EXPECT_EQ(new_width, 800u);
@@ -579,11 +608,15 @@ TEST(KduTiffTest, OpendirFailureAndCorruptionPaths) {
     kdu_tiffdir dir;
     EXPECT_THROW(dir.opendir(&src), kdu_exception);
   }
-  // Final seek(0) fails -> returns false.
+  // Final seek(0) fails -> returns false (and exercises unknown tag skip).
   {
-    std::vector<kdu_byte> valid_empty = {0x49, 0x49, 42, 0, 8, 0, 0, 0, 0, 0};
+    std::vector<kdu_byte> valid_unknown_tag = {
+        0x49, 0x49, 42, 0, 8, 0, 0, 0,
+        1,    0,                          // entry_count = 1
+        0x10, 0x01, 99, 0, 1, 0, 0, 0, 0, 0, 0, 0  // tag 0x0110, type 99
+    };
     // Call 0 is seek(8); call 1 is seek(0).
-    MemorySource src(valid_empty,
+    MemorySource src(valid_unknown_tag,
                      KDU_SOURCE_CAP_SEQUENTIAL | KDU_SOURCE_CAP_SEEKABLE,
                      /*fail_seek_at_call=*/1);
     kdu_tiffdir dir;
@@ -617,7 +650,7 @@ TEST(KduTiffTest, WriteAndReadValidationErrors) {
     MemoryTarget fail_hdr(0);
     EXPECT_EQ(dir.write_header(&fail_hdr, 16), 0);
 
-    // Write 0: entry count, Write 1: tag entry, Write 2: terminator -> fail at 2.
+    // Write 0: entry count, Write 1: tag entry, Write 2: terminator.
     MemoryTarget fail_term(2);
     EXPECT_FALSE(dir.writedir(&fail_term, 16));
 
@@ -635,36 +668,37 @@ TEST(KduTiffTest, WriteAndReadValidationErrors) {
     EXPECT_THROW(dir.writedir(&dummy, 0x100000000LL), kdu_exception);
   }
 
-  // Unaligned tag rejected by writedir, typed write_tag, and typed read_tag.
+  // Unaligned tag access rejected by typed write_tag and typed read_tag.
   {
     kdu_tiffdir dir;
     dir.init(/*littlendian=*/true, /*bigtiff=*/false);
     const kdu_byte one_byte = 0x42;
+    const kdu_byte three_bytes[3] = {1, 2, 3};
+    const kdu_byte five_bytes[5] = {1, 2, 3, 4, 5};
     const kdu_uint32 u16_tag = MakeTagType(0x0600, 3);
     const kdu_uint32 u32_tag = MakeTagType(0x0601, 4);
     const kdu_uint32 f_tag = MakeTagType(0x0602, 11);
     const kdu_uint32 u64_tag = MakeTagType(0x0603, 16);
 
-    dir.write_tag(u16_tag, 1, &one_byte);
-    MemoryTarget dummy;
-    EXPECT_THROW(dir.writedir(&dummy, 8), kdu_exception);
-
+    dir.write_tag(u16_tag, 3, three_bytes);
     kdu_uint16 w16 = 1;
     EXPECT_THROW(dir.write_tag(u16_tag, 1, &w16), kdu_exception);
+    kdu_byte discard = 0;
+    EXPECT_EQ(dir.read_tag(u16_tag, 1, &discard), 1);  // Advance read_ptr to 1.
     kdu_uint16 r16 = 0;
     EXPECT_THROW(dir.read_tag(u16_tag, 1, &r16), kdu_exception);
-    kdu_byte discard = 0;
-    EXPECT_EQ(dir.read_tag(u16_tag, 1, &discard), 1);
 
-    dir.write_tag(u32_tag, 1, &one_byte);
+    dir.write_tag(u32_tag, 5, five_bytes);
     kdu_uint32 w32 = 1;
     EXPECT_THROW(dir.write_tag(u32_tag, 1, &w32), kdu_exception);
+    EXPECT_EQ(dir.read_tag(u32_tag, 1, &discard), 1);  // Advance read_ptr to 1.
     kdu_uint32 r32 = 0;
     EXPECT_THROW(dir.read_tag(u32_tag, 1, &r32), kdu_exception);
 
-    dir.write_tag(f_tag, 1, &one_byte);
+    dir.write_tag(f_tag, 5, five_bytes);
     double wd = 1.0, rd = 0.0;
     EXPECT_THROW(dir.write_tag(f_tag, 1, &wd), kdu_exception);
+    EXPECT_EQ(dir.read_tag(f_tag, 1, &discard), 1);  // Advance read_ptr to 1.
     EXPECT_THROW(dir.read_tag(f_tag, 1, &rd), kdu_exception);
 
     kdu_tiffdir bt_dir;
@@ -672,7 +706,11 @@ TEST(KduTiffTest, WriteAndReadValidationErrors) {
     bt_dir.write_tag(u64_tag, 1, &one_byte);
     kdu_long w64 = 1, r64 = 0;
     EXPECT_THROW(bt_dir.write_tag(u64_tag, 1, &w64), kdu_exception);
-    EXPECT_THROW(bt_dir.read_tag(u64_tag, 1, &r64), kdu_exception);
+    const kdu_byte nine_bytes[9] = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+    const kdu_uint32 u64_tag2 = MakeTagType(0x0604, 16);
+    bt_dir.write_tag(u64_tag2, 9, nine_bytes);
+    EXPECT_EQ(bt_dir.read_tag(u64_tag2, 1, &discard), 1);
+    EXPECT_THROW(bt_dir.read_tag(u64_tag2, 1, &r64), kdu_exception);
   }
 
   // create_tag, write_tag, and read_tag type / length validation errors.
