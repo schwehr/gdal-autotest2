@@ -67,7 +67,7 @@ TEST(GDALDriverManagerTest, DriverCount) {
   // If you enable more drivers, set this number to the new total number of
   // drivers and make sure that there are C++ and Python tests for
   // every active driver.
-  EXPECT_EQ(38, manager->GetDriverCount());
+  EXPECT_EQ(39, manager->GetDriverCount());
 }
 
 TEST(GDALDriverManagerTest, RemoveSingleDriver) {

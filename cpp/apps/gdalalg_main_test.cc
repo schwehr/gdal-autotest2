@@ -11,16 +11,28 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Tests for GDALMainAlgorithm (apps/gdalalg_main.cpp).
+//
+// See also:
+//   https://github.com/OSGeo/gdal/blob/master/apps/gdalalg_main.cpp
 
 #include "third_party/gdal/apps/gdalalg_main.h"
 
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "testing/base/public/gunit.h"
-#include "third_party/absl/cleanup/cleanup.h"
 #include "third_party/gdal/autotest2/cpp/util/error_handler.h"
-#include "third_party/gdal/gcore/gdalalgorithm_cpp.h"
+#include "third_party/gdal/gcore/gdal.h"
+#include "third_party/gdal/gcore/gdal_dataset.h"
+#include "third_party/gdal/gcore/gdal_drivermanager.h"
+#include "third_party/gdal/gcore/gdal_frmts.h"
+#include "third_party/gdal/ogr/ogr_core.h"
+#include "third_party/gdal/ogr/ogr_spatialref.h"
+#include "third_party/gdal/ogr/ogrsf_frmts/ogrsf_frmts.h"
 #include "third_party/gdal/port/cpl_error.h"
 #include "third_party/gdal/port/cpl_progress.h"
 #include "third_party/gdal/port/cpl_vsi.h"
@@ -28,81 +40,9 @@
 namespace autotest2 {
 namespace {
 
-// Mock algorithm for pipeline simulation.
-class MockPipelineAlgorithm final : public GDALAlgorithm {
- public:
-  static constexpr const char* NAME = "pipeline";
-  static constexpr const char* DESCRIPTION = "Mock pipeline algorithm";
-  static constexpr const char* HELP_URL = "";
+constexpr char kTestDir[] = "/vsimem/gdalalg_main_test";
 
-  static std::vector<std::string> GetAliasesStatic() { return {}; }
-
-  MockPipelineAlgorithm() : GDALAlgorithm(NAME, DESCRIPTION, HELP_URL) {}
-
-  bool ParseCommandLineArguments(
-      const std::vector<std::string>& args) override {
-    if (simulate_raster_vector_error) {
-      CPLError(CE_Failure, CPLE_AppDefined,
-               "Dataset has both raster and vector content");
-      return false;
-    }
-    return should_succeed;
-  }
-
-  std::string GetUsageForCLI(bool shortUsage,
-                             const UsageOptions& usageOptions) const override {
-    return "Mock pipeline usage";
-  }
-
-  static inline bool should_succeed = true;
-  static inline bool simulate_raster_vector_error = false;
-
- protected:
-  bool RunImpl(GDALProgressFunc, void*) override { return true; }
-};
-
-// Mock algorithm for info simulation.
-class MockInfoAlgorithm final : public GDALAlgorithm {
- public:
-  static constexpr const char* NAME = "info";
-  static constexpr const char* DESCRIPTION = "Mock info algorithm";
-  static constexpr const char* HELP_URL = "";
-
-  static std::vector<std::string> GetAliasesStatic() { return {}; }
-
-  MockInfoAlgorithm() : GDALAlgorithm(NAME, DESCRIPTION, HELP_URL) {
-    if (add_layer_arg) {
-      AddArg("layer", 0, "Layer name", &layer_value_);
-    }
-  }
-
-  bool ParseCommandLineArguments(
-      const std::vector<std::string>& args) override {
-    if (simulate_raster_vector_error) {
-      CPLError(CE_Failure, CPLE_AppDefined,
-               "Dataset has both raster and vector content");
-      return false;
-    }
-    return should_succeed;
-  }
-
-  std::string GetUsageForCLI(bool shortUsage,
-                             const UsageOptions& usageOptions) const override {
-    return "Mock info usage";
-  }
-
-  static inline bool should_succeed = true;
-  static inline bool simulate_raster_vector_error = false;
-  static inline bool add_layer_arg = false;
-
- protected:
-  bool RunImpl(GDALProgressFunc, void*) override { return true; }
-
- private:
-  std::string layer_value_;
-};
-
-// Mock algorithm for sub-algorithm testing and typo detection.
+// Mock sub-algorithm with a non-colliding name for typo suggestion testing.
 class MockSubAlgorithm final : public GDALAlgorithm {
  public:
   static constexpr const char* NAME = "mocksubcommand";
@@ -117,25 +57,84 @@ class MockSubAlgorithm final : public GDALAlgorithm {
   bool RunImpl(GDALProgressFunc, void*) override { return true; }
 };
 
+void CreateTinyTiff(const std::string& path) {
+  GDALDriver* drv = GetGDALDriverManager()->GetDriverByName("GTiff");
+  ASSERT_NE(nullptr, drv);
+  std::unique_ptr<GDALDataset> ds(
+      drv->Create(path.c_str(), 4, 4, 1, GDT_Byte, nullptr));
+  ASSERT_NE(nullptr, ds);
+  std::vector<uint8_t> pixels(16, 42);
+  ASSERT_EQ(CE_None,
+            ds->GetRasterBand(1)->RasterIO(GF_Write, 0, 0, 4, 4, pixels.data(),
+                                           4, 4, GDT_Byte, 0, 0, nullptr));
+}
+
+void WriteVsimemFile(const std::string& path, const std::string& content) {
+  VSILFILE* fp = VSIFOpenL(path.c_str(), "wb");
+  ASSERT_NE(nullptr, fp);
+  ASSERT_EQ(content.size(), VSIFWriteL(content.data(), 1, content.size(), fp));
+  ASSERT_EQ(0, VSIFCloseL(fp));
+}
+
+void CreateTinyGeoJson(const std::string& path) {
+  WriteVsimemFile(path,
+                  R"json({
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [1.0, 2.0] },
+      "properties": { "id": 1 }
+    }
+  ]
+})json");
+}
+
+void CreateMixedRasterVectorGpkg(const std::string& path) {
+  GDALDriver* mem_drv = GetGDALDriverManager()->GetDriverByName("MEM");
+  ASSERT_NE(nullptr, mem_drv);
+  std::unique_ptr<GDALDataset> mem_ds(
+      mem_drv->Create("", 4, 4, 1, GDT_Byte, nullptr));
+  ASSERT_NE(nullptr, mem_ds);
+  OGRSpatialReference srs;
+  ASSERT_EQ(OGRERR_NONE, srs.importFromEPSG(4326));
+  mem_ds->SetSpatialRef(&srs);
+  double gt[6] = {0.0, 0.01, 0.0, 1.0, 0.0, -0.01};
+  ASSERT_EQ(CE_None, mem_ds->SetGeoTransform(gt));
+
+  GDALDriver* gpkg_drv = GetGDALDriverManager()->GetDriverByName("GPKG");
+  ASSERT_NE(nullptr, gpkg_drv);
+  std::unique_ptr<GDALDataset> gpkg_ds(gpkg_drv->CreateCopy(
+      path.c_str(), mem_ds.get(), FALSE, nullptr, nullptr, nullptr));
+  ASSERT_NE(nullptr, gpkg_ds);
+  gpkg_ds.reset();
+
+  std::unique_ptr<GDALDataset> update_ds(
+      GDALDataset::Open(path.c_str(), GDAL_OF_VECTOR | GDAL_OF_UPDATE, nullptr,
+                        nullptr, nullptr));
+  ASSERT_NE(nullptr, update_ds);
+  OGRLayer* layer = update_ds->CreateLayer("vec", &srs, wkbPoint, nullptr);
+  ASSERT_NE(nullptr, layer);
+  ASSERT_EQ(CE_None, update_ds->FlushCache());
+  update_ds.reset();
+}
+
 class GdalalgMainTest : public ::testing::Test {
  protected:
   static void SetUpTestSuite() {
     auto& registry = GDALGlobalAlgorithmRegistry::GetSingleton();
     registry.Register<MockSubAlgorithm>();
-    registry.Register<MockPipelineAlgorithm>();
-    registry.Register<MockInfoAlgorithm>();
   }
 
-  void SetUp() override { ResetMocks(); }
-  void TearDown() override { ResetMocks(); }
-
-  static void ResetMocks() {
-    MockPipelineAlgorithm::should_succeed = true;
-    MockPipelineAlgorithm::simulate_raster_vector_error = false;
-    MockInfoAlgorithm::should_succeed = true;
-    MockInfoAlgorithm::simulate_raster_vector_error = false;
-    MockInfoAlgorithm::add_layer_arg = false;
+  void SetUp() override {
+    GDALRegister_GTiff();
+    GDALRegister_MEM();
+    RegisterOGRGeoPackage();
+    RegisterOGRGeoJSON();
+    ASSERT_EQ(0, VSIMkdir(kTestDir, 0755));
   }
+
+  void TearDown() override { VSIRmdirRecursive(kTestDir); }
 };
 
 TEST_F(GdalalgMainTest, BasicPropertiesAndUsage) {
@@ -196,38 +195,35 @@ TEST_F(GdalalgMainTest, SubcommandAndTypoSuggestion) {
 }
 
 TEST_F(GdalalgMainTest, ShortestFormPipelineRead) {
-  // Normal success with vector path.
+  const std::string tif_path = std::string(kTestDir) + "/pipe.tif";
+  CreateTinyTiff(tif_path);
+
+  const std::string geojson_path = std::string(kTestDir) + "/pipe.geojson";
+  CreateTinyGeoJson(geojson_path);
+
+  // Valid shortest-form raster pipeline read.
   {
-    MockPipelineAlgorithm::should_succeed = true;
-    MockPipelineAlgorithm::simulate_raster_vector_error = false;
     GDALMainAlgorithm alg;
-    EXPECT_TRUE(alg.ParseCommandLineArguments({"read", "input.tif"}));
-    EXPECT_EQ("Mock pipeline usage",
-              alg.GetUsageForCLI(/*shortUsage=*/false, {}));
+    EXPECT_TRUE(alg.ParseCommandLineArguments({"read", tif_path, "!", "info"}));
+    EXPECT_FALSE(alg.GetUsageForCLI(/*shortUsage=*/false, {}).empty());
   }
 
-  // Failure with raster/vector error message suppresses usage.
+  // Valid shortest-form vector pipeline read.
   {
-    CPLErrorReset();
-    MockPipelineAlgorithm::should_succeed = false;
-    MockPipelineAlgorithm::simulate_raster_vector_error = true;
     GDALMainAlgorithm alg;
-    {
-      WithQuietHandler quiet;
-      EXPECT_FALSE(alg.ParseCommandLineArguments({"read", "input.tif"}));
-    }
-    EXPECT_TRUE(alg.GetUsageForCLI(/*shortUsage=*/false, {}).empty());
+    EXPECT_TRUE(
+        alg.ParseCommandLineArguments({"read", geojson_path, "!", "info"}));
+    EXPECT_FALSE(alg.GetUsageForCLI(/*shortUsage=*/false, {}).empty());
   }
 
   // Normal failure falls through.
   {
     CPLErrorReset();
-    MockPipelineAlgorithm::should_succeed = false;
-    MockPipelineAlgorithm::simulate_raster_vector_error = false;
     GDALMainAlgorithm alg;
     {
       WithQuietHandler quiet;
-      EXPECT_FALSE(alg.ParseCommandLineArguments({"read", "input.tif"}));
+      EXPECT_FALSE(
+          alg.ParseCommandLineArguments({"read", "/vsimem/no_such_input.tif"}));
     }
   }
 
@@ -240,59 +236,52 @@ TEST_F(GdalalgMainTest, ShortestFormPipelineRead) {
 }
 
 TEST_F(GdalalgMainTest, ShortestFormInfoDirectFile) {
-  const std::string test_dir = "/vsimem/gdalalg_main_test/shortest_info";
-  ASSERT_EQ(0, VSIMkdir(test_dir.c_str(), 0755));
-  absl::Cleanup cleanup = [&]() { VSIRmdirRecursive(test_dir.c_str()); };
+  const std::string tif_path = std::string(kTestDir) + "/direct.tif";
+  CreateTinyTiff(tif_path);
 
-  const std::string file_path = test_dir + "/test.tif";
-  VSILFILE* fp = VSIFOpenL(file_path.c_str(), "wb");
-  ASSERT_NE(nullptr, fp);
-  ASSERT_EQ(0, VSIFCloseL(fp));
+  const std::string geojson_path = std::string(kTestDir) + "/direct.geojson";
+  CreateTinyGeoJson(geojson_path);
+
+  const std::string gpkg_path = std::string(kTestDir) + "/mixed_info.gpkg";
+  CreateMixedRasterVectorGpkg(gpkg_path);
+
+  const std::string invalid_path = std::string(kTestDir) + "/corrupt.bin";
+  WriteVsimemFile(invalid_path, "not a dataset");
 
   // Raster path (no "layer" arg in info algorithm).
   {
-    MockInfoAlgorithm::add_layer_arg = false;
-    MockInfoAlgorithm::should_succeed = true;
-    MockInfoAlgorithm::simulate_raster_vector_error = false;
     GDALMainAlgorithm alg;
-    EXPECT_TRUE(alg.ParseCommandLineArguments({file_path}));
-    EXPECT_EQ("Mock info usage", alg.GetUsageForCLI(/*shortUsage=*/false, {}));
+    EXPECT_TRUE(alg.ParseCommandLineArguments({tif_path}));
+    EXPECT_NE(std::string::npos,
+              alg.GetUsageForCLI(/*shortUsage=*/false, {}).find("raster"));
   }
 
   // Vector path ("layer" arg present in info algorithm).
   {
-    MockInfoAlgorithm::add_layer_arg = true;
-    MockInfoAlgorithm::should_succeed = true;
-    MockInfoAlgorithm::simulate_raster_vector_error = false;
     GDALMainAlgorithm alg;
-    EXPECT_TRUE(alg.ParseCommandLineArguments({file_path}));
-    EXPECT_EQ("Mock info usage", alg.GetUsageForCLI(/*shortUsage=*/false, {}));
+    EXPECT_TRUE(alg.ParseCommandLineArguments({geojson_path}));
+    EXPECT_NE(std::string::npos,
+              alg.GetUsageForCLI(/*shortUsage=*/false, {}).find("vector"));
   }
 
   // Raster/vector error message suppresses usage.
   {
     CPLErrorReset();
-    MockInfoAlgorithm::add_layer_arg = false;
-    MockInfoAlgorithm::should_succeed = false;
-    MockInfoAlgorithm::simulate_raster_vector_error = true;
     GDALMainAlgorithm alg;
     {
       WithQuietHandler quiet;
-      EXPECT_FALSE(alg.ParseCommandLineArguments({file_path}));
+      EXPECT_FALSE(alg.ParseCommandLineArguments({gpkg_path}));
     }
     EXPECT_TRUE(alg.GetUsageForCLI(/*shortUsage=*/false, {}).empty());
   }
 
-  // Normal failure falls through.
+  // Normal failure on unrecognized file falls through.
   {
     CPLErrorReset();
-    MockInfoAlgorithm::add_layer_arg = false;
-    MockInfoAlgorithm::should_succeed = false;
-    MockInfoAlgorithm::simulate_raster_vector_error = false;
     GDALMainAlgorithm alg;
     {
       WithQuietHandler quiet;
-      EXPECT_FALSE(alg.ParseCommandLineArguments({file_path}));
+      EXPECT_FALSE(alg.ParseCommandLineArguments({invalid_path}));
     }
   }
 
@@ -300,8 +289,8 @@ TEST_F(GdalalgMainTest, ShortestFormInfoDirectFile) {
   {
     GDALMainAlgorithm alg;
     WithQuietHandler quiet;
-    EXPECT_FALSE(
-        alg.ParseCommandLineArguments({test_dir + "/nonexistent.tif"}));
+    EXPECT_FALSE(alg.ParseCommandLineArguments(
+        {std::string(kTestDir) + "/missing.tif"}));
   }
 }
 

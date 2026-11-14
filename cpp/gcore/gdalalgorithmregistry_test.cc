@@ -145,7 +145,10 @@ TEST(GdalalgorithmregistryTest, CustomAndGlobalRegistry) {
 
   StringListPtr names(GDALAlgorithmRegistryGetAlgNames(h_reg.get()),
                       CSLDestroy);
-  EXPECT_EQ(nullptr, names);
+  ASSERT_NE(nullptr, names);
+  EXPECT_THAT(CslToVector(names.get()),
+              ::testing::IsSupersetOf({"convert", "dataset", "info", "mdim",
+                                       "pipeline", "raster", "vector", "vsi"}));
 
   std::unique_ptr<GDALAlgorithmHS, decltype(&GDALAlgorithmRelease)> h_alg(
       GDALAlgorithmRegistryInstantiateAlg(h_reg.get(), "custom_group"),
