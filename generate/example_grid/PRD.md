@@ -20,18 +20,14 @@
 
 ### 1.1 Context
 
-b/559677208 lets Earth Engine (EE) users choose the resampling method used to
+GDAL users choose the resampling method used to
 build the overview levels (pyramids) of Cloud Optimized GeoTIFF exports. The
 methods are `NEAREST`, `AVERAGE`, `BILINEAR`, `CUBIC`, `CUBIC_SPLINE` (GDAL
 `CUBICSPLINE`), `LANCZOS`, `MODE`, `RMS` and `GAUSS`.
-The Python client exposes them as
-[`formatOptions.pyramidOptions.resamplingMethod`](python/ee/batch.py#L275-L279).
-If no method is given, the API documents `CUBIC` for floating-point data and
-`NEAREST` for integer data.
 
-Overviews are what users see when they zoom out on a COG. They are also what
-EE shows for COG-backed assets, which is how b/543497941 started. The nine
-methods treat the same data very differently:
+Overviews are what users see when they zoom out on a COG. They are also what EE
+shows for COG-backed assets. The nine methods treat the same data very
+differently:
 
 *   some invent class codes that do not exist in the input;
 *   some overshoot the input data range;

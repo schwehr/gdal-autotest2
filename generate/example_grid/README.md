@@ -1,8 +1,7 @@
 <!-- disableFinding(LINE_OVER_80) -->
 # Overview resampling test grids
 
-Test data for GDAL overview resampling (`OVERVIEW_RESAMPLING`, exposed by
-Earth Engine as `TiffPyramidOptions.ResamplingMethod`, b/559677208). See
+Test data for GDAL overview resampling (`OVERVIEW_RESAMPLING`). See
 [PRD.md](PRD.md), [PLAN.md](PLAN.md), [TASKS.md](TASKS.md) and
 [LEDGER.md](LEDGER.md).
 
