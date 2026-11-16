@@ -237,6 +237,7 @@ TEST(FplLerc2ExtTest, DecodeRejectsMalformedPlaneZeroHeadersAndCoversHelpers) {
   const std::vector<float> sample = {1.0f, 2.0f, 3.0f, 4.0f};
   const std::vector<unsigned char> valid =
       EncodeSurface(sample, false, 2, 2, 1);
+  ASSERT_GT(valid.size(), 6U);
 
   std::vector<float> out(4, 0.0f);
 

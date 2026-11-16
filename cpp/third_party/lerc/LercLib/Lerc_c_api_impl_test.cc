@@ -60,12 +60,16 @@ constexpr std::size_t Idx(DataRangeArrOrder field) noexcept {
   return static_cast<std::size_t>(field);
 }
 
-static_assert(LERC_VERSION_MAJOR == 4);
-static_assert(LERC_VERSION_MINOR == 2);
-static_assert(LERC_VERSION_PATCH == 0);
-static_assert(LERC_VERSION_NUMBER == 40200);
+static_assert(LERC_VERSION_MAJOR >= 4);
+static_assert(LERC_COMPUTE_VERSION(4, 2, 0) == 40200);
+static_assert(LERC_VERSION_NUMBER == LERC_COMPUTE_VERSION(LERC_VERSION_MAJOR,
+                                                          LERC_VERSION_MINOR,
+                                                          LERC_VERSION_PATCH));
 static_assert(LERC_AT_LEAST_VERSION(4, 2, 0));
-static_assert(!LERC_AT_LEAST_VERSION(4, 2, 1));
+static_assert(LERC_AT_LEAST_VERSION(LERC_VERSION_MAJOR, LERC_VERSION_MINOR,
+                                    LERC_VERSION_PATCH));
+static_assert(!LERC_AT_LEAST_VERSION(LERC_VERSION_MAJOR, LERC_VERSION_MINOR,
+                                     LERC_VERSION_PATCH + 1));
 static_assert(kOk == 0U);
 static_assert(kInfoArrSize == 11U);
 static_assert(kDataRangeArrSize == 3U);

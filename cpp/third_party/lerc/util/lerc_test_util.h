@@ -67,9 +67,6 @@ inline constexpr std::size_t kLerc2ChecksumOffset =
 inline constexpr std::size_t kLerc2BodyOffset =
     kLerc2ChecksumOffset + sizeof(unsigned int);
 
-inline constexpr std::size_t kLerc2V2BlobSizeOffset = 26U;
-inline constexpr std::size_t kLerc2V3BlobSizeOffset = 30U;
-
 inline constexpr std::size_t kLerc2NRowsOffset = kLerc2BodyOffset;
 inline constexpr std::size_t kLerc2NColsOffset =
     kLerc2NRowsOffset + sizeof(int);
