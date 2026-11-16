@@ -15,10 +15,6 @@
 // Unit tests for LercNS::BitStuffer
 // (third_party/lerc/LercLib/Lerc1Decode/BitStuffer.cpp).
 //
-// Note: Lerc1Decode::BitStuffer::read() has no bounds parameter; never pass
-// truncated payloads directly to it. Truncated streams are tested through
-// CntZImage::read() / Lerc::Decode().
-//
 // See also:
 //   https://github.com/Esri/lerc/blob/master/src/LercLib/Lerc1Decode/BitStuffer.h
 //   https://github.com/Esri/lerc/blob/master/src/LercLib/Lerc1Decode/BitStuffer.cpp
@@ -67,15 +63,21 @@ TEST(BitStufferTest, RoundTripZeroBitsAndMultipleBitWidthsAndTailSizes) {
     ASSERT_TRUE(EncodeSimpleV2Aligned(zeros, encoded));
 
     const Byte* ptr = encoded.data();
+    std::size_t n_bytes_remaining = encoded.byte_length;
     std::vector<unsigned int> decoded;
-    ASSERT_TRUE(decoder.read(&ptr, decoded));
+    ASSERT_TRUE(
+        decoder.read(&ptr, n_bytes_remaining, decoded, zeros.size()));
     EXPECT_EQ(encoded.data() + encoded.byte_length, ptr);
+    EXPECT_EQ(0U, n_bytes_remaining);
     EXPECT_THAT(decoded, ElementsAreArray(zeros));
 
     const Byte* stale_ptr = encoded.data();
+    std::size_t stale_remaining = encoded.byte_length;
     std::vector<unsigned int> prefilled(zeros.size(), kSentinel);
-    ASSERT_TRUE(decoder.read(&stale_ptr, prefilled));
+    ASSERT_TRUE(
+        decoder.read(&stale_ptr, stale_remaining, prefilled, zeros.size()));
     EXPECT_EQ(encoded.data() + encoded.byte_length, stale_ptr);
+    EXPECT_EQ(0U, stale_remaining);
     EXPECT_THAT(prefilled, Each(kSentinel));
   }
 
@@ -98,9 +100,12 @@ TEST(BitStufferTest, RoundTripZeroBitsAndMultipleBitWidthsAndTailSizes) {
     AlignedBitStuffer2Stream encoded;
     ASSERT_TRUE(EncodeSimpleV2Aligned(expected, encoded));
     const Byte* ptr = encoded.data();
+    std::size_t n_bytes_remaining = encoded.byte_length;
     std::vector<unsigned int> decoded(100, kSentinel);
-    ASSERT_TRUE(decoder.read(&ptr, decoded));
+    ASSERT_TRUE(
+        decoder.read(&ptr, n_bytes_remaining, decoded, expected.size()));
     EXPECT_EQ(encoded.data() + encoded.byte_length, ptr);
+    EXPECT_EQ(0U, n_bytes_remaining);
     EXPECT_EQ(expected.size(), decoded.size());
     EXPECT_THAT(decoded, ElementsAreArray(expected));
   }
@@ -119,9 +124,11 @@ TEST(BitStufferTest, ReadHandlesOneTwoAndFourByteElementCounts) {
     AlignedBitStuffer2Stream encoded;
     ASSERT_TRUE(EncodeSimpleV2Aligned(values, encoded));
     const Byte* ptr = encoded.data();
+    std::size_t n_bytes_remaining = encoded.byte_length;
     std::vector<unsigned int> decoded(100, kSentinel);
-    ASSERT_TRUE(decoder.read(&ptr, decoded));
+    ASSERT_TRUE(decoder.read(&ptr, n_bytes_remaining, decoded, values.size()));
     EXPECT_EQ(encoded.data() + encoded.byte_length, ptr);
+    EXPECT_EQ(0U, n_bytes_remaining);
     EXPECT_EQ(values.size(), decoded.size());
     EXPECT_THAT(decoded, ElementsAreArray(values));
   }
@@ -135,9 +142,11 @@ TEST(BitStufferTest, ReadHandlesOneTwoAndFourByteElementCounts) {
     AlignedBitStuffer2Stream encoded;
     ASSERT_TRUE(EncodeSimpleV2Aligned(values, encoded));
     const Byte* ptr = encoded.data();
+    std::size_t n_bytes_remaining = encoded.byte_length;
     std::vector<unsigned int> decoded(100, kSentinel);
-    ASSERT_TRUE(decoder.read(&ptr, decoded));
+    ASSERT_TRUE(decoder.read(&ptr, n_bytes_remaining, decoded, values.size()));
     EXPECT_EQ(encoded.data() + encoded.byte_length, ptr);
+    EXPECT_EQ(0U, n_bytes_remaining);
     EXPECT_EQ(values.size(), decoded.size());
     EXPECT_THAT(decoded, ElementsAreArray(values));
   }
@@ -147,35 +156,62 @@ TEST(BitStufferTest, ErrorGuardsAndProtectedHelpers) {
   const BitStuffer decoder;
   std::vector<unsigned int> out;
 
-  // 1. Null cursor pointer and invalid bits67 == 3 (byte width 0 -> readUInt
-  //    returns false without dereferencing payload).
-  EXPECT_FALSE(decoder.read(nullptr, out));
+  // 1. Null cursor pointer, empty buffer, and invalid bits67 == 3 (byte width 0
+  //    -> readUInt returns false without dereferencing payload).
+  std::size_t n_bytes_remaining = 0;
+  EXPECT_FALSE(decoder.read(nullptr, n_bytes_remaining, out, 16));
 
   constexpr std::array<Byte, 1> kInvalidWidth = {
       static_cast<Byte>(kBitStufferInvalidCount | 1U)};
   const Byte* ptr = kInvalidWidth.data();
-  EXPECT_FALSE(decoder.read(&ptr, out));
+  n_bytes_remaining = 0;
+  EXPECT_FALSE(decoder.read(&ptr, n_bytes_remaining, out, 16));
+
+  n_bytes_remaining = kInvalidWidth.size();
+  EXPECT_FALSE(decoder.read(&ptr, n_bytes_remaining, out, 16));
 
   // 2. numBits >= 32 in header fails before touching payload.
   // Header byte: bits 6..7 = 2 (1-byte element count), numBits = 32.
   constexpr std::array<Byte, 2> kBadNumBitsHeader = {
       static_cast<Byte>(kBitStufferOneByteCount | 32U), 4};
   ptr = kBadNumBitsHeader.data();
-  EXPECT_FALSE(decoder.read(&ptr, out));
+  n_bytes_remaining = kBadNumBitsHeader.size();
+  EXPECT_FALSE(decoder.read(&ptr, n_bytes_remaining, out, 16));
 
-  // 3. Protected readUInt invalid width and numTailBytesNotNeeded table checks.
+  // 3. Bounds guards: numElements > maxElementCount and truncated payload.
+  {
+    const std::vector<unsigned int> values = {1, 2, 3, 4};
+    AlignedBitStuffer2Stream encoded;
+    ASSERT_TRUE(EncodeSimpleV2Aligned(values, encoded));
+
+    ptr = encoded.data();
+    n_bytes_remaining = encoded.byte_length;
+    EXPECT_FALSE(decoder.read(&ptr, n_bytes_remaining, out, values.size() - 1));
+
+    ptr = encoded.data();
+    n_bytes_remaining = encoded.byte_length - 1;
+    EXPECT_FALSE(decoder.read(&ptr, n_bytes_remaining, out, values.size()));
+  }
+
+  // 4. Protected readUInt invalid width, bounds check, and numTailBytesNotNeeded
+  //    table checks.
   constexpr std::array<Byte, 4> kDummy = {1, 2, 3, 4};
   const Byte* uptr = kDummy.data();
+  std::size_t u_remaining = kDummy.size();
   unsigned int k = 0;
-  EXPECT_FALSE(TestableBitStuffer::readUInt(&uptr, k, 3));
+  EXPECT_FALSE(TestableBitStuffer::readUInt(&uptr, u_remaining, k, 3));
   EXPECT_EQ(kDummy.data(), uptr);
+  EXPECT_EQ(kDummy.size(), u_remaining);
 
   // Header bits67 maps n = (bits67 == 0) ? 4 : 3 - bits67 (0->4B, 1->2B,
   // 2->1B, 3->0B invalid); readUInt accepts widths 1, 2, and 4 only.
-  EXPECT_TRUE(TestableBitStuffer::readUInt(&uptr, k, 1));
+  EXPECT_TRUE(TestableBitStuffer::readUInt(&uptr, u_remaining, k, 1));
   EXPECT_EQ(1U, k);
-  EXPECT_TRUE(TestableBitStuffer::readUInt(&uptr, k, 2));
+  EXPECT_EQ(3U, u_remaining);
+  EXPECT_TRUE(TestableBitStuffer::readUInt(&uptr, u_remaining, k, 2));
   EXPECT_EQ(0x0302U, k);
+  EXPECT_EQ(1U, u_remaining);
+  EXPECT_FALSE(TestableBitStuffer::readUInt(&uptr, u_remaining, k, 2));
 
   EXPECT_EQ(0U, TestableBitStuffer::numTailBytesNotNeeded(4, 8));
   EXPECT_EQ(3U, TestableBitStuffer::numTailBytesNotNeeded(1, 5));

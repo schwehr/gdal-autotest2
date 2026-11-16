@@ -456,8 +456,12 @@ TEST(CntZImageTest, RejectsInvalidHeadersParametersTilesAndTruncations) {
 
   TestableCntZImage timg;
   ASSERT_TRUE(timg.resizeFill0(2, 2));
-  EXPECT_FALSE(timg.readCntTile(&uptr, 1, 1, 0, 1));
-  EXPECT_FALSE(timg.readTiles(true, 1.0, 3, 1, 1.0f, dummy.data()));
+  std::size_t cnt_bytes_remaining =
+      dummy.size() - static_cast<std::size_t>(uptr - dummy.data());
+  EXPECT_FALSE(timg.readCntTile(&uptr, cnt_bytes_remaining, 1, 1, 0, 1));
+  std::size_t tile_bytes_remaining = dummy.size();
+  EXPECT_FALSE(timg.readTiles(true, 1.0, 3, 1, 1.0f, dummy.data(),
+                              tile_bytes_remaining));
 }
 
 }  // namespace
