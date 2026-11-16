@@ -46,6 +46,7 @@ Rewrite of grib.py:
 https://github.com/OSGeo/gdal/blob/master/autotest/gdrivers/grib.py
 """
 
+import contextlib
 import glob
 import os
 import shutil
@@ -273,7 +274,7 @@ class GribTest(gdrivers_util.DriverTestCase, parameterized.TestCase):
       self.CheckBand(4, 4081)
     msg = gdal.GetLastErrorMsg()
     self.assertIn('data access may be incomplete', msg)
-    self.assertEqual(gdal.GetLastErrorType(), 2)
+    self.assertEqual(gdal.GetLastErrorType(), gdal.CE_Warning)
 
   def test_grib_grib2_read_nodata(self):
     ds = gdal.Open(self.getTestFilePath('ds.mint.bin'))
@@ -388,9 +389,28 @@ class GribTest(gdrivers_util.DriverTestCase, parameterized.TestCase):
       ds = gdal.Open(filepath)
       self.assertIsNotNone(ds)
       assert ds is not None
-      cs = ds.GetRasterBand(1).Checksum()
+      band = ds.GetRasterBand(1)
+      cs = band.Checksum()
     if _has_jp2k_driver():
-      self.assertGreaterEqual(cs, 0)
+      self.assertEqual(cs, 12154)
+      expected_md = {
+          'GRIB_REF_TIME': '1417932000',
+          'GRIB_VALID_TIME': '1417964400',
+          'GRIB_FORECAST_SECONDS': '32400',
+          'GRIB_UNIT': '[%]',
+          'GRIB_PDS_TEMPLATE_NUMBERS': (
+              '19 20 2 1 1 0 3 30 1 0 0 0 9 100 0 0 1 56 128 255 0 0 0 0 0 2 0'
+              ' 0'
+          ),
+          'GRIB_PDS_PDTN': '15',
+          'GRIB_COMMENT': 'Icing [%]',
+          'GRIB_SHORT_NAME': '80000-ISBL',
+          'GRIB_ELEMENT': 'ICIP',
+          'GRIB_PDS_TEMPLATE_ASSEMBLED_VALUES': (
+              '19 20 2 1 1 3 30 1 9 100 0 80000 255 0 0 2 0 0'
+          ),
+      }
+      self._assertBandMetadataSubset(band, expected_md)
     else:
       self.assertIn('Is the JPEG2000 driver available?', gdal.GetLastErrorMsg())
 
@@ -1731,18 +1751,18 @@ class GribTest(gdrivers_util.DriverTestCase, parameterized.TestCase):
         encodings.append('JPEG2000')
 
       for encoding in encodings:
-        if encoding != 'SIMPLE_PACKING':
-          gdal.PushErrorHandler()
-        try:
+        error_ctx = (
+            contextlib.nullcontext()
+            if encoding == 'SIMPLE_PACKING'
+            else gdal.quiet_errors()
+        )
+        with error_ctx:
           gdal.Translate(
               tmpfilename,
               test_ds,
               format='GRIB',
               creationOptions=['DATA_ENCODING=' + encoding],
           )
-        finally:
-          if encoding != 'SIMPLE_PACKING':
-            gdal.PopErrorHandler()
         out_ds = gdal.Open(tmpfilename)
         self.assertIsNotNone(
             out_ds, msg=f'Failed to re-open dataset for {encoding}'
