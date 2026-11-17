@@ -2954,11 +2954,34 @@ class OgrGeoJsonTest(ogr_util.DriverTestCase, parameterized.TestCase):
       self.assertEqual(ds.GetLayer(0).GetLayerDefn().GetFieldCount(), 0)
 
   def test_ogr_geojson_67(self):
-    filepath = ogr_util.GetTestFilePath('geojson/grenada.geojson')
-    with ogr.Open(filepath) as ds:
-      self.assertIsNotNone(ds)
-      self.assertEqual(ds.GetDriver().GetName(), 'GeoJSON')
-      self.assertEqual(ds.GetLayer(0).GetFeatureCount(), 1)
+    # Note: The prior test (geojson/grenada.geojson) was removed because of a
+    # conflicting license.
+    # Synthetic FeatureCollection >6000 bytes with "features" before "type".
+    ring = [[round(i * 0.001, 3), 0.0] for i in range(600)]
+    ring.extend([[0.6, 0.1], [0.0, 0.1], [0.0, 0.0]])
+    payload = json.dumps(
+        {
+            'features': [{
+                'geometry': {
+                    'coordinates': [[ring]],
+                    'type': 'MultiPolygon',
+                },
+                'id': 1,
+                'type': 'Feature',
+                'properties': {'name': 'Synthetic'},
+            }],
+            'type': 'FeatureCollection',
+        },
+        separators=(',', ':'),
+    )
+    self.assertGreater(payload.index('"type":"FeatureCollection"'), 6000)
+    with gcore_util.VsimemCleanupDir('/vsimem/geojson_67/') as tmpdir:
+      filepath = f'{tmpdir}/features_before_type.geojson'
+      gdal.FileFromMemBuffer(filepath, payload)
+      with ogr.Open(filepath) as ds:
+        self.assertIsNotNone(ds)
+        self.assertEqual(ds.GetDriver().GetName(), 'GeoJSON')
+        self.assertEqual(ds.GetLayer(0).GetFeatureCount(), 1)
 
   def test_ogr_geojson_id_field_and_id_type(self):
     poly_path = ogr_util.GetTestFilePath('shape/poly/poly.shp')
