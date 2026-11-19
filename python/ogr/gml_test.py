@@ -465,14 +465,18 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
       self.assertEqual(feat.GetField('datetime'), '2019/11/06 12:34:56+00')
 
       self.assertEqual(
-          layer_defn.GetFieldDefn(layer_defn.GetFieldIndex('string')).GetWidth(),
+          layer_defn.GetFieldDefn(
+              layer_defn.GetFieldIndex('string')
+          ).GetWidth(),
           100,
       )
       real_defn = layer_defn.GetFieldDefn(layer_defn.GetFieldIndex('real'))
       self.assertEqual(real_defn.GetWidth(), 4)
       self.assertEqual(real_defn.GetPrecision(), 2)
       self.assertEqual(
-          layer_defn.GetFieldDefn(layer_defn.GetFieldIndex('integer')).GetWidth(),
+          layer_defn.GetFieldDefn(
+              layer_defn.GetFieldIndex('integer')
+          ).GetWidth(),
           5,
       )
 
@@ -487,7 +491,9 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
 
     with ogr.Open(gml_path) as ds:
       layer = ds.GetLayer(0)
-      self.assertEqual(layer.GetGeometryColumn(), 'location1container|location1')
+      self.assertEqual(
+          layer.GetGeometryColumn(), 'location1container|location1'
+      )
       feat = layer.GetNextFeature()
       self.assertEqual(feat.GetField('attrib1'), 'attrib1_value')
       self.assertEqual(feat.GetField('attrib2'), 'attrib2_value')
@@ -497,7 +503,9 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
     zip_path = ogr_util.GetTestFilePath('gml/testgeometryelementpath.zip')
     with ogr.Open(f'/vsizip/{zip_path}/testgeometryelementpath.gml') as ds:
       layer = ds.GetLayer(0)
-      self.assertEqual(layer.GetGeometryColumn(), 'location1container|location1')
+      self.assertEqual(
+          layer.GetGeometryColumn(), 'location1container|location1'
+      )
       feat = layer.GetNextFeature()
       self.assertEqual(feat.GetField('attrib1'), 'attrib1_value')
       self.assertEqual(feat.GetField('attrib2'), 'attrib2_value')
@@ -524,7 +532,7 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
             [6.1, 7.1],
         )
 
-  # test_ogr_gml_14 omitted: requires CURL/HTTP network access unavailable in Google3.
+  # test_ogr_gml_14 omitted: requires CURL/HTTP network access not in Google3.
   # test_ogr_gml_15 omitted: upstream runs the external test_ogrsf CLI binary.
 
   def test_ogr_gml_city_gml(self) -> None:
@@ -681,7 +689,9 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
       self.assertIn('GEOGCS["WGS 84"', sr.ExportToWkt())
       self.assertEqual(layer.GetExtent(), (-80.17, 76.58, -13.32, 51.0))
       feat = layer.GetNextFeature()
-      self.assertEqual(feat.GetGeometryRef().ExportToWkt(), 'POINT (2.09 34.12)')
+      self.assertEqual(
+          feat.GetGeometryRef().ExportToWkt(), 'POINT (2.09 34.12)'
+      )
 
   def test_ogr_gml_18(self) -> None:
     tempdir = self._copy_testdata(['gml/gnis_pop_110.gml'])
@@ -691,7 +701,9 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
       self.assertIn('GEOGCS["WGS 84"', sr.ExportToWkt())
       self.assertEqual(sr.GetDataAxisToSRSAxisMapping(), [2, 1])
       feat = layer.GetNextFeature()
-      self.assertEqual(feat.GetGeometryRef().ExportToWkt(), 'POINT (2.09 34.12)')
+      self.assertEqual(
+          feat.GetGeometryRef().ExportToWkt(), 'POINT (2.09 34.12)'
+      )
 
   def test_ogr_gml_19(self) -> None:
     tempdir = self._copy_testdata(['gml/gnis_pop_110.gml'])
@@ -771,7 +783,9 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
       self.assertEqual(actual_lines, expected_lines)
 
   def test_ogr_gml_22(self) -> None:
-    tempdir = self._copy_testdata(['gml/paris_typical_strike_demonstration.xml'])
+    tempdir = self._copy_testdata(
+        ['gml/paris_typical_strike_demonstration.xml']
+    )
     xml_path = os.path.join(tempdir, 'paris_typical_strike_demonstration.xml')
     with ogr.Open(xml_path) as ds:
       self.assertIsNotNone(ds.GetLayerByName('RouteGeometry'))
@@ -1032,9 +1046,7 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
         ) as ds:
           self.assertEqual(gdal.GetLastErrorMsg(), '')
           feat = ds.GetLayerByName('Suolo').GetNextFeature()
-          self._assert_geom_spatially_equal(
-              feat.GetGeometryRef(), expected_wkt
-          )
+          self._assert_geom_spatially_equal(feat.GetGeometryRef(), expected_wkt)
     else:
       with gdal.config_options({
           'GML_SKIP_RESOLVE_ELEMS': 'NONE',
@@ -1043,9 +1055,7 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
         with ogr.Open(xml_path) as ds:
           self.assertEqual(gdal.GetLastErrorMsg(), '')
           feat = ds.GetLayerByName('Suolo').GetNextFeature()
-          self._assert_geom_spatially_equal(
-              feat.GetGeometryRef(), expected_wkt
-          )
+          self._assert_geom_spatially_equal(feat.GetGeometryRef(), expected_wkt)
 
     with gdal.config_option('GML_FACE_HOLE_NEGATIVE', face_hole_negative):
       with ogr.Open(xml_path) as ds:
@@ -1081,7 +1091,9 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
     )
     gdal.ErrorReset()
     if skip_resolve_as_open_option:
-      with gdal.OpenEx(xml_path, open_options=[f'SKIP_RESOLVE_ELEMS={resolver}']) as ds:
+      with gdal.OpenEx(
+          xml_path, open_options=[f'SKIP_RESOLVE_ELEMS={resolver}']
+      ) as ds:
         self.assertEqual(gdal.GetLastErrorMsg(), '')
         self.CheckFeatureGeometry(
             ds.GetLayerByName('Suolo').GetNextFeature(), expected_wkt
@@ -1134,7 +1146,8 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
       ):
         ds.ExecuteSQL('SELECT ValidateSchema()')
 
-  # test_ogr_gml_43 omitted: disabled upstream (testing.deegree.org times out) and CURL is disabled.
+  # test_ogr_gml_43 omitted: disabled upstream (testing.deegree.org times out)
+  # and CURL is disabled.
 
   def test_ogr_gml_44(self) -> None:
     xsd_content = """<?xml version="1.0" encoding="UTF-8"?>
@@ -1216,7 +1229,7 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
       ),
   )
   def test_ogr_gml_46(self, frmt: str, wkt: str) -> None:
-    # Note: ValidateSchema() skipped because HAVE_LIBXML2 is disabled in Google3.
+    # ValidateSchema() skipped because HAVE_LIBXML2 is disabled in Google3.
     with gcore_util.VsimemCleanupDir('/vsimem/ogr_gml_46'):
       filepath = '/vsimem/ogr_gml_46/ogr_gml_46.gml'
       with ogr.GetDriverByName('GML').CreateDataSource(
@@ -1258,7 +1271,7 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
 
   @parameterized.parameters('wfs10', 'wfs11', 'wfs20')
   def test_ogr_gml_validate_wfs(self, stem: str) -> None:
-    # Note: ValidateSchema() requires HAVE_LIBXML2 + OGC schemas zip; verify opening.
+    # ValidateSchema() requires HAVE_LIBXML2 + OGC schemas zip; verify opening.
     tempdir = self._copy_testdata([f'gml/{stem}.xml', f'gml/{stem}.xsd'])
     with ogr.Open(os.path.join(tempdir, f'{stem}.xml')) as ds:
       self.assertGreaterEqual(ds.GetLayerCount(), 1)
@@ -1277,7 +1290,9 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
     ) as ds:
       layer = ds.GetLayer(0)
       self.assertEqual(layer.GetGeomType(), ogr.wkbUnknown)
-      self.assertEqual(layer.GetLayerDefn().GetFieldDefn(0).GetType(), ogr.OFTString)
+      self.assertEqual(
+          layer.GetLayerDefn().GetFieldDefn(0).GetType(), ogr.OFTString
+      )
 
   def test_ogr_gml_49(self) -> None:
     filepath = '/vsimem/ogr_gml_49.gml'
@@ -1460,7 +1475,9 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
         srs = layer_a.GetSpatialRef()
         self.assertIsNotNone(srs)
         self.assertIn('3067', srs.ExportToWkt())
-        self.assertEqual(layer_a.GetExtent(), (280000, 280000, 7000000, 7000000))
+        self.assertEqual(
+            layer_a.GetExtent(), (280000, 280000, 7000000, 7000000)
+        )
 
         feat = layer_a.GetNextFeature()
         self.assertEqual(feat.GetField('gid'), '1')
@@ -1705,7 +1722,9 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
           feat.GetGeomFieldRef(0).ExportToWkt(),
           'MULTIPOLYGON (((2 49,2 50,3 50,3 49)))',
       )
-      self.assertEqual(feat.GetGeomFieldRef(1).ExportToWkt(), 'POINT (2.5 49.5)')
+      self.assertEqual(
+          feat.GetGeomFieldRef(1).ExportToWkt(), 'POINT (2.5 49.5)'
+      )
 
       feat = layer.GetNextFeature()
       expected = [
@@ -1855,7 +1874,10 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
           ('name_pronunciation', None),
           ('name_spelling_text', ['text']),
           ('name_spelling_script', ['script']),
-          ('nationalCadastalZoningReference', 'nationalCadastalZoningReference'),
+          (
+              'nationalCadastalZoningReference',
+              'nationalCadastalZoningReference',
+          ),
           ('validFrom', '2002-01-01T00:00:00.0Z'),
           ('validTo', '2003-01-01T00:00:00.0Z'),
           ('upperLevelUnit_href', '#ulu.1'),
@@ -1866,7 +1888,9 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
           feat.GetGeomFieldRef(0).ExportToWkt(),
           'MULTIPOLYGON (((2 49,2 50,3 50,3 49)))',
       )
-      self.assertEqual(feat.GetGeomFieldRef(1).ExportToWkt(), 'POINT (2.5 49.5)')
+      self.assertEqual(
+          feat.GetGeomFieldRef(1).ExportToWkt(), 'POINT (2.5 49.5)'
+      )
 
       feat = layer.GetNextFeature()
       expected = [
@@ -1887,7 +1911,10 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
           ('name_pronunciation', None),
           ('name_spelling_text', None),
           ('name_spelling_script', None),
-          ('nationalCadastalZoningReference', 'nationalCadastalZoningReference'),
+          (
+              'nationalCadastalZoningReference',
+              'nationalCadastalZoningReference',
+          ),
           ('validFrom', None),
           ('validTo', None),
           ('upperLevelUnit_href', None),
@@ -1926,7 +1953,9 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
       with ogr.Open(gml_path) as ds:
         road_layer = ds.GetLayerByName('road')
         self.assertEqual(road_layer.GetFeatureCount(), 1)
-        self.assertEqual(road_layer.GetNextFeature().GetField('gml_id'), 'road.21')
+        self.assertEqual(
+            road_layer.GetNextFeature().GetField('gml_id'), 'road.21'
+        )
 
         pop_layer = ds.GetLayerByName('popplace')
         self.assertEqual(pop_layer.GetFeatureCount(), 1)
@@ -1970,7 +1999,8 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
   def test_ogr_gml_62bis(self) -> None:
     tempdir = self._copy_testdata(['gml/gmlattributes.gml'])
     gml_path = os.path.join(tempdir, 'gmlattributes.gml')
-    # First run creates .gfs under GML_ATTRIBUTES_TO_OGR_FIELDS=YES; second uses .gfs.
+    # First run creates .gfs under GML_ATTRIBUTES_TO_OGR_FIELDS=YES;
+    # second uses .gfs.
     for iteration in range(2):
       if iteration == 0:
         with gdal.config_option('GML_ATTRIBUTES_TO_OGR_FIELDS', 'YES'):
@@ -2205,7 +2235,7 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
           feat = ogr.Feature(layer.GetLayerDefn())
           feat.SetGeometry(ogr.CreateGeometryFromWkt(wkt))
           layer.CreateFeature(feat)
-          feat = None
+          feat = None  # pylint: disable=unused-variable
 
       with ogr.Open(filepath) as ds:
         layer = ds.GetLayer(0)
@@ -2330,9 +2360,7 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
         'gml/choicepolygonmultipolygon.gml',
         'gml/choicepolygonmultipolygon.xsd',
     ])
-    with ogr.Open(
-        os.path.join(tempdir, 'choicepolygonmultipolygon.gml')
-    ) as ds:
+    with ogr.Open(os.path.join(tempdir, 'choicepolygonmultipolygon.gml')) as ds:
       expected_results = [
           'MULTIPOLYGON (((0 0,0 1,1 1,1 0,0 0)))',
           'MULTIPOLYGON (((0 0,0 1,1 1,1 0,0 0)),((10 0,10 1,11 1,11 0,10 0)))',
@@ -2452,9 +2480,7 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
   def test_ogr_gml_71bis(self) -> None:
     tempdir = self._copy_testdata(['gml/wfsjointlayer.gml'])
     gml_path = os.path.join(tempdir, 'wfsjointlayer.gml')
-    xsd_path = ogr_util.GetTestFilePath(
-        'gml/wfsjointlayer_not_understood.xsd'
-    )
+    xsd_path = ogr_util.GetTestFilePath('gml/wfsjointlayer_not_understood.xsd')
     with gdal.OpenEx(gml_path, open_options=[f'XSD={xsd_path}']) as ds:
       self._check_wfs_joint_layer(ds)
     self.assertTrue(os.path.exists(os.path.join(tempdir, 'wfsjointlayer.gfs')))
@@ -2600,7 +2626,7 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
         if ds is not None:
           layer = ds.GetLayer(0)
           layer.GetNextFeature()
-          ds = None
+          ds = None  # pylint: disable=unused-variable
 
   def test_ogr_gml_77(self) -> None:
     filepath = '/vsimem/ogr_gml_77.xml'
@@ -2696,9 +2722,7 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
   </ogr:featureMember>
 </ogr:FeatureCollection>
 """
-    with gcore_util.VsimemCleanupDir(
-        '/vsimem/ogr_gml_swap_coords_no_srs'
-    ):
+    with gcore_util.VsimemCleanupDir('/vsimem/ogr_gml_swap_coords_no_srs'):
       filepath = '/vsimem/ogr_gml_swap_coords_no_srs/test.xml'
       gdal.FileFromMemBuffer(filepath, xml_body)
 
@@ -2706,15 +2730,11 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
         feat = ds.GetLayer(0).GetNextFeature()
         self.assertEqual(feat.GetGeometryRef().ExportToWkt(), 'POINT (2 49)')
 
-      with gdal.OpenEx(
-          filepath, open_options=['SWAP_COORDINATES=YES']
-      ) as ds:
+      with gdal.OpenEx(filepath, open_options=['SWAP_COORDINATES=YES']) as ds:
         feat = ds.GetLayer(0).GetNextFeature()
         self.assertEqual(feat.GetGeometryRef().ExportToWkt(), 'POINT (49 2)')
 
-      with gdal.OpenEx(
-          filepath, open_options=['SWAP_COORDINATES=NO']
-      ) as ds:
+      with gdal.OpenEx(filepath, open_options=['SWAP_COORDINATES=NO']) as ds:
         feat = ds.GetLayer(0).GetNextFeature()
         self.assertEqual(feat.GetGeometryRef().ExportToWkt(), 'POINT (2 49)')
 
@@ -2879,7 +2899,7 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
           feat = ogr.Feature(layer.GetLayerDefn())
           feat['field_unique'] = 'bar' if constraint_met else 'foo'
           layer.CreateFeature(feat)
-          feat = None
+          feat = None  # pylint: disable=unused-variable
 
         with gdal.OpenEx(filepath) as ds:
           layer = ds.GetLayerByName('test')
@@ -3065,7 +3085,9 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
         'gml/first_feature_without_geometry.gml'
     )
     with gcore_util.VsimemCleanupDir('/vsimem/ogr_gml_first_no_geom'):
-      filepath = '/vsimem/ogr_gml_first_no_geom/first_feature_without_geometry.gml'
+      filepath = (
+          '/vsimem/ogr_gml_first_no_geom/first_feature_without_geometry.gml'
+      )
       gdal.FileFromMemBuffer(filepath, src_bytes)
       with ogr.Open(filepath) as ds:
         self.assertEqual(ds.GetLayer(0).GetGeomType(), ogr.wkbPoint)
@@ -3131,9 +3153,7 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
         'gml/global_srsDimension_3.gml',
         'gml/global_srsDimension_3.xsd',
     ])
-    with gdal.OpenEx(
-        os.path.join(tempdir, 'global_srsDimension_3.gml')
-    ) as ds:
+    with gdal.OpenEx(os.path.join(tempdir, 'global_srsDimension_3.gml')) as ds:
       feat = ds.GetLayer(0).GetNextFeature()
       self.assertEqual(
           feat.GetGeometryRef().ExportToIsoWkt(),
@@ -3250,17 +3270,23 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
       with gdal.OpenEx(filepath) as ds:
         layer_defn = ds.GetLayer(0).GetLayerDefn()
         for i in range(1, layer_defn.GetFieldCount()):
-          self.assertEqual(layer_defn.GetFieldDefn(i).GetComment(), 'comment <>')
+          self.assertEqual(
+              layer_defn.GetFieldDefn(i).GetComment(), 'comment <>'
+          )
 
   def test_ogr_gml_field_comment_from_gfs(self) -> None:
-    tempdir = self._copy_testdata(['gml/testcomment.gml', 'gml/testcomment.gfs'])
+    tempdir = self._copy_testdata(
+        ['gml/testcomment.gml', 'gml/testcomment.gfs']
+    )
     gml_path = os.path.join(tempdir, 'testcomment.gml')
     gfs_path = os.path.join(tempdir, 'testcomment.gfs')
     self._touch_newer(gfs_path, gml_path)
     with gdal.OpenEx(gml_path) as ds:
       layer_defn = ds.GetLayer(0).GetLayerDefn()
       self.assertEqual(
-          layer_defn.GetFieldDefn(layer_defn.GetFieldIndex('name')).GetComment(),
+          layer_defn.GetFieldDefn(
+              layer_defn.GetFieldIndex('name')
+          ).GetComment(),
           'my comment',
       )
 
@@ -3271,7 +3297,9 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
     with open(
         ogr_util.GetTestFilePath('gml/ionic_wfs.gfs'), 'rt', encoding='utf-8'
     ) as f_in:
-      gfs_contents = f_in.read().replace('<Width>0</Width>', '<Width>22</Width>')
+      gfs_contents = f_in.read().replace(
+          '<Width>0</Width>', '<Width>22</Width>'
+      )
     with open(gfs_path, 'wt', encoding='utf-8') as f_out:
       f_out.write(gfs_contents)
     self._touch_newer(gfs_path, gml_path)
@@ -3309,8 +3337,10 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
         for wkt in (
             'POINT(1.23456789 2.34567891)',
             'POINT(1.23456789 2.34567891 9.87654321)',
-            'LINESTRING(1.23456789 2.34567891 9.87654321,'
-            '1.23456789 2.34567891 9.87654321)',
+            (
+                'LINESTRING(1.23456789 2.34567891 9.87654321,'
+                '1.23456789 2.34567891 9.87654321)'
+            ),
         ):
           feat = ogr.Feature(layer.GetLayerDefn())
           feat.SetGeometry(ogr.CreateGeometryFromWkt(wkt))
@@ -3513,7 +3543,12 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
       oa_nr_str = feat.GetFieldAsString('oa_nr')
       self.assertIsInstance(oa_nr_str, str)
       self.assertEqual(oa_nr_str, '430050')
-      self.assertIsInstance(feat.GetFieldAsDateTime('dat_erst'), list)
+      # Avoid GetFieldAsDateTime('dat_erst'): OGRParseDate rejects the
+      # timezone-suffixed date '2021-01-13+01:00', leaving the field unset, and
+      # SWIG's GetFieldAsDateTime wrapper reads uninitialized OUTPUT temps on
+      # FALSE under MSan.
+      self.assertEqual(feat.GetFieldType('dat_erst'), ogr.OFTDate)
+      self.assertFalse(feat.IsFieldSet('dat_erst'))
 
   def test_ogr_gml_force_opening(self) -> None:
     src_bytes = self._read_testdata_bytes('nas/empty_nas.xml')
@@ -3542,67 +3577,83 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
               '',
           ),
           (
-              '{"layers": [{"name": "test_point",'
-              ' "fields": [{ "name": "str", "type": "Real" }]}]}',
+              (
+                  '{"layers": [{"name": "test_point",'
+                  ' "fields": [{ "name": "str", "type": "Real" }]}]}'
+              ),
               False,
               [ogr.OFTString, ogr.OFTReal, ogr.OFTInteger, ogr.OFTReal],
               [],
               '',
           ),
           (
-              '{"layers": [{"name": "test_point",'
-              ' "fields": [{ "name": "str", "type": "Real" }]}]}',
+              (
+                  '{"layers": [{"name": "test_point",'
+                  ' "fields": [{ "name": "str", "type": "Real" }]}]}'
+              ),
               True,
               [ogr.OFTString, ogr.OFTReal, ogr.OFTInteger, ogr.OFTReal],
               [],
               '',
           ),
           (
-              '{"layers": [{"name": "test_point",'
-              ' "fields": [{ "name": "xxxx", "type": "Real" }]}]}',
+              (
+                  '{"layers": [{"name": "test_point",'
+                  ' "fields": [{ "name": "xxxx", "type": "Real" }]}]}'
+              ),
               True,
               [],
               [],
               'Field xxxx not found in layer test_point',
           ),
           (
-              '{"layers": [{"name": "test_point",'
-              ' "fields": [{ "name": "str", "type": "xxxx" },'
-              ' {"name": "dbl", "type": "String" }]}]}',
+              (
+                  '{"layers": [{"name": "test_point",'
+                  ' "fields": [{ "name": "str", "type": "xxxx" },'
+                  ' {"name": "dbl", "type": "String" }]}]}'
+              ),
               True,
               [],
               [],
               'Unsupported field type: xxxx for field str',
           ),
           (
-              '{"layers": [{"name": "xxxx",'
-              ' "fields": [{ "name": "str", "type": "Real" }]}]}',
+              (
+                  '{"layers": [{"name": "xxxx",'
+                  ' "fields": [{ "name": "str", "type": "Real" }]}]}'
+              ),
               True,
               [],
               [],
               'Layer xxxx not found',
           ),
           (
-              '{"layers": [{"name": "test_point",'
-              ' "fields": [{ "name": "str", "type": "Real" }]},'
-              '{"name": "xxxx",'
-              ' "fields": [{ "name": "str", "type": "Real" }]}]}',
+              (
+                  '{"layers": [{"name": "test_point",'
+                  ' "fields": [{ "name": "str", "type": "Real" }]},'
+                  '{"name": "xxxx",'
+                  ' "fields": [{ "name": "str", "type": "Real" }]}]}'
+              ),
               True,
               [],
               [],
               'Layer xxxx not found',
           ),
           (
-              '{"layers": [{"name": "test_point",'
-              ' "fields": [{ "name": "str", "newName": "new_str" }]}]}',
+              (
+                  '{"layers": [{"name": "test_point",'
+                  ' "fields": [{ "name": "str", "newName": "new_str" }]}]}'
+              ),
               True,
               [ogr.OFTString, ogr.OFTReal, ogr.OFTInteger, ogr.OFTString],
               ['fid', 'dbl', 'int', 'new_str'],
               '',
           ),
           (
-              '{"layers": [{"name": "test_point",'
-              ' "fields": [{ "name": "str", "subType": "UUID" }]}]}',
+              (
+                  '{"layers": [{"name": "test_point",'
+                  ' "fields": [{ "name": "str", "subType": "UUID" }]}]}'
+              ),
               True,
               [
                   ogr.OFTString,
@@ -3614,26 +3665,32 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
               '',
           ),
           (
-              '{"layers": [{"name": "test_point", "schemaType": "Full",'
-              ' "fields": [{ "name": "dbl"}, { "name": "str", "type": "String",'
-              ' "newName": "new_str", "subType": "UUID" }]}]}',
+              (
+                  '{"layers": [{"name": "test_point", "schemaType": "Full",'
+                  ' "fields": [{ "name": "dbl"}, { "name": "str", "type":'
+                  ' "String", "newName": "new_str", "subType": "UUID" }]}]}'
+              ),
               True,
               [ogr.OFTString, ogr.OFTReal, (ogr.OFTString, ogr.OFSTUUID)],
               ['fid', 'dbl', 'new_str'],
               '',
           ),
           (
-              '{"layers": [{"name": "test_point",'
-              ' "fields": [{ "name": "int", "width": 7, "precision": 3 }]}]}',
+              (
+                  '{"layers": [{"name": "test_point", "fields": [{ "name":'
+                  ' "int", "width": 7, "precision": 3 }]}]}'
+              ),
               True,
               [ogr.OFTString, ogr.OFTReal, ogr.OFTInteger, ogr.OFTString],
               [],
               '',
           ),
           (
-              '{"layers": [{"name": "test_point",'
-              ' "fields": [{ "name": "int", "subType": "Boolean" },'
-              ' { "name": "dbl", "type": "Integer", "subType": "Int16" }]}]}',
+              (
+                  '{"layers": [{"name": "test_point", "fields": [{ "name":'
+                  ' "int", "subType": "Boolean" }, { "name": "dbl", "type":'
+                  ' "Integer", "subType": "Int16" }]}]}'
+              ),
               True,
               [
                   ogr.OFTString,
@@ -4068,7 +4125,7 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
   # Note: test_ogr_gml_multiple_geom_elements_same_last_element relies on
   # upstream commit 5f5f34b60a (post-ea75dfb9) to report GetGeometryColumn() ==
   # 'secondGeom' consistently; test_ogr_gml_ossfuzz_487160964 exercises the
-  # invalid cross-linked file without crashing (leak fix in upstream 589cda23ee).
+  # invalid cross-linked file without crashing (fix in upstream 589cda23ee).
   def test_ogr_gml_ossfuzz_487160964(self) -> None:
     tempdir = self._copy_testdata(['gml/ossfuzz_487160964.gml'])
     with gdal.quiet_errors(), ogr.ExceptionMgr(useExceptions=False):
@@ -4210,7 +4267,9 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
       check_no_nested_srsname: bool,
   ) -> None:
     if wkt_file is not None:
-      with open(ogr_util.GetTestFilePath(wkt_file), 'rt', encoding='utf-8') as f:
+      with open(
+          ogr_util.GetTestFilePath(wkt_file), 'rt', encoding='utf-8'
+      ) as f:
         wkt = f.read()
     assert wkt is not None
     gml = self._create_gml_with_srs_from_wkt(wkt, 4326)
@@ -4603,11 +4662,15 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
 
     for empty_gml in (
         '<gml:PolyhedralSurface></gml:PolyhedralSurface>',
-        '<gml:PolyhedralSurface><gml:polygonPatches></gml:polygonPatches>'
-        '</gml:PolyhedralSurface>',
-        '<gml:PolyhedralSurface><gml:polygonPatches><gml:PolygonPatch>'
-        '<gml:exterior></gml:exterior></gml:PolygonPatch>'
-        '</gml:polygonPatches></gml:PolyhedralSurface>',
+        (
+            '<gml:PolyhedralSurface><gml:polygonPatches></gml:polygonPatches>'
+            '</gml:PolyhedralSurface>'
+        ),
+        (
+            '<gml:PolyhedralSurface><gml:polygonPatches><gml:PolygonPatch>'
+            '<gml:exterior></gml:exterior></gml:PolygonPatch>'
+            '</gml:polygonPatches></gml:PolyhedralSurface>'
+        ),
     ):
       self.assertEqual(
           ogr.CreateGeometryFromGML(empty_gml).ExportToWkt(),
@@ -4809,8 +4872,8 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
             </gml:Surface>"""
     self.assertEqual(
         ogr.CreateGeometryFromGML(gml).ExportToIsoWkt(),
-        'MULTISURFACE (((0 0,0 1,1 1,1 0,0 0)),'
-        'CURVEPOLYGON (COMPOUNDCURVE ((0 -1,0 1),CIRCULARSTRING (0 1,1 0,0 -1))))',
+        'MULTISURFACE (((0 0,0 1,1 1,1 0,0 0)),CURVEPOLYGON (COMPOUNDCURVE ((0'
+        ' -1,0 1),CIRCULARSTRING (0 1,1 0,0 -1))))',
     )
 
   def test_gml_Surface_with_curve_polygon_then_polygon_then_curve_polygon(
@@ -4856,8 +4919,9 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
             </gml:Surface>"""
     self.assertEqual(
         ogr.CreateGeometryFromGML(gml).ExportToIsoWkt(),
-        'MULTISURFACE (((0 0,0 1,1 1,1 0,0 0)),((0 0,0 1,1 1,1 0,0 0)),'
-        'CURVEPOLYGON (COMPOUNDCURVE ((0 -1,0 1),CIRCULARSTRING (0 1,1 0,0 -1))))',
+        'MULTISURFACE (((0 0,0 1,1 1,1 0,0 0)),((0 0,0 1,1 1,1 0,0'
+        ' 0)),CURVEPOLYGON (COMPOUNDCURVE ((0 -1,0 1),CIRCULARSTRING (0 1,1 0,0'
+        ' -1))))',
     )
 
   def test_gml_Surface_mix_of_triangle_and_rectangle(self) -> None:
@@ -4938,8 +5002,10 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
         ('<!-- bla -->', None),
         ('<foo/>', None),
         (
-            '<gml:Point><gml:pos>31 29 16</gml:pos>'
-            '<gml:pos>31 29 16</gml:pos></gml:Point>',
+            (
+                '<gml:Point><gml:pos>31 29 16</gml:pos>'
+                '<gml:pos>31 29 16</gml:pos></gml:Point>'
+            ),
             None,
         ),
         ('<gml:Point><gml:coordinates/></gml:Point>', 'POINT EMPTY'),
@@ -4971,13 +5037,17 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
             None,
         ),
         (
-            '<gml:LineString><gml:posList srsDimension="4">0 1 2 3'
-            '</gml:posList></gml:LineString>',
+            (
+                '<gml:LineString><gml:posList srsDimension="4">0 1 2 3'
+                '</gml:posList></gml:LineString>'
+            ),
             None,
         ),
         (
-            '<gml:LineString><gml:posList srsDimension="3">0 1 2 3'
-            '</gml:posList></gml:LineString>',
+            (
+                '<gml:LineString><gml:posList srsDimension="3">0 1 2 3'
+                '</gml:posList></gml:LineString>'
+            ),
             None,
         ),
         ('<gml:Point><gml:coord></gml:coord></gml:Point>', None),
@@ -4985,56 +5055,79 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
             '<gml:Point><gml:coord><gml:X/><gml:Y/></gml:coord></gml:Point>',
             None,
         ),
-        ('<gml:Point><gml:coord><gml:X>0</gml:X></gml:coord></gml:Point>', None),
+        (
+            '<gml:Point><gml:coord><gml:X>0</gml:X></gml:coord></gml:Point>',
+            None,
+        ),
         ('<gml:Polygon/>', 'POLYGON EMPTY'),
         ('<gml:Polygon><gml:outerBoundaryIs/></gml:Polygon>', 'POLYGON EMPTY'),
         (
-            '<gml:Polygon><gml:outerBoundaryIs><foo/></gml:outerBoundaryIs>'
-            '</gml:Polygon>',
+            (
+                '<gml:Polygon><gml:outerBoundaryIs><foo/></gml:outerBoundaryIs>'
+                '</gml:Polygon>'
+            ),
             None,
         ),
         (
-            '<gml:Polygon><gml:outerBoundaryIs><gml:Point><gml:pos>31 29 16'
-            '</gml:pos></gml:Point></gml:outerBoundaryIs></gml:Polygon>',
+            (
+                '<gml:Polygon><gml:outerBoundaryIs><gml:Point><gml:pos>31 29 16'
+                '</gml:pos></gml:Point></gml:outerBoundaryIs></gml:Polygon>'
+            ),
             None,
         ),
         (
-            '<gml:Polygon><gml:outerBoundaryIs><gml:LinearRing><gml:posList>'
-            '0 1 2 3 4 5 0 1</gml:posList></gml:LinearRing>'
-            '</gml:outerBoundaryIs><gml:innerBoundaryIs/></gml:Polygon>',
+            (
+                '<gml:Polygon><gml:outerBoundaryIs><gml:LinearRing><gml:posList>'
+                '0 1 2 3 4 5 0 1</gml:posList></gml:LinearRing>'
+                '</gml:outerBoundaryIs><gml:innerBoundaryIs/></gml:Polygon>'
+            ),
             None,
         ),
         (
-            '<gml:Polygon><gml:outerBoundaryIs><gml:LinearRing/>'
-            '</gml:outerBoundaryIs><gml:innerBoundaryIs/></gml:Polygon>',
+            (
+                '<gml:Polygon><gml:outerBoundaryIs><gml:LinearRing/>'
+                '</gml:outerBoundaryIs><gml:innerBoundaryIs/></gml:Polygon>'
+            ),
             None,
         ),
         (
-            '<gml:Polygon><gml:outerBoundaryIs><gml:LinearRing><gml:posList>'
-            '0 1 2 3 4 5 0 1</gml:posList></gml:LinearRing>'
-            '</gml:outerBoundaryIs><gml:innerBoundaryIs><gml:Point><gml:pos>'
-            '31 29 16</gml:pos></gml:Point></gml:innerBoundaryIs></gml:Polygon>',
+            (
+                '<gml:Polygon><gml:outerBoundaryIs><gml:LinearRing><gml:posList>'
+                '0 1 2 3 4 5 0 1</gml:posList></gml:LinearRing>'
+                '</gml:outerBoundaryIs><gml:innerBoundaryIs><gml:Point><gml:pos>'
+                '31 29'
+                ' 16</gml:pos></gml:Point></gml:innerBoundaryIs></gml:Polygon>'
+            ),
             None,
         ),
         (
-            '<gml:Polygon><gml:exterior><gml:CompositeCurve/></gml:exterior>'
-            '</gml:Polygon>',
+            (
+                '<gml:Polygon><gml:exterior><gml:CompositeCurve/></gml:exterior>'
+                '</gml:Polygon>'
+            ),
             None,
         ),
         (
-            '<gml:Polygon><gml:exterior><gml:LinearRing><gml:posList>'
-            '0 0 4 0 4 4 0 4 0 0<gml:/posList><gml:/LinearRing>'
-            '<gml:/exterior><gml:interior><gml:CompositeCurve/>'
-            '</gml:interior></gml:Polygon>',
+            (
+                '<gml:Polygon><gml:exterior><gml:LinearRing><gml:posList>'
+                '0 0 4 0 4 4 0 4 0 0<gml:/posList><gml:/LinearRing>'
+                '<gml:/exterior><gml:interior><gml:CompositeCurve/>'
+                '</gml:interior></gml:Polygon>'
+            ),
             None,
         ),
         ('<gml:Ring/>', None),
         ('<gml:Ring><foo/></gml:Ring>', None),
         ('<gml:Ring><gml:curveMember/></gml:Ring>', None),
-        ('<gml:Ring><gml:curveMember><foo/></gml:curveMember></gml:Ring>', None),
         (
-            '<gml:Ring><gml:curveMember><gml:Point><gml:pos>31 29 16</gml:pos>'
-            '</gml:Point></gml:curveMember></gml:Ring>',
+            '<gml:Ring><gml:curveMember><foo/></gml:curveMember></gml:Ring>',
+            None,
+        ),
+        (
+            (
+                '<gml:Ring><gml:curveMember><gml:Point><gml:pos>31 29'
+                ' 16</gml:pos></gml:Point></gml:curveMember></gml:Ring>'
+            ),
             None,
         ),
         ('<gml:Box/>', None),
@@ -5046,13 +5139,18 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
             'MULTIPOLYGON EMPTY',
         ),
         (
-            '<gml:MultiPolygon><gml:polygonMember><foo/></gml:polygonMember>'
-            '</gml:MultiPolygon>',
+            (
+                '<gml:MultiPolygon><gml:polygonMember><foo/></gml:polygonMember>'
+                '</gml:MultiPolygon>'
+            ),
             None,
         ),
         (
-            '<gml:MultiPolygon><gml:polygonMember><gml:Point><gml:pos>31 29 16'
-            '</gml:pos></gml:Point></gml:polygonMember></gml:MultiPolygon>',
+            (
+                '<gml:MultiPolygon><gml:polygonMember><gml:Point><gml:pos>31'
+                ' 29 16'
+                '</gml:pos></gml:Point></gml:polygonMember></gml:MultiPolygon>'
+            ),
             None,
         ),
         (
@@ -5060,13 +5158,17 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
             'MULTIPOLYGON EMPTY',
         ),
         (
-            '<gml:MultiSurface><gml:surfaceMembers><foo/></gml:surfaceMembers>'
-            '</gml:MultiSurface>',
+            (
+                '<gml:MultiSurface><gml:surfaceMembers><foo/></gml:surfaceMembers>'
+                '</gml:MultiSurface>'
+            ),
             'MULTIPOLYGON EMPTY',
         ),
         (
-            '<gml:MultiSurface><gml:surfaceMembers><gml:Polygon/>'
-            '</gml:surfaceMembers></gml:MultiSurface>',
+            (
+                '<gml:MultiSurface><gml:surfaceMembers><gml:Polygon/>'
+                '</gml:surfaceMembers></gml:MultiSurface>'
+            ),
             'MULTIPOLYGON EMPTY',
         ),
         ('<gml:MultiPoint/>', 'MULTIPOINT EMPTY'),
@@ -5076,24 +5178,32 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
             'MULTIPOINT EMPTY',
         ),
         (
-            '<gml:MultiPoint><gml:pointMember><gml:LineString><gml:posList>'
-            '0 1 2 3</gml:posList></gml:LineString></gml:pointMember>'
-            '</gml:MultiPoint>',
+            (
+                '<gml:MultiPoint><gml:pointMember><gml:LineString><gml:posList>'
+                '0 1 2 3</gml:posList></gml:LineString></gml:pointMember>'
+                '</gml:MultiPoint>'
+            ),
             None,
         ),
         (
-            '<gml:MultiPoint><gml:pointMembers></gml:pointMembers>'
-            '</gml:MultiPoint>',
+            (
+                '<gml:MultiPoint><gml:pointMembers></gml:pointMembers>'
+                '</gml:MultiPoint>'
+            ),
             'MULTIPOINT EMPTY',
         ),
         (
-            '<gml:MultiPoint><gml:pointMembers><foo/></gml:pointMembers>'
-            '</gml:MultiPoint>',
+            (
+                '<gml:MultiPoint><gml:pointMembers><foo/></gml:pointMembers>'
+                '</gml:MultiPoint>'
+            ),
             'MULTIPOINT EMPTY',
         ),
         (
-            '<gml:MultiPoint><gml:pointMembers><gml:Point/>'
-            '</gml:pointMembers></gml:MultiPoint>',
+            (
+                '<gml:MultiPoint><gml:pointMembers><gml:Point/>'
+                '</gml:pointMembers></gml:MultiPoint>'
+            ),
             None,
         ),
         ('<gml:MultiLineString/>', 'MULTILINESTRING EMPTY'),
@@ -5102,14 +5212,18 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
             'MULTILINESTRING EMPTY',
         ),
         (
-            '<gml:MultiLineString><gml:lineStringMember/>'
-            '</gml:MultiLineString>',
+            (
+                '<gml:MultiLineString><gml:lineStringMember/>'
+                '</gml:MultiLineString>'
+            ),
             None,
         ),
         (
-            '<gml:MultiLineString><gml:lineStringMember><gml:Point><gml:pos>'
-            '31 29 16</gml:pos></gml:Point></gml:lineStringMember>'
-            '</gml:MultiLineString>',
+            (
+                '<gml:MultiLineString><gml:lineStringMember><gml:Point><gml:pos>'
+                '31 29 16</gml:pos></gml:Point></gml:lineStringMember>'
+                '</gml:MultiLineString>'
+            ),
             None,
         ),
         ('<gml:MultiCurve/>', 'MULTILINESTRING EMPTY'),
@@ -5119,39 +5233,53 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
             'MULTILINESTRING EMPTY',
         ),
         (
-            '<gml:MultiCurve><gml:curveMember><foo/></gml:curveMember>'
-            '</gml:MultiCurve>',
+            (
+                '<gml:MultiCurve><gml:curveMember><foo/></gml:curveMember>'
+                '</gml:MultiCurve>'
+            ),
             None,
         ),
         (
-            '<gml:MultiCurve><gml:curveMember><gml:Curve/></gml:curveMember>'
-            '</gml:MultiCurve>',
+            (
+                '<gml:MultiCurve><gml:curveMember><gml:Curve/></gml:curveMember>'
+                '</gml:MultiCurve>'
+            ),
             None,
         ),
         (
-            '<gml:MultiCurve><gml:curveMember><gml:Curve><foo/></gml:Curve>'
-            '</gml:curveMember></gml:MultiCurve>',
+            (
+                '<gml:MultiCurve><gml:curveMember><gml:Curve><foo/></gml:Curve>'
+                '</gml:curveMember></gml:MultiCurve>'
+            ),
             None,
         ),
         (
-            '<gml:MultiCurve><gml:curveMember><gml:Curve><gml:Point><gml:pos>'
-            '31 29 16</gml:pos></gml:Point></gml:Curve></gml:curveMember>'
-            '</gml:MultiCurve>',
+            (
+                '<gml:MultiCurve><gml:curveMember><gml:Curve><gml:Point><gml:pos>'
+                '31 29 16</gml:pos></gml:Point></gml:Curve></gml:curveMember>'
+                '</gml:MultiCurve>'
+            ),
             None,
         ),
         (
-            '<gml:MultiCurve><gml:curveMembers></gml:curveMembers>'
-            '</gml:MultiCurve>',
+            (
+                '<gml:MultiCurve><gml:curveMembers></gml:curveMembers>'
+                '</gml:MultiCurve>'
+            ),
             'MULTILINESTRING EMPTY',
         ),
         (
-            '<gml:MultiCurve><gml:curveMembers><foo/></gml:curveMembers>'
-            '</gml:MultiCurve>',
+            (
+                '<gml:MultiCurve><gml:curveMembers><foo/></gml:curveMembers>'
+                '</gml:MultiCurve>'
+            ),
             None,
         ),
         (
-            '<gml:MultiCurve><gml:curveMembers><gml:LineString/>'
-            '</gml:curveMembers></gml:MultiCurve>',
+            (
+                '<gml:MultiCurve><gml:curveMembers><gml:LineString/>'
+                '</gml:curveMembers></gml:MultiCurve>'
+            ),
             None,
         ),
         ('<gml:Curve/>', None),
@@ -5159,8 +5287,10 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
         ('<gml:Curve><gml:segments/></gml:Curve>', 'LINESTRING EMPTY'),
         ('<gml:Curve><gml:segments><foo/></gml:segments></gml:Curve>', None),
         (
-            '<gml:Curve><gml:segments><gml:Point><gml:pos>31 29 16</gml:pos>'
-            '</gml:Point></gml:segments></gml:Curve>',
+            (
+                '<gml:Curve><gml:segments><gml:Point><gml:pos>31 29'
+                ' 16</gml:pos></gml:Point></gml:segments></gml:Curve>'
+            ),
             None,
         ),
         ('<gml:Arc/>', None),
@@ -5172,8 +5302,10 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
             None,
         ),
         (
-            '<gml:ArcString><gml:posList>0 0 0 1 1 0 2 0</gml:posList>'
-            '</gml:ArcString>',
+            (
+                '<gml:ArcString><gml:posList>0 0 0 1 1 0 2 0</gml:posList>'
+                '</gml:ArcString>'
+            ),
             None,
         ),
         ('<gml:Circle/>', None),
@@ -5181,13 +5313,18 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
         ('<gml:segments><foo/></gml:segments>', None),
         ('<gml:segments><gml:LineStringSegment/></gml:segments>', None),
         (
-            '<gml:segments><gml:LineStringSegment><foo/>'
-            '</gml:LineStringSegment></gml:segments>',
+            (
+                '<gml:segments><gml:LineStringSegment><foo/>'
+                '</gml:LineStringSegment></gml:segments>'
+            ),
             None,
         ),
         (
-            '<gml:segments><gml:LineStringSegment><gml:Point><gml:pos>31 29 16'
-            '</gml:pos></gml:Point></gml:LineStringSegment></gml:segments>',
+            (
+                '<gml:segments><gml:LineStringSegment><gml:Point><gml:pos>31'
+                ' 29 16'
+                '</gml:pos></gml:Point></gml:LineStringSegment></gml:segments>'
+            ),
             None,
         ),
         ('<gml:MultiGeometry/>', 'GEOMETRYCOLLECTION EMPTY'),
@@ -5200,13 +5337,17 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
             'GEOMETRYCOLLECTION EMPTY',
         ),
         (
-            '<gml:MultiGeometry><gml:geometryMember><foo/>'
-            '</gml:geometryMember></gml:MultiGeometry>',
+            (
+                '<gml:MultiGeometry><gml:geometryMember><foo/>'
+                '</gml:geometryMember></gml:MultiGeometry>'
+            ),
             None,
         ),
         (
-            '<gml:MultiGeometry><gml:geometryMembers><foo/>'
-            '</gml:geometryMembers></gml:MultiGeometry>',
+            (
+                '<gml:MultiGeometry><gml:geometryMembers><foo/>'
+                '</gml:geometryMembers></gml:MultiGeometry>'
+            ),
             None,
         ),
         ('<gml:Surface/>', 'POLYGON EMPTY'),
@@ -5214,8 +5355,10 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
         ('<gml:Surface><gml:patches/></gml:Surface>', 'POLYGON EMPTY'),
         ('<gml:Surface><gml:patches><foo/></gml:patches></gml:Surface>', None),
         (
-            '<gml:Surface><gml:patches><gml:PolygonPatch/></gml:patches>'
-            '</gml:Surface>',
+            (
+                '<gml:Surface><gml:patches><gml:PolygonPatch/></gml:patches>'
+                '</gml:Surface>'
+            ),
             'POLYGON EMPTY',
         ),
         ('<gml:Solid/>', 'POLYHEDRALSURFACE EMPTY'),
@@ -5226,23 +5369,29 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
         ),
         ('<gml:Solid><gml:exterior><foo/></gml:exterior></gml:Solid>', None),
         (
-            '<gml:Solid><gml:exterior><Polygon><exterior><LinearRing>'
-            '<posList srsDimension="2">0 0 4 0 4 4 0 4 0 0</posList>'
-            '</LinearRing></exterior></Polygon></gml:exterior><gml:interior/>'
-            '</gml:Solid>',
+            (
+                '<gml:Solid><gml:exterior><Polygon><exterior><LinearRing>'
+                '<posList srsDimension="2">0 0 4 0 4 4 0 4 0 0</posList>'
+                '</LinearRing></exterior></Polygon></gml:exterior><gml:interior/>'
+                '</gml:Solid>'
+            ),
             'POLYGON ((0 0,4 0,4 4,0 4,0 0))',
         ),
         ('<gml:OrientableCurve/>', None),
         ('<gml:OrientableCurve><foo/></gml:OrientableCurve>', None),
         ('<gml:OrientableCurve><gml:baseCurve/></gml:OrientableCurve>', None),
         (
-            '<gml:OrientableCurve><gml:baseCurve><foo/></gml:baseCurve>'
-            '</gml:OrientableCurve>',
+            (
+                '<gml:OrientableCurve><gml:baseCurve><foo/></gml:baseCurve>'
+                '</gml:OrientableCurve>'
+            ),
             None,
         ),
         (
-            '<gml:OrientableCurve><gml:baseCurve><gml:Point><gml:pos>0 0'
-            '</gml:pos></gml:Point></gml:baseCurve></gml:OrientableCurve>',
+            (
+                '<gml:OrientableCurve><gml:baseCurve><gml:Point><gml:pos>0 0'
+                '</gml:pos></gml:Point></gml:baseCurve></gml:OrientableCurve>'
+            ),
             None,
         ),
         ('<gml:OrientableSurface/>', None),
@@ -5252,8 +5401,10 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
             None,
         ),
         (
-            '<gml:OrientableSurface><gml:baseSurface><foo/></gml:baseSurface>'
-            '</gml:OrientableSurface>',
+            (
+                '<gml:OrientableSurface><gml:baseSurface><foo/></gml:baseSurface>'
+                '</gml:OrientableSurface>'
+            ),
             None,
         ),
         ('<gmlce:SimplePolygon/>', None),
@@ -5274,147 +5425,197 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
             None,
         ),
         (
-            '<gml:Envelope><gml:lowerCorner>1</gml:lowerCorner>'
-            '<gml:upperCorner>3 4</gml:upperCorner/></gml:Envelope>',
+            (
+                '<gml:Envelope><gml:lowerCorner>1</gml:lowerCorner>'
+                '<gml:upperCorner>3 4</gml:upperCorner/></gml:Envelope>'
+            ),
             None,
         ),
         (
-            '<gml:Point><gml:coordinates cs="bla">1bla2</gml:coordinates>'
-            '</gml:Point>',
+            (
+                '<gml:Point><gml:coordinates cs="bla">1bla2</gml:coordinates>'
+                '</gml:Point>'
+            ),
             None,
         ),
         (
-            '<gml:Point><gml:coordinates cs="">1bla2</gml:coordinates>'
-            '</gml:Point>',
+            (
+                '<gml:Point><gml:coordinates cs="">1bla2</gml:coordinates>'
+                '</gml:Point>'
+            ),
             None,
         ),
         (
-            '<gml:Point><gml:coordinates cs="0">1bla2</gml:coordinates>'
-            '</gml:Point>',
+            (
+                '<gml:Point><gml:coordinates cs="0">1bla2</gml:coordinates>'
+                '</gml:Point>'
+            ),
             None,
         ),
         (
-            '<gml:Point><gml:coordinates ts="bla">1,2</gml:coordinates>'
-            '</gml:Point>',
+            (
+                '<gml:Point><gml:coordinates ts="bla">1,2</gml:coordinates>'
+                '</gml:Point>'
+            ),
             None,
         ),
         (
-            '<gml:Point><gml:coordinates ts="">1,2</gml:coordinates>'
-            '</gml:Point>',
+            (
+                '<gml:Point><gml:coordinates ts="">1,2</gml:coordinates>'
+                '</gml:Point>'
+            ),
             None,
         ),
         (
-            '<gml:Point><gml:coordinates ts="0">1,2</gml:coordinates>'
-            '</gml:Point>',
+            (
+                '<gml:Point><gml:coordinates ts="0">1,2</gml:coordinates>'
+                '</gml:Point>'
+            ),
             None,
         ),
         (
-            '<gml:Point><gml:coordinates decimal="bla">1,2</gml:coordinates>'
-            '</gml:Point>',
+            (
+                '<gml:Point><gml:coordinates'
+                ' decimal="bla">1,2</gml:coordinates></gml:Point>'
+            ),
             None,
         ),
         (
-            '<gml:Point><gml:coordinates decimal="">1,2</gml:coordinates>'
-            '</gml:Point>',
+            (
+                '<gml:Point><gml:coordinates decimal="">1,2</gml:coordinates>'
+                '</gml:Point>'
+            ),
             None,
         ),
         (
-            '<gml:Point><gml:coordinates decimal="0">1,2</gml:coordinates>'
-            '</gml:Point>',
+            (
+                '<gml:Point><gml:coordinates decimal="0">1,2</gml:coordinates>'
+                '</gml:Point>'
+            ),
             None,
         ),
         (
-            '<gml:Curve><gml:segments>'
-            '<gml:Arc><gml:posList>0 0 1 0 0 0</gml:posList></gml:Arc>'
-            '<gml:LineStringSegment><gml:posList>-10 0 -1 0 0 0'
-            '</gml:posList></gml:LineStringSegment>'
-            '</gml:segments></gml:Curve>',
+            (
+                '<gml:Curve><gml:segments>'
+                '<gml:Arc><gml:posList>0 0 1 0 0 0</gml:posList></gml:Arc>'
+                '<gml:LineStringSegment><gml:posList>-10 0 -1 0 0 0'
+                '</gml:posList></gml:LineStringSegment>'
+                '</gml:segments></gml:Curve>'
+            ),
             'COMPOUNDCURVE (CIRCULARSTRING (0 0,1 0,0 0),(0 0,-1 0,-10 0))',
         ),
         (
-            '<gml:CompositeCurve>'
-            '<gml:curveMember><gml:Curve><gml:segments><gml:LineString>'
-            '<gml:posList>0 0 1 0 0 0</gml:posList></gml:LineString>'
-            '</gml:segments></gml:Curve></gml:curveMember>'
-            '<gml:curveMember><gml:Curve><gml:segments>'
-            '<gml:Arc><gml:posList>-10 0 1 0 0 0</gml:posList></gml:Arc>'
-            '<gml:LineStringSegment><gml:posList>0 0 -1 0 0 0</gml:posList>'
-            '</gml:LineStringSegment></gml:segments></gml:Curve>'
-            '</gml:curveMember></gml:CompositeCurve>',
+            (
+                '<gml:CompositeCurve>'
+                '<gml:curveMember><gml:Curve><gml:segments><gml:LineString>'
+                '<gml:posList>0 0 1 0 0 0</gml:posList></gml:LineString>'
+                '</gml:segments></gml:Curve></gml:curveMember>'
+                '<gml:curveMember><gml:Curve><gml:segments>'
+                '<gml:Arc><gml:posList>-10 0 1 0 0 0</gml:posList></gml:Arc>'
+                '<gml:LineStringSegment><gml:posList>0 0 -1 0 0 0</gml:posList>'
+                '</gml:LineStringSegment></gml:segments></gml:Curve>'
+                '</gml:curveMember></gml:CompositeCurve>'
+            ),
             None,
         ),
         (
-            '<gml:ArcByBulge><gml:bulge>2</gml:bulge>'
-            '<gml:normal>-1</gml:normal></gml:ArcByBulge>',
+            (
+                '<gml:ArcByBulge><gml:bulge>2</gml:bulge>'
+                '<gml:normal>-1</gml:normal></gml:ArcByBulge>'
+            ),
             None,
         ),
         (
-            '<gml:ArcByBulge><gml:posList>2 0</gml:posList>'
-            '<gml:bulge>2</gml:bulge><gml:normal>-1</gml:normal>'
-            '</gml:ArcByBulge>',
+            (
+                '<gml:ArcByBulge><gml:posList>2 0</gml:posList>'
+                '<gml:bulge>2</gml:bulge><gml:normal>-1</gml:normal>'
+                '</gml:ArcByBulge>'
+            ),
             None,
         ),
         (
-            '<gml:ArcByBulge><gml:posList>2 0 -2 0</gml:posList>'
-            '<gml:normal>-1</gml:normal></gml:ArcByBulge>',
+            (
+                '<gml:ArcByBulge><gml:posList>2 0 -2 0</gml:posList>'
+                '<gml:normal>-1</gml:normal></gml:ArcByBulge>'
+            ),
             None,
         ),
         ('<ArcByBulge><bulge/></ArcByBulge>', None),
         (
-            '<gml:ArcByCenterPoint><gml:radius>2</gml:radius>'
-            '<gml:startAngle>90</gml:startAngle><gml:endAngle>270'
-            '</gml:endAngle></gml:ArcByCenterPoint>',
+            (
+                '<gml:ArcByCenterPoint><gml:radius>2</gml:radius>'
+                '<gml:startAngle>90</gml:startAngle><gml:endAngle>270'
+                '</gml:endAngle></gml:ArcByCenterPoint>'
+            ),
             None,
         ),
         (
-            '<gml:ArcByCenterPoint><gml:pos>1 2</gml:pos>'
-            '<gml:startAngle>90</gml:startAngle><gml:endAngle>270'
-            '</gml:endAngle></gml:ArcByCenterPoint>',
+            (
+                '<gml:ArcByCenterPoint><gml:pos>1 2</gml:pos>'
+                '<gml:startAngle>90</gml:startAngle><gml:endAngle>270'
+                '</gml:endAngle></gml:ArcByCenterPoint>'
+            ),
             None,
         ),
         (
-            '<gml:ArcByCenterPoint><gml:pos>1 2</gml:pos>'
-            '<gml:radius>2</gml:radius<gml:endAngle>270</gml:endAngle>'
-            '</gml:ArcByCenterPoint>',
+            (
+                '<gml:ArcByCenterPoint><gml:pos>1 2</gml:pos>'
+                '<gml:radius>2</gml:radius<gml:endAngle>270</gml:endAngle>'
+                '</gml:ArcByCenterPoint>'
+            ),
             None,
         ),
         (
-            '<gml:ArcByCenterPoint><gml:pos>1 2</gml:pos>'
-            '<gml:radius>2</gml:radius><gml:startAngle>90</gml:startAngle>'
-            '</gml:ArcByCenterPoint>',
+            (
+                '<gml:ArcByCenterPoint><gml:pos>1 2</gml:pos>'
+                '<gml:radius>2</gml:radius><gml:startAngle>90</gml:startAngle>'
+                '</gml:ArcByCenterPoint>'
+            ),
             None,
         ),
         (
-            '<gml:CircleByCenterPoint><gml:radius>2</gml:radius>'
-            '</gml:CircleByCenterPoint>',
+            (
+                '<gml:CircleByCenterPoint><gml:radius>2</gml:radius>'
+                '</gml:CircleByCenterPoint>'
+            ),
             None,
         ),
         (
-            '<gml:CircleByCenterPoint><gml:pos>1 2</gml:pos>'
-            '</gml:CircleByCenterPoint>',
+            (
+                '<gml:CircleByCenterPoint><gml:pos>1 2</gml:pos>'
+                '</gml:CircleByCenterPoint>'
+            ),
             None,
         ),
         ('<gml:PolyhedralSurface><foo/></gml:PolyhedralSurface>', None),
         (
-            '<gml:PolyhedralSurface><gml:polygonPatches><foo/>'
-            '</gml:polygonPatches></gml:PolyhedralSurface>',
+            (
+                '<gml:PolyhedralSurface><gml:polygonPatches><foo/>'
+                '</gml:polygonPatches></gml:PolyhedralSurface>'
+            ),
             None,
         ),
         (
-            '<gml:PolyhedralSurface><gml:polygonPatches><gml:PolygonPatch>'
-            '<gml:exterior><foo/></gml:exterior></gml:PolygonPatch>'
-            '</gml:polygonPatches></gml:PolyhedralSurface>',
+            (
+                '<gml:PolyhedralSurface><gml:polygonPatches><gml:PolygonPatch>'
+                '<gml:exterior><foo/></gml:exterior></gml:PolygonPatch>'
+                '</gml:polygonPatches></gml:PolyhedralSurface>'
+            ),
             None,
         ),
         (
-            '<gml:Triangle><gml:exterior><gml:CompositeCurve/></gml:exterior>'
-            '</gml:Triangle>',
+            (
+                '<gml:Triangle><gml:exterior><gml:CompositeCurve/></gml:exterior>'
+                '</gml:Triangle>'
+            ),
             None,
         ),
         ('<gml:TriangulatedSurface></gml:TriangulatedSurface>', None),
         (
-            '<gml:TriangulatedSurface><gml:patches><gml:Triangle/>'
-            '</gml:patches></gml:TriangulatedSurface>',
+            (
+                '<gml:TriangulatedSurface><gml:patches><gml:Triangle/>'
+                '</gml:patches></gml:TriangulatedSurface>'
+            ),
             None,
         ),
     ]
@@ -5432,47 +5633,67 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
         '<gml:Point><gml:pos>2 3</gml:pos></gml:Point>',
         '<gml:Point><gml:pos>2 3 4</gml:pos></gml:Point>',
         '<gml:LineString><gml:posList>2 3 4 5</gml:posList></gml:LineString>',
-        '<gml:Curve><gml:segments><gml:LineStringSegment>'
-        '<gml:posList>2 3 4 5</gml:posList></gml:LineStringSegment>'
-        '</gml:segments></gml:Curve>',
-        '<gml:LineString><gml:posList srsDimension="3">2 3 10 4 5 20'
-        '</gml:posList></gml:LineString>',
-        '<gml:Curve><gml:segments><gml:LineStringSegment>'
-        '<gml:posList srsDimension="3">2 3 10 4 5 20</gml:posList>'
-        '</gml:LineStringSegment></gml:segments></gml:Curve>',
-        '<gml:Polygon><gml:exterior><gml:LinearRing>'
-        '<gml:posList>0 0 0 1 1 1 1 0 0 0</gml:posList>'
-        '</gml:LinearRing></gml:exterior></gml:Polygon>',
-        '<gml:Polygon><gml:exterior><gml:LinearRing>'
-        '<gml:posList>0 0 0 1 1 1 1 0 0 0</gml:posList>'
-        '</gml:LinearRing></gml:exterior><gml:interior><gml:LinearRing>'
-        '<gml:posList>10 10 10 11 11 11 10 10</gml:posList>'
-        '</gml:LinearRing></gml:interior></gml:Polygon>',
-        '<gml:MultiPoint><gml:pointMember><gml:Point><gml:pos>2 3</gml:pos>'
-        '</gml:Point></gml:pointMember><gml:pointMember><gml:Point>'
-        '<gml:pos>4 5</gml:pos></gml:Point></gml:pointMember></gml:MultiPoint>',
-        '<gml:MultiCurve><gml:curveMember><gml:LineString>'
-        '<gml:posList>0 1 2 3 4 5</gml:posList></gml:LineString>'
-        '</gml:curveMember><gml:curveMember><gml:LineString>'
-        '<gml:posList>6 7 8 9 10 11</gml:posList></gml:LineString>'
-        '</gml:curveMember></gml:MultiCurve>',
-        '<gml:MultiCurve><gml:curveMember><gml:Curve><gml:segments>'
-        '<gml:LineStringSegment><gml:posList>0 1 2 3 4 5</gml:posList>'
-        '</gml:LineStringSegment></gml:segments></gml:Curve></gml:curveMember>'
-        '<gml:curveMember><gml:Curve><gml:segments><gml:LineStringSegment>'
-        '<gml:posList>6 7 8 9 10 11</gml:posList></gml:LineStringSegment>'
-        '</gml:segments></gml:Curve></gml:curveMember></gml:MultiCurve>',
-        '<gml:MultiSurface><gml:surfaceMember><gml:Polygon><gml:exterior>'
-        '<gml:LinearRing><gml:posList>0 1 2 3 4 5 0 1</gml:posList>'
-        '</gml:LinearRing></gml:exterior></gml:Polygon></gml:surfaceMember>'
-        '<gml:surfaceMember><gml:Polygon><gml:exterior><gml:LinearRing>'
-        '<gml:posList>6 7 8 9 10 11 6 7</gml:posList></gml:LinearRing>'
-        '</gml:exterior></gml:Polygon></gml:surfaceMember></gml:MultiSurface>',
-        '<gml:MultiGeometry><gml:geometryMember><gml:Point>'
-        '<gml:pos>0 1</gml:pos></gml:Point></gml:geometryMember>'
-        '<gml:geometryMember><gml:LineString><gml:posList>2 3 4 5'
-        '</gml:posList></gml:LineString></gml:geometryMember>'
-        '</gml:MultiGeometry>',
+        (
+            '<gml:Curve><gml:segments><gml:LineStringSegment>'
+            '<gml:posList>2 3 4 5</gml:posList></gml:LineStringSegment>'
+            '</gml:segments></gml:Curve>'
+        ),
+        (
+            '<gml:LineString><gml:posList srsDimension="3">2 3 10 4 5 20'
+            '</gml:posList></gml:LineString>'
+        ),
+        (
+            '<gml:Curve><gml:segments><gml:LineStringSegment>'
+            '<gml:posList srsDimension="3">2 3 10 4 5 20</gml:posList>'
+            '</gml:LineStringSegment></gml:segments></gml:Curve>'
+        ),
+        (
+            '<gml:Polygon><gml:exterior><gml:LinearRing>'
+            '<gml:posList>0 0 0 1 1 1 1 0 0 0</gml:posList>'
+            '</gml:LinearRing></gml:exterior></gml:Polygon>'
+        ),
+        (
+            '<gml:Polygon><gml:exterior><gml:LinearRing>'
+            '<gml:posList>0 0 0 1 1 1 1 0 0 0</gml:posList>'
+            '</gml:LinearRing></gml:exterior><gml:interior><gml:LinearRing>'
+            '<gml:posList>10 10 10 11 11 11 10 10</gml:posList>'
+            '</gml:LinearRing></gml:interior></gml:Polygon>'
+        ),
+        (
+            '<gml:MultiPoint><gml:pointMember><gml:Point><gml:pos>2'
+            ' 3</gml:pos></gml:Point></gml:pointMember><gml:pointMember><gml:Point><gml:pos>4'
+            ' 5</gml:pos></gml:Point></gml:pointMember></gml:MultiPoint>'
+        ),
+        (
+            '<gml:MultiCurve><gml:curveMember><gml:LineString>'
+            '<gml:posList>0 1 2 3 4 5</gml:posList></gml:LineString>'
+            '</gml:curveMember><gml:curveMember><gml:LineString>'
+            '<gml:posList>6 7 8 9 10 11</gml:posList></gml:LineString>'
+            '</gml:curveMember></gml:MultiCurve>'
+        ),
+        (
+            '<gml:MultiCurve><gml:curveMember><gml:Curve><gml:segments>'
+            '<gml:LineStringSegment><gml:posList>0 1 2 3 4 5</gml:posList>'
+            '</gml:LineStringSegment></gml:segments></gml:Curve></gml:curveMember>'
+            '<gml:curveMember><gml:Curve><gml:segments><gml:LineStringSegment>'
+            '<gml:posList>6 7 8 9 10 11</gml:posList></gml:LineStringSegment>'
+            '</gml:segments></gml:Curve></gml:curveMember></gml:MultiCurve>'
+        ),
+        (
+            '<gml:MultiSurface><gml:surfaceMember><gml:Polygon><gml:exterior>'
+            '<gml:LinearRing><gml:posList>0 1 2 3 4 5 0 1</gml:posList>'
+            '</gml:LinearRing></gml:exterior></gml:Polygon></gml:surfaceMember>'
+            '<gml:surfaceMember><gml:Polygon><gml:exterior><gml:LinearRing>'
+            '<gml:posList>6 7 8 9 10 11 6 7</gml:posList></gml:LinearRing>'
+            '</gml:exterior></gml:Polygon></gml:surfaceMember></gml:MultiSurface>'
+        ),
+        (
+            '<gml:MultiGeometry><gml:geometryMember><gml:Point>'
+            '<gml:pos>0 1</gml:pos></gml:Point></gml:geometryMember>'
+            '<gml:geometryMember><gml:LineString><gml:posList>2 3 4 5'
+            '</gml:posList></gml:LineString></gml:geometryMember>'
+            '</gml:MultiGeometry>'
+        ),
     ]
     for gml_in in gml_list:
       geom = ogr.CreateGeometryFromGML(gml_in)
@@ -5496,48 +5717,65 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
             'POINT(500000 4500000)',
             sr32631,
             ['FORMAT=GML3'],
-            '<gml:Point srsName="urn:ogc:def:crs:EPSG::32631">'
-            '<gml:pos>500000 4500000</gml:pos></gml:Point>',
+            (
+                '<gml:Point srsName="urn:ogc:def:crs:EPSG::32631">'
+                '<gml:pos>500000 4500000</gml:pos></gml:Point>'
+            ),
         ),
         (
             'POINT(2 49)',
             srlonglat,
             ['FORMAT=GML3'],
-            '<gml:Point srsName="urn:ogc:def:crs:EPSG::4326">'
-            '<gml:pos>49 2</gml:pos></gml:Point>',
+            (
+                '<gml:Point srsName="urn:ogc:def:crs:EPSG::4326">'
+                '<gml:pos>49 2</gml:pos></gml:Point>'
+            ),
         ),
         (
             'POINT(49 2)',
             srlatlong,
             ['FORMAT=GML3'],
-            '<gml:Point srsName="urn:ogc:def:crs:EPSG::4326">'
-            '<gml:pos>49 2</gml:pos></gml:Point>',
+            (
+                '<gml:Point srsName="urn:ogc:def:crs:EPSG::4326">'
+                '<gml:pos>49 2</gml:pos></gml:Point>'
+            ),
         ),
         (
             'POINT(2 49)',
             srlonglat,
             ['FORMAT=GML3', 'GML3_LONGSRS=NO'],
-            '<gml:Point srsName="EPSG:4326"><gml:pos>2 49</gml:pos></gml:Point>',
+            (
+                '<gml:Point srsName="EPSG:4326"><gml:pos>2'
+                ' 49</gml:pos></gml:Point>'
+            ),
         ),
         (
             'POINT(2 49)',
             srlonglat,
             ['FORMAT=GML3', 'SRSNAME_FORMAT=SHORT'],
-            '<gml:Point srsName="EPSG:4326"><gml:pos>2 49</gml:pos></gml:Point>',
+            (
+                '<gml:Point srsName="EPSG:4326"><gml:pos>2'
+                ' 49</gml:pos></gml:Point>'
+            ),
         ),
         (
             'POINT(2 49)',
             srlonglat,
             ['FORMAT=GML3', 'SRSNAME_FORMAT=OGC_URN'],
-            '<gml:Point srsName="urn:ogc:def:crs:EPSG::4326">'
-            '<gml:pos>49 2</gml:pos></gml:Point>',
+            (
+                '<gml:Point srsName="urn:ogc:def:crs:EPSG::4326">'
+                '<gml:pos>49 2</gml:pos></gml:Point>'
+            ),
         ),
         (
             'POINT(2 49)',
             srlonglat,
             ['FORMAT=GML3', 'SRSNAME_FORMAT=OGC_URL'],
-            '<gml:Point srsName="http://www.opengis.net/def/crs/EPSG/0/4326">'
-            '<gml:pos>49 2</gml:pos></gml:Point>',
+            (
+                '<gml:Point'
+                ' srsName="http://www.opengis.net/def/crs/EPSG/0/4326"><gml:pos>49'
+                ' 2</gml:pos></gml:Point>'
+            ),
         ),
     ]
     for wkt, srs, opts, expected_gml in cases:
@@ -5564,26 +5802,34 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
   @parameterized.named_parameters(
       dict(
           testcase_name='SimplePolygon',
-          gml='<gmlce:SimplePolygon><gml:posList>0 0 1 0 1 1 0 1'
-          '</gml:posList></gmlce:SimplePolygon>',
+          gml=(
+              '<gmlce:SimplePolygon><gml:posList>0 0 1 0 1 1 0 1'
+              '</gml:posList></gmlce:SimplePolygon>'
+          ),
           expected_wkt='POLYGON ((0 0,1 0,1 1,0 1,0 0))',
       ),
       dict(
           testcase_name='SimpleRectangle',
-          gml='<gmlce:SimpleRectangle><gml:posList>0 0 1 0 1 1 0 1'
-          '</gml:posList></gmlce:SimpleRectangle>',
+          gml=(
+              '<gmlce:SimpleRectangle><gml:posList>0 0 1 0 1 1 0 1'
+              '</gml:posList></gmlce:SimpleRectangle>'
+          ),
           expected_wkt='POLYGON ((0 0,1 0,1 1,0 1,0 0))',
       ),
       dict(
           testcase_name='SimpleTriangle',
-          gml='<gmlce:SimpleTriangle><gml:posList>0 0 1 0 1 1'
-          '</gml:posList></gmlce:SimpleTriangle>',
+          gml=(
+              '<gmlce:SimpleTriangle><gml:posList>0 0 1 0 1 1'
+              '</gml:posList></gmlce:SimpleTriangle>'
+          ),
           expected_wkt='TRIANGLE ((0 0,1 0,1 1,0 0))',
       ),
       dict(
           testcase_name='SimpleMultiPoint',
-          gml='<gmlce:SimpleMultiPoint><gml:posList>0 1 2 3'
-          '</gml:posList></gmlce:SimpleMultiPoint>',
+          gml=(
+              '<gmlce:SimpleMultiPoint><gml:posList>0 1 2 3'
+              '</gml:posList></gmlce:SimpleMultiPoint>'
+          ),
           expected_wkt='MULTIPOINT (0 1,2 3)',
       ),
   )
@@ -5723,35 +5969,98 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
 
   def test_gml_Coordinates_ts_cs_decimal(self) -> None:
     cases = [
-        ('<gml:Point><gml:coordinates>1,2</gml:coordinates></gml:Point>',
-         'POINT (1 2)'),
-        ('<gml:Point><gml:coordinates cs="," ts=" " decimal=".">1,2'
-         '</gml:coordinates></gml:Point>', 'POINT (1 2)'),
-        ('<gml:Point><gml:coordinates cs="," ts=" " decimal=".">1,2,3'
-         '</gml:coordinates></gml:Point>', 'POINT (1 2 3)'),
-        ('<gml:Point><gml:coordinates cs="," ts=" " decimal=".">  1,2  '
-         '</gml:coordinates></gml:Point>', 'POINT (1 2)'),
-        ('<gml:Point><gml:coordinates>1 2</gml:coordinates></gml:Point>',
-         'POINT (1 2)'),
-        ('<gml:Point><gml:coordinates cs=";">1;2</gml:coordinates>'
-         '</gml:Point>', 'POINT (1 2)'),
-        ('<gml:Point><gml:coordinates decimal="," cs=";">1,2;3,4'
-         '</gml:coordinates></gml:Point>', 'POINT (1.2 3.4)'),
-        ('<gml:Point><gml:coordinates decimal="," cs=";">1,2;3,4;5,6'
-         '</gml:coordinates></gml:Point>', 'POINT (1.2 3.4 5.6)'),
-        ('<gml:LineString><gml:coordinates>1,2 3,4</gml:coordinates>'
-         '</gml:LineString>', 'LINESTRING (1 2,3 4)'),
-        ('<gml:LineString><gml:coordinates cs="," ts=" " decimal=".">1,2 3,4'
-         '</gml:coordinates></gml:LineString>', 'LINESTRING (1 2,3 4)'),
-        ('<gml:LineString><gml:coordinates cs="," ts=" " decimal=".">'
-         '1,2,2.5 3,4</gml:coordinates></gml:LineString>',
-         'LINESTRING (1 2 2.5,3 4 0)'),
-        ('<gml:LineString><gml:coordinates ts="-">1,2-3,4</gml:coordinates>'
-         '</gml:LineString>', 'LINESTRING (1 2,3 4)'),
-        ('<gml:LineString><gml:coordinates cs=" " ts=",">1 2,3 4'
-         '</gml:coordinates></gml:LineString>', 'LINESTRING (1 2,3 4)'),
-        ('<gml:LineString><gml:coordinates cs=" " ts=",">1 2 2.5,3 4'
-         '</gml:coordinates></gml:LineString>', 'LINESTRING (1 2 2.5,3 4 0)'),
+        (
+            '<gml:Point><gml:coordinates>1,2</gml:coordinates></gml:Point>',
+            'POINT (1 2)',
+        ),
+        (
+            (
+                '<gml:Point><gml:coordinates cs="," ts=" " decimal=".">1,2'
+                '</gml:coordinates></gml:Point>'
+            ),
+            'POINT (1 2)',
+        ),
+        (
+            (
+                '<gml:Point><gml:coordinates cs="," ts=" " decimal=".">1,2,3'
+                '</gml:coordinates></gml:Point>'
+            ),
+            'POINT (1 2 3)',
+        ),
+        (
+            (
+                '<gml:Point><gml:coordinates cs="," ts=" " decimal=".">  1,2  '
+                '</gml:coordinates></gml:Point>'
+            ),
+            'POINT (1 2)',
+        ),
+        (
+            '<gml:Point><gml:coordinates>1 2</gml:coordinates></gml:Point>',
+            'POINT (1 2)',
+        ),
+        (
+            (
+                '<gml:Point><gml:coordinates cs=";">1;2</gml:coordinates>'
+                '</gml:Point>'
+            ),
+            'POINT (1 2)',
+        ),
+        (
+            (
+                '<gml:Point><gml:coordinates decimal="," cs=";">1,2;3,4'
+                '</gml:coordinates></gml:Point>'
+            ),
+            'POINT (1.2 3.4)',
+        ),
+        (
+            (
+                '<gml:Point><gml:coordinates decimal="," cs=";">1,2;3,4;5,6'
+                '</gml:coordinates></gml:Point>'
+            ),
+            'POINT (1.2 3.4 5.6)',
+        ),
+        (
+            (
+                '<gml:LineString><gml:coordinates>1,2 3,4</gml:coordinates>'
+                '</gml:LineString>'
+            ),
+            'LINESTRING (1 2,3 4)',
+        ),
+        (
+            (
+                '<gml:LineString><gml:coordinates cs="," ts=" " decimal=".">1,2'
+                ' 3,4</gml:coordinates></gml:LineString>'
+            ),
+            'LINESTRING (1 2,3 4)',
+        ),
+        (
+            (
+                '<gml:LineString><gml:coordinates cs="," ts=" " decimal=".">'
+                '1,2,2.5 3,4</gml:coordinates></gml:LineString>'
+            ),
+            'LINESTRING (1 2 2.5,3 4 0)',
+        ),
+        (
+            (
+                '<gml:LineString><gml:coordinates'
+                ' ts="-">1,2-3,4</gml:coordinates></gml:LineString>'
+            ),
+            'LINESTRING (1 2,3 4)',
+        ),
+        (
+            (
+                '<gml:LineString><gml:coordinates cs=" " ts=",">1 2,3 4'
+                '</gml:coordinates></gml:LineString>'
+            ),
+            'LINESTRING (1 2,3 4)',
+        ),
+        (
+            (
+                '<gml:LineString><gml:coordinates cs=" " ts=",">1 2 2.5,3 4'
+                '</gml:coordinates></gml:LineString>'
+            ),
+            'LINESTRING (1 2 2.5,3 4 0)',
+        ),
     ]
     for gml, expected_wkt in cases:
       self.assertEqual(
@@ -5761,9 +6070,11 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
   def test_gml_with_xml_header_and_comments(self) -> None:
     cases = [
         (
-            '<?xml version="1.0" encoding="UTF-8"?><!-- comment --><gml:Point>'
-            ' <!-- comment --> <gml:coordinates>1,2</gml:coordinates>'
-            '</gml:Point>',
+            (
+                '<?xml version="1.0" encoding="UTF-8"?><!-- comment'
+                ' --><gml:Point> <!-- comment -->'
+                ' <gml:coordinates>1,2</gml:coordinates></gml:Point>'
+            ),
             'POINT (1 2)',
         ),
         (
@@ -5788,8 +6099,10 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
                   </gml:Surface>
                 </gml:surfaceMember>
               </gml:MultiSurface>""",
-            'MULTIPOLYGON (((0 0,0 1,1 1,1 0,0 0),'
-            '(0.25 0.25,0.25 0.75,0.75 0.75,0.75 0.25,0.25 0.25)))',
+            (
+                'MULTIPOLYGON (((0 0,0 1,1 1,1 0,0 0),'
+                '(0.25 0.25,0.25 0.75,0.75 0.75,0.75 0.25,0.25 0.25)))'
+            ),
         ),
     ]
     for gml, expected_wkt in cases:
@@ -5844,24 +6157,37 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
   def test_gml_ArcByCenterPoint(self) -> None:
     expected = ogr.CreateGeometryFromWkt('CIRCULARSTRING (1 4,-1 2,1 0)')
     for gml in (
-        '<gml:ArcByCenterPoint><gml:pos>1 2</gml:pos><gml:radius>2'
-        '</gml:radius><gml:startAngle>90</gml:startAngle><gml:endAngle>270'
-        '</gml:endAngle></gml:ArcByCenterPoint>',
-        "<gml:ArcByCenterPoint><gml:pos>1 2</gml:pos><gml:radius uom='km'>"
-        '0.002</gml:radius><gml:startAngle>90</gml:startAngle><gml:endAngle>270'
-        '</gml:endAngle></gml:ArcByCenterPoint>',
-        "<gml:ArcByCenterPoint srsName='http://www.opengis.net/def/crs/EPSG/0/25832'>"
-        "<gml:pos>1 2</gml:pos><gml:radius uom='km'>0.002</gml:radius>"
-        '<gml:startAngle>90</gml:startAngle><gml:endAngle>270</gml:endAngle>'
-        '</gml:ArcByCenterPoint>',
-        "<gml:ArcByCenterPoint srsName='http://www.opengis.net/def/crs/EPSG/0/2222'>"
-        "<gml:pos>1 2</gml:pos><gml:radius uom='m'>0.6096</gml:radius>"
-        '<gml:startAngle>90</gml:startAngle><gml:endAngle>270</gml:endAngle>'
-        '</gml:ArcByCenterPoint>',
-        "<gml:ArcByCenterPoint srsName='http://www.opengis.net/def/crs/EPSG/0/2222'>"
-        "<gml:pos>1 2</gml:pos><gml:radius uom='ft'>2</gml:radius>"
-        '<gml:startAngle>90</gml:startAngle><gml:endAngle>270</gml:endAngle>'
-        '</gml:ArcByCenterPoint>',
+        (
+            '<gml:ArcByCenterPoint><gml:pos>1 2</gml:pos><gml:radius>2'
+            '</gml:radius><gml:startAngle>90</gml:startAngle><gml:endAngle>270'
+            '</gml:endAngle></gml:ArcByCenterPoint>'
+        ),
+        (
+            "<gml:ArcByCenterPoint><gml:pos>1 2</gml:pos><gml:radius uom='km'>"
+            '0.002</gml:radius><gml:startAngle>90</gml:startAngle><gml:endAngle>270'
+            '</gml:endAngle></gml:ArcByCenterPoint>'
+        ),
+        (
+            '<gml:ArcByCenterPoint'
+            " srsName='http://www.opengis.net/def/crs/EPSG/0/25832'>"
+            "<gml:pos>1 2</gml:pos><gml:radius uom='km'>0.002</gml:radius>"
+            '<gml:startAngle>90</gml:startAngle><gml:endAngle>270</gml:endAngle>'
+            '</gml:ArcByCenterPoint>'
+        ),
+        (
+            '<gml:ArcByCenterPoint'
+            " srsName='http://www.opengis.net/def/crs/EPSG/0/2222'>"
+            "<gml:pos>1 2</gml:pos><gml:radius uom='m'>0.6096</gml:radius>"
+            '<gml:startAngle>90</gml:startAngle><gml:endAngle>270</gml:endAngle>'
+            '</gml:ArcByCenterPoint>'
+        ),
+        (
+            '<gml:ArcByCenterPoint'
+            " srsName='http://www.opengis.net/def/crs/EPSG/0/2222'>"
+            "<gml:pos>1 2</gml:pos><gml:radius uom='ft'>2</gml:radius>"
+            '<gml:startAngle>90</gml:startAngle><gml:endAngle>270</gml:endAngle>'
+            '</gml:ArcByCenterPoint>'
+        ),
     ):
       self.CheckFeatureGeometry(ogr.CreateGeometryFromGML(gml), expected)
 
@@ -5915,13 +6241,18 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
 </Surface>"""
     self.CheckFeatureGeometry(
         ogr.CreateGeometryFromGML(gml),
-        'POLYGON ((-80.4 33.86,-80.27 33.63,-80.305028054229538 33.622017309598967,'
-        '-80.335422529369936 33.613343178471617,-80.366464292754429 33.606448070493634,'
-        '-80.398003921948742 33.601365147653873,-80.429889693662162 33.598118851265042,'
-        '-80.461968286017793 33.596724788982847,-80.494085487001527 33.597189662699385,'
-        '-80.52608690656875 33.599511237590342,-80.557818688893789 33.603678352435914,'
-        '-80.589128223167393 33.609670971175497,-80.619864849221443 33.617460275496377,'
-        '-80.63 33.62,-80.39 33.85))',
+        'POLYGON ((-80.4 33.86,-80.27 33.63,-80.305028054229538'
+        ' 33.622017309598967,-80.335422529369936'
+        ' 33.613343178471617,-80.366464292754429'
+        ' 33.606448070493634,-80.398003921948742'
+        ' 33.601365147653873,-80.429889693662162'
+        ' 33.598118851265042,-80.461968286017793'
+        ' 33.596724788982847,-80.494085487001527'
+        ' 33.597189662699385,-80.52608690656875'
+        ' 33.599511237590342,-80.557818688893789'
+        ' 33.603678352435914,-80.589128223167393'
+        ' 33.609670971175497,-80.619864849221443 33.617460275496377,-80.63'
+        ' 33.62,-80.39 33.85))',
     )
 
   def test_gml_CircleByCenterPoint(self) -> None:
@@ -6012,36 +6343,37 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
         </aixm:Surface>""")
     self.CheckFeatureGeometry(
         geom,
-        'POLYGON ((55.2333333333333 -36.1666666666667,55.2311637280767 -36.8943733791648,'
-        '55.2602248071013 -36.8960852160185,55.2891782700249 -36.8912782655051,'
-        '55.3178697537514 -36.88292675789,55.3461587637071 -36.8710639413776,'
-        '55.3739064765608 -36.8557405708675,55.4009764350458 -36.8370248014709,'
-        '55.4272352367262 -36.8150019876212,55.4525532129231 -36.7897743859994,'
-        '55.476805093957 -36.7614607612323,55.4998706568286 -36.7301958939182,'
-        '55.5216353514589 -36.6961299915025,55.5419909016414 -36.6594280032268,'
-        '55.5608358769213 -36.6202688413925,55.5780762317212 -36.5788445119267,'
-        '55.5936258081681 -36.5353591583435,55.6074067992521 -36.4900280239174,'
-        '55.6193501691593 -36.4430763379496,55.6293960278662 -36.3947381326996,'
-        '55.6374939573672 -36.3452549984946,55.6436032872147 -36.2948747851727,'
-        '55.6476933173936 -36.2438502586493,55.6497434869178 -36.19243772209,'
-        '55.6497434869178 -36.1408956112433,55.6476933173936 -36.089483074684,'
-        '55.6436032872147 -36.0384585481606,55.6374939573672 -35.9880783348387,'
-        '55.6293960278662 -35.9385952006337,55.6193501691593 -35.8902569953837,'
-        '55.6074067992521 -35.8433053094159,55.5936258081681 -35.7979741749898,'
-        '55.5780762317212 -35.7544888214066,55.5608358769213 -35.7130644919408,'
-        '55.5419909016414 -35.6739053301065,55.5216353514589 -35.6372033418322,'
-        '55.4998706568286 -35.6031374394151,55.476805093957 -35.571872572101,'
-        '55.4525532129231 -35.5435589473339,55.4272352367262 -35.5183313457121,'
-        '55.4009764350458 -35.4963085318624,55.3739064765608 -35.4775927624659,'
-        '55.3461587637071 -35.4622693919557,55.3178697537514 -35.4504065754433,'
-        '55.2891782700249 -35.4420550678282,55.2602248071013 -35.4372481173149,'
-        '55.2311508336186 -35.4360014509317,55.2020980963355 -35.4383133491681,'
-        '55.1732079288891 -35.4441648063421,55.1446205685763 -35.4535197729773,'
-        '55.1164744843283 -35.4663254761286,55.0889057188812 -35.4825128133848,'
-        '55.0620472479757 -35.5019968161103,55.0360283592393 -35.524677177381,'
-        '55.0109740532301 -35.5504388400636,54.9870044689367 -35.5791526404379,'
-        '54.9642343358562 -35.6106760028906,54.9427724545944 -35.6448536812344,'
-        '54.9281635053072 -35.674116070019,55.2333333333333 -36.1666666666667))',
+        'POLYGON ((55.2333333333333 -36.1666666666667,55.2311637280767'
+        ' -36.8943733791648,55.2602248071013 -36.8960852160185,55.2891782700249'
+        ' -36.8912782655051,55.3178697537514 -36.88292675789,55.3461587637071'
+        ' -36.8710639413776,55.3739064765608 -36.8557405708675,55.4009764350458'
+        ' -36.8370248014709,55.4272352367262 -36.8150019876212,55.4525532129231'
+        ' -36.7897743859994,55.476805093957 -36.7614607612323,55.4998706568286'
+        ' -36.7301958939182,55.5216353514589 -36.6961299915025,55.5419909016414'
+        ' -36.6594280032268,55.5608358769213 -36.6202688413925,55.5780762317212'
+        ' -36.5788445119267,55.5936258081681 -36.5353591583435,55.6074067992521'
+        ' -36.4900280239174,55.6193501691593 -36.4430763379496,55.6293960278662'
+        ' -36.3947381326996,55.6374939573672 -36.3452549984946,55.6436032872147'
+        ' -36.2948747851727,55.6476933173936 -36.2438502586493,55.6497434869178'
+        ' -36.19243772209,55.6497434869178 -36.1408956112433,55.6476933173936'
+        ' -36.089483074684,55.6436032872147 -36.0384585481606,55.6374939573672'
+        ' -35.9880783348387,55.6293960278662 -35.9385952006337,55.6193501691593'
+        ' -35.8902569953837,55.6074067992521 -35.8433053094159,55.5936258081681'
+        ' -35.7979741749898,55.5780762317212 -35.7544888214066,55.5608358769213'
+        ' -35.7130644919408,55.5419909016414 -35.6739053301065,55.5216353514589'
+        ' -35.6372033418322,55.4998706568286 -35.6031374394151,55.476805093957'
+        ' -35.571872572101,55.4525532129231 -35.5435589473339,55.4272352367262'
+        ' -35.5183313457121,55.4009764350458 -35.4963085318624,55.3739064765608'
+        ' -35.4775927624659,55.3461587637071 -35.4622693919557,55.3178697537514'
+        ' -35.4504065754433,55.2891782700249 -35.4420550678282,55.2602248071013'
+        ' -35.4372481173149,55.2311508336186 -35.4360014509317,55.2020980963355'
+        ' -35.4383133491681,55.1732079288891 -35.4441648063421,55.1446205685763'
+        ' -35.4535197729773,55.1164744843283 -35.4663254761286,55.0889057188812'
+        ' -35.4825128133848,55.0620472479757 -35.5019968161103,55.0360283592393'
+        ' -35.524677177381,55.0109740532301 -35.5504388400636,54.9870044689367'
+        ' -35.5791526404379,54.9642343358562 -35.6106760028906,54.9427724545944'
+        ' -35.6448536812344,54.9281635053072 -35.674116070019,55.2333333333333'
+        ' -36.1666666666667))',
     )
 
   def test_gml_Ring_starting_with_ArcByCenterPoint(self) -> None:
@@ -6085,26 +6417,43 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
     self.CheckFeatureGeometry(
         geom,
         ogr.CreateGeometryFromWkt(
-            'POLYGON ((46.745 0.331944444444444,46.7432764927165 0.347962462754535,'
-            '46.7409162535525 0.363717281627594,46.7378065348593 0.3791917846605,'
-            '46.7339626150092 0.394310000163572,46.7294033759096 0.408997750371246,'
-            '46.7241512079629 0.423183023082575,46.7182318974714 0.436796331344972,'
-            '46.7116744971061 0.449771059387196,46.7045111801497 0.462043792829896,'
-            '46.6967770793052 0.473554631563425,46.6885101109471 0.484247483569652,'
-            '46.6797507857586 0.494070338341013,46.6705420067727 0.502975518511247,'
-            '46.6609288558889 0.5109199085045,46.6509583699943 0.517865159176619,'
-            '46.6483333333333 0.519444444444444,46.4386111111111 0.338055555555556,'
-            '46.4230555555555 0.289444444444444,46.4239652827541 0.273432507330975,'
-            '46.4255282239253 0.25756088338307,46.4278483647801 0.241884857622964,'
-            '46.4309144976449 0.226480183207377,46.4347118090807 0.21142133567082,'
-            '46.4392219496614 0.196781161237034,46.4444231204746 0.18263053185483,'
-            '46.450290175977 0.169038008752016,46.4567947427662 0.156069515749848,'
-            '46.4639053537626 0.143788023916768,46.4715875972233 0.132253248900933,'
-            '46.4798042799442 0.121521362391196,46.4885156039408 0.111644719041597,'
-            '46.4976793558324 0.102671600158084,46.5002777777778 0.100555555555556,'
-            '46.5408333333333 0.105555555555556,46.575 0.225,'
-            '46.5944444444444 0.258333333333333,46.6583333333333 0.283333333333333,'
-            '46.6955555555556 0.255555555555556,46.745 0.331944444444444))'
+            'POLYGON ((46.745 0.331944444444444,46.7432764927165'
+            ' 0.347962462754535,46.7409162535525'
+            ' 0.363717281627594,46.7378065348593'
+            ' 0.3791917846605,46.7339626150092'
+            ' 0.394310000163572,46.7294033759096'
+            ' 0.408997750371246,46.7241512079629'
+            ' 0.423183023082575,46.7182318974714'
+            ' 0.436796331344972,46.7116744971061'
+            ' 0.449771059387196,46.7045111801497'
+            ' 0.462043792829896,46.6967770793052'
+            ' 0.473554631563425,46.6885101109471'
+            ' 0.484247483569652,46.6797507857586'
+            ' 0.494070338341013,46.6705420067727'
+            ' 0.502975518511247,46.6609288558889'
+            ' 0.5109199085045,46.6509583699943'
+            ' 0.517865159176619,46.6483333333333'
+            ' 0.519444444444444,46.4386111111111'
+            ' 0.338055555555556,46.4230555555555'
+            ' 0.289444444444444,46.4239652827541'
+            ' 0.273432507330975,46.4255282239253'
+            ' 0.25756088338307,46.4278483647801'
+            ' 0.241884857622964,46.4309144976449'
+            ' 0.226480183207377,46.4347118090807'
+            ' 0.21142133567082,46.4392219496614'
+            ' 0.196781161237034,46.4444231204746'
+            ' 0.18263053185483,46.450290175977'
+            ' 0.169038008752016,46.4567947427662'
+            ' 0.156069515749848,46.4639053537626'
+            ' 0.143788023916768,46.4715875972233'
+            ' 0.132253248900933,46.4798042799442'
+            ' 0.121521362391196,46.4885156039408'
+            ' 0.111644719041597,46.4976793558324'
+            ' 0.102671600158084,46.5002777777778'
+            ' 0.100555555555556,46.5408333333333 0.105555555555556,46.575'
+            ' 0.225,46.5944444444444 0.258333333333333,46.6583333333333'
+            ' 0.283333333333333,46.6955555555556 0.255555555555556,46.745'
+            ' 0.331944444444444))'
         ),
     )
 
@@ -6163,35 +6512,58 @@ class OgrGmlTest(ogr_util.DriverTestCase, parameterized.TestCase):
     self.CheckFeatureGeometry(
         geom,
         ogr.CreateGeometryFromWkt(
-            'POLYGON ((65.9218528471645 57.4916243394278,'
-            '65.994485559282 57.3816951549859,66.0052965317155 57.3703095464356,'
-            '66.0160916673895 57.3589300898091,66.0986454478109 57.3055439797628,'
-            '66.0972833787257 57.2909960861013,66.0952275333989 57.2770050871946,'
-            '66.0927800217659 57.2634046235748,66.0899528791643 57.2502614506486,'
-            '66.0867600033801 57.2376400142709,66.0832170844948 57.2256021285702,'
-            '66.079341525797 57.214206668632,66.0751523561957 57.203509279214,'
-            '66.0706701346179 57.1935621012919,66.0659168469146 57.1844135176486,'
-            '66.0609157958339 57.1761079188393,66.0556914846553 57.1686854906152,'
-            '66.0502694951079 57.1621820236802,66.0446763602204 57.1566287467641,'
-            '66.0389394327704 57.1520521834553,66.033086750019 57.1484740335078,'
-            '66.0271468954283 57.145911078861,66.0211488580662 57.1443751146804,'
-            '66.0151218904116 57.1438729053792,66.0090953652666 57.1444061657465,'
-            '66.0030986324867 57.1459715668484,65.9971608762266 57.1485607664255,'
-            '65.991310973392 57.1521604634455,65.9855773539744 57.156752476156,'
-            '65.9809866314029 57.1622574691103,65.9603973632284 57.1841098909668,'
-            '65.9548299773474 57.1895629087476,65.9495750702849 57.1968227388142,'
-            '65.9445389220664 57.2049612750665,65.9397459320329 57.2139385813473,'
-            '65.935219308136 57.2237107308994,65.9309809566457 57.234230023973,'
-            '65.927051378271 57.2454452217566,65.9234495711475 57.2573017957448,'
-            '65.9201929411068 57.269742191149,65.9172972196136 57.2827061032052,'
-            '65.914776389716 57.2961307649312,65.9126426203217 57.3099512454202,'
-            '65.9109062090733 57.3241007570179,65.9095755340619 57.3385109700802,'
-            '65.9086570145768 57.353112334239,65.9081550810541 57.3678344048457,'
-            '65.9080721543467 57.382606172423,65.9084086344011 57.3973563949994,'
-            '65.9091628983867 57.4120139317594,65.9103313082862 57.4265080751922,'
-            '65.911908227915 57.4407688820673,65.9138860493003 57.4547275015333,'
-            '65.9162552283127 57.468316498379,65.9190043294021 57.4814701705531,'
-            '65.9218528471645 57.4916243394278))'
+            'POLYGON ((65.9218528471645 57.4916243394278,65.994485559282'
+            ' 57.3816951549859,66.0052965317155'
+            ' 57.3703095464356,66.0160916673895'
+            ' 57.3589300898091,66.0986454478109'
+            ' 57.3055439797628,66.0972833787257'
+            ' 57.2909960861013,66.0952275333989'
+            ' 57.2770050871946,66.0927800217659'
+            ' 57.2634046235748,66.0899528791643'
+            ' 57.2502614506486,66.0867600033801'
+            ' 57.2376400142709,66.0832170844948'
+            ' 57.2256021285702,66.079341525797 57.214206668632,66.0751523561957'
+            ' 57.203509279214,66.0706701346179'
+            ' 57.1935621012919,66.0659168469146'
+            ' 57.1844135176486,66.0609157958339'
+            ' 57.1761079188393,66.0556914846553'
+            ' 57.1686854906152,66.0502694951079'
+            ' 57.1621820236802,66.0446763602204'
+            ' 57.1566287467641,66.0389394327704'
+            ' 57.1520521834553,66.033086750019'
+            ' 57.1484740335078,66.0271468954283'
+            ' 57.145911078861,66.0211488580662'
+            ' 57.1443751146804,66.0151218904116'
+            ' 57.1438729053792,66.0090953652666'
+            ' 57.1444061657465,66.0030986324867'
+            ' 57.1459715668484,65.9971608762266'
+            ' 57.1485607664255,65.991310973392'
+            ' 57.1521604634455,65.9855773539744'
+            ' 57.156752476156,65.9809866314029'
+            ' 57.1622574691103,65.9603973632284'
+            ' 57.1841098909668,65.9548299773474'
+            ' 57.1895629087476,65.9495750702849'
+            ' 57.1968227388142,65.9445389220664'
+            ' 57.2049612750665,65.9397459320329'
+            ' 57.2139385813473,65.935219308136'
+            ' 57.2237107308994,65.9309809566457 57.234230023973,65.927051378271'
+            ' 57.2454452217566,65.9234495711475'
+            ' 57.2573017957448,65.9201929411068'
+            ' 57.269742191149,65.9172972196136 57.2827061032052,65.914776389716'
+            ' 57.2961307649312,65.9126426203217'
+            ' 57.3099512454202,65.9109062090733'
+            ' 57.3241007570179,65.9095755340619'
+            ' 57.3385109700802,65.9086570145768'
+            ' 57.353112334239,65.9081550810541'
+            ' 57.3678344048457,65.9080721543467'
+            ' 57.382606172423,65.9084086344011'
+            ' 57.3973563949994,65.9091628983867'
+            ' 57.4120139317594,65.9103313082862'
+            ' 57.4265080751922,65.911908227915'
+            ' 57.4407688820673,65.9138860493003'
+            ' 57.4547275015333,65.9162552283127'
+            ' 57.468316498379,65.9190043294021'
+            ' 57.4814701705531,65.9218528471645 57.4916243394278))'
         ),
     )
 
